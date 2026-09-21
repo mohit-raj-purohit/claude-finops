@@ -19,7 +19,7 @@ That is the whole setup. It finds your transcripts, builds a local warehouse, an
 opens the dashboard at <http://127.0.0.1:8787>. No account, no API key, no config
 file to write first.
 
-![Executive overview](docs/img/overview.png)
+![Executive overview](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/overview.png)
 
 <sub>Screenshots are real output from a real warehouse; project names, session titles
 and prompt text have been replaced with placeholders.</sub>
@@ -43,7 +43,7 @@ tokens, burn rate, forecast, and a ranked list of what to fix first.
 **3. Ask it what to do.** "Why so many tokens?" explains where your tokens actually
 went and gives you a prompt you can paste straight into Claude Code to fix it.
 
-![Why so many tokens?](docs/img/diagnose.png)
+![Why so many tokens?](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/diagnose.png)
 
 **4. Stop when you are done.**
 
@@ -64,27 +64,27 @@ npm install -g claude-finops    # then `claude-finops` from anywhere
 **Where the money goes, per project.** Every project ranked by cost, drilling down
 Project → Session → Prompt.
 
-![Projects](docs/img/projects.png)
+![Projects](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/projects.png)
 
 **A grade, not just numbers.** A 0–100 FinOps scorecard across five dimensions, each
 with the reasoning behind the score, so you know whether your usage is healthy.
 
-![FinOps scorecard](docs/img/scorecard.png)
+![FinOps scorecard](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/scorecard.png)
 
 **Waste you can act on.** Repeated prompts, abandoned sessions, context carried for
 no reason — each with the estimated money attached.
 
-![Waste detection](docs/img/waste.png)
+![Waste detection](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/waste.png)
 
 **Whether the model you are on is the right one.** Per-model cost and efficiency,
 plus a switch analysis that prices the same workload on a cheaper model.
 
-![Model analysis](docs/img/models.png)
+![Model analysis](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/models.png)
 
 **What next month looks like.** Forecast from your own history, against budgets you
 set.
 
-![Forecast](docs/img/forecast.png)
+![Forecast](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/forecast.png)
 
 ---
 

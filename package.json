@@ -1,7 +1,7 @@
 {
   "name": "claude-finops",
-  "version": "1.0.0",
-  "description": "Claude FinOps Command Center \u2014 a local dashboard for your Claude Code usage and spend.",
+  "version": "0.1.0",
+  "description": "Local FinOps dashboard for Claude Code: what you used, what it cost, why it cost that much, and what to change. Reads your own transcripts, no API key, no data leaves the machine.",
   "bin": {
     "claude-finops": "bin/claude-finops.js"
   },
@@ -25,10 +25,18 @@
   "keywords": [
     "claude",
     "claude-code",
-    "finops",
     "cost",
+    "usage",
+    "tokens",
+    "spend",
+    "budget",
     "dashboard",
-    "usage"
+    "finops",
+    "analytics",
+    "cli",
+    "codex",
+    "gemini-cli",
+    "cursor"
   ],
   "license": "MIT",
   "private": false,
