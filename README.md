@@ -66,11 +66,6 @@ Project → Session → Prompt.
 
 ![Projects](docs/img/projects.png)
 
-**A grade, not just numbers.** A 0–100 FinOps scorecard across five dimensions, each
-with the reasoning behind the score, so you know whether your usage is healthy.
-
-![FinOps scorecard](docs/img/scorecard.png)
-
 **Waste you can act on.** Repeated prompts, abandoned sessions, context carried for
 no reason — each with the estimated money attached.
 
