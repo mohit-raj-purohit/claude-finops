@@ -1,0 +1,12 @@
+data/*.db
+data/*.db-wal
+data/*.db-shm
+__pycache__/
+*.pyc
+data/server.pid
+data/server.log
+config/settings.local.json
+config/secrets.local.json
+data/cloud_cache.json
+node_modules/
+*.tgz

@@ -1,0 +1,57 @@
+{
+  "_comment": "Shared defaults. Your own budgets and limits go in settings.local.json (the Settings screen writes there; it is gitignored). account.label is auto-detected from ~/.claude.json. Account, billing period, plan limits and budgets. Anything set to null is reported by the dashboard as 'Unavailable from connected Claude data' rather than being invented.",
+  "account": {
+    "label": null,
+    "plan_name": null,
+    "plan_type": null
+  },
+  "billing_period": {
+    "mode": "calendar_month",
+    "anchor_day": 1
+  },
+  "limits": {
+    "_comment": "Set these ONLY from your real plan. null => dashboard shows the metric as unavailable instead of guessing.",
+    "monthly_cost_allowance_usd": null,
+    "monthly_token_allowance": null,
+    "monthly_request_allowance": null,
+    "remaining_credits_usd": null
+  },
+  "budgets": {
+    "_comment": "Set your real budgets here. null => the dashboard reports 'No budget configured' instead of scoring you against an invented number.",
+    "monthly_usd": null,
+    "daily_usd": null,
+    "monthly_tokens": null,
+    "per_project_usd": {},
+    "per_model_usd": {}
+  },
+  "alert_thresholds_pct": [
+    50,
+    75,
+    90,
+    100
+  ],
+  "waste_rules": {
+    "long_prompt_chars": 6000,
+    "large_context_tokens": 150000,
+    "huge_session_tokens": 2000000,
+    "duplicate_window_minutes": 60,
+    "idle_gap_minutes": 45,
+    "simple_task_output_tokens": 400,
+    "frontier_tiers": [
+      "frontier"
+    ],
+    "low_output_ratio_vs_median": 0.4,
+    "_low_output_note": "Sessions are flagged when their output/billable ratio falls below this fraction of YOUR median session ratio, rather than an absolute number, because a healthy ratio depends on how agentic your workload is."
+  },
+  "anomaly": {
+    "daily_zscore": 2.0,
+    "daily_ratio": 2.0,
+    "session_ratio": 3.0
+  },
+  "scorecard": {
+    "_comment": "Reference points the 0-100 dimension scores are graded against. Derived from your own data by default; override to hold yourself to a different bar.",
+    "target_output_ratio": 0.0088,
+    "target_cost_per_1k_output_usd": 0.3,
+    "frontier_cost_share_allowance_pct": 40
+  }
+}

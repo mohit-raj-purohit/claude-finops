@@ -1,0 +1,44 @@
+{
+  "name": "claude-finops",
+  "version": "1.0.0",
+  "description": "Claude FinOps Command Center \u2014 a local dashboard for your Claude Code usage and spend.",
+  "bin": {
+    "claude-finops": "bin/claude-finops.js"
+  },
+  "files": [
+    "bin/",
+    "finops/*.py",
+    "web/",
+    "config/free_models.json",
+    "config/model_compare.json",
+    "config/pricing.json",
+    "config/settings.json",
+    "run.py",
+    "run.sh",
+    "run.cmd",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "finops",
+    "cost",
+    "dashboard",
+    "usage"
+  ],
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohit-raj-purohit/claude-finops.git"
+  },
+  "homepage": "https://github.com/mohit-raj-purohit/claude-finops#readme",
+  "bugs": {
+    "url": "https://github.com/mohit-raj-purohit/claude-finops/issues"
+  },
+  "author": "Mohit Raj Purohit"
+}

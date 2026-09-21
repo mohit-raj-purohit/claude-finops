@@ -1,0 +1,49 @@
+{
+  "_comment": "Free models Claude Code can talk to. 'Adding' one creates a launcher command (e.g. claude-qwen) that starts Claude Code pointed at that model. Your normal `claude` is never changed. Edit this list to add more.",
+  "models": [
+    {
+      "id": "qwen-local",
+      "name": "Qwen 3.5 9B (local, Ollama)",
+      "provider": "ollama",
+      "model": "qwen3.5:9b",
+      "command": "claude-qwen",
+      "download_gb": 6.6,
+      "min_ram_gb": 16,
+      "good_for": "Best local pick for 16 GB Macs. Tools + thinking, 256K context. Routine edits, tests, docs.",
+      "limits": "Slower than Claude and weaker on large multi-file changes. Runs on your CPU/GPU."
+    },
+    {
+      "id": "qwen38-local",
+      "name": "Qwen 3.8 27B (local, Ollama)",
+      "provider": "ollama",
+      "model": "qwen3.8:27b",
+      "command": "claude-qwen38",
+      "download_gb": 18,
+      "min_ram_gb": 32,
+      "good_for": "Newest Qwen. Strongest local option for multi-file work, 256K context.",
+      "limits": "Needs a 32 GB+ Mac (18 GB model). On 16 GB it will be unusably slow or fail to load."
+    },
+    {
+      "id": "qwen-coder-small",
+      "name": "Qwen 2.5 Coder 7B (local, Ollama)",
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "command": "claude-qwen-coder",
+      "download_gb": 4.7,
+      "min_ram_gb": 8,
+      "good_for": "Lightweight laptops. Small code questions and single-file edits.",
+      "limits": "Older (2024) and weakest at tool use. Prefer Qwen 3.5 9B if you have 16 GB RAM."
+    },
+    {
+      "id": "qwen-openrouter",
+      "name": "Qwen3 Coder (free, OpenRouter cloud)",
+      "provider": "openrouter",
+      "model": "qwen/qwen3-coder:free",
+      "command": "claude-qwen-cloud",
+      "download_gb": 0,
+      "min_ram_gb": 0,
+      "good_for": "Big free coding model with nothing to download.",
+      "limits": "Needs a free OpenRouter API key. Free tier is rate-limited, and prompts are sent to OpenRouter."
+    }
+  ]
+}
