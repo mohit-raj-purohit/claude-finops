@@ -30,6 +30,7 @@ WEB_DIR = os.path.join(ROOT, "web")
 LEGACY_DATA_DIR = os.path.join(ROOT, "data")
 
 # State tree: everything we write.
+_EXPLICIT_HOME = bool(os.environ.get("CLAUDE_FINOPS_HOME"))
 HOME_DIR = os.environ.get("CLAUDE_FINOPS_HOME") or os.path.join(
     os.path.expanduser("~"), ".claude-finops")
 DATA_DIR = os.path.join(HOME_DIR, "data")
@@ -75,6 +76,11 @@ def migrate(log=print):
     deletes, and never overwrites something already migrated."""
     ensure_dirs()
     if os.path.exists(_MARKER):
+        return False
+    if _EXPLICIT_HOME:
+        # An explicit CLAUDE_FINOPS_HOME means a deliberately separate profile
+        # (a demo, a test, a second account). Copying the default profile's
+        # database and API keys into it would be the opposite of what was asked.
         return False
 
     moved = []

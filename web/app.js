@@ -2231,8 +2231,12 @@ async function render() {
   S.opts = await fetch('/api/options').then(r => r.json());
   S.filter.agents = defaultAgents();
   applyRange('30d');
+  // ?view=<name> opens straight to one screen, so a link (or a screenshot run)
+  // can point at a specific report rather than always landing on the overview.
+  const want = new URLSearchParams(location.search).get('view');
+  if (want && NAV.some(([, items]) => items.some(([id]) => id === want))) S.view = want;
   await render();
-  maybeFirstTour();
+  if (!want) maybeFirstTour();   // arriving on a deep link is not a first visit
   let t; addEventListener('resize', () => { clearTimeout(t); t = setTimeout(render, 220); });
 })();
 

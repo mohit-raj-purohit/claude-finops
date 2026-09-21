@@ -12,12 +12,96 @@ Everything runs on `127.0.0.1` with the Python standard library. No dependencies
 network calls, no data leaves the machine.
 
 ```bash
-./run.sh              # build the warehouse if missing, then serve
-./run.sh --rebuild    # re-parse transcripts first
-PORT=9000 ./run.sh    # different port
+npx claude-finops
 ```
 
-Then open <http://127.0.0.1:8787>.
+That is the whole setup. It finds your transcripts, builds a local warehouse, and
+opens the dashboard at <http://127.0.0.1:8787>. No account, no API key, no config
+file to write first.
+
+![Executive overview](docs/img/overview.png)
+
+<sub>Screenshots are real output from a real warehouse; project names, session titles
+and prompt text have been replaced with placeholders.</sub>
+
+---
+
+## Try it in 60 seconds
+
+**1. Run it.** Nothing to install first — `npx` fetches and runs it.
+
+```bash
+npx claude-finops
+```
+
+First run reads `~/.claude/projects` and builds the warehouse (roughly a minute for a
+few hundred transcripts). Every run after that starts in about a second.
+
+**2. Open <http://127.0.0.1:8787>.** You land on the executive overview above: spend,
+tokens, burn rate, forecast, and a ranked list of what to fix first.
+
+**3. Ask it what to do.** "Why so many tokens?" explains where your tokens actually
+went and gives you a prompt you can paste straight into Claude Code to fix it.
+
+![Why so many tokens?](docs/img/diagnose.png)
+
+**4. Stop when you are done.**
+
+```bash
+claude-finops --stop
+```
+
+Want it permanently available?
+
+```bash
+npm install -g claude-finops    # then `claude-finops` from anywhere
+```
+
+---
+
+## What you actually get
+
+**Where the money goes, per project.** Every project ranked by cost, drilling down
+Project → Session → Prompt.
+
+![Projects](docs/img/projects.png)
+
+**A grade, not just numbers.** A 0–100 FinOps scorecard across five dimensions, each
+with the reasoning behind the score, so you know whether your usage is healthy.
+
+![FinOps scorecard](docs/img/scorecard.png)
+
+**Waste you can act on.** Repeated prompts, abandoned sessions, context carried for
+no reason — each with the estimated money attached.
+
+![Waste detection](docs/img/waste.png)
+
+**Whether the model you are on is the right one.** Per-model cost and efficiency,
+plus a switch analysis that prices the same workload on a cheaper model.
+
+![Model analysis](docs/img/models.png)
+
+**What next month looks like.** Forecast from your own history, against budgets you
+set.
+
+![Forecast](docs/img/forecast.png)
+
+---
+
+## Why it is easy to use
+
+- **One command, zero configuration.** `npx claude-finops`. No API key, no sign-up, no
+  config file — it reads transcripts Claude Code already wrote.
+- **No dependencies.** Pure Python standard library. Nothing to `pip install`, nothing
+  to build, no lockfile to resolve.
+- **Nothing to learn.** Every screen states its own conclusion in plain English before
+  it shows you a chart, and every number carries a badge saying whether it is measured
+  or estimated.
+- **Your data stays put.** It binds to `127.0.0.1` and makes no outbound calls. The
+  warehouse lives in `~/.claude-finops`, so upgrading or deleting the package never
+  touches it.
+- **It tells you what to change**, not just what happened — usually with a prompt you
+  can paste into Claude Code.
 
 ---
 
@@ -266,3 +350,12 @@ Pick agents with the chips at the top: click for one, Cmd/Ctrl-click to combine,
 everything. Every page follows the selection, and **Agents** shows them side by side.
 Prices for the other providers live in `config/pricing.json` with their source URLs.
 
+
+---
+
+## License and trademarks
+
+MIT — see [LICENSE](LICENSE).
+
+Not affiliated with, endorsed by, or sponsored by Anthropic. "Claude" and "Claude Code"
+are trademarks of Anthropic, PBC, used here only to describe what this tool reads.
