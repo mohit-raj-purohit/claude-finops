@@ -165,6 +165,23 @@ The build is destructive and idempotent — it drops and recreates `~/.claude-fi
 
 ---
 
+## Commands
+
+```
+claude-finops                 start the dashboard
+claude-finops --rebuild       re-read transcripts, then start
+claude-finops --stop          stop it
+claude-finops --where         where your data, settings and keys live
+claude-finops --set-key       store a provider API key (hidden prompt, 0600)
+claude-finops --keys          which provider keys are configured
+claude-finops --help          everything
+```
+
+Installed globally (`npm i -g claude-finops`) or run ad hoc (`npx claude-finops`),
+these work from any directory. From a source checkout, `./run.sh` takes the same flags.
+
+---
+
 ## Where your data lives
 
 Everything the app writes lives outside the install folder, in one state directory:

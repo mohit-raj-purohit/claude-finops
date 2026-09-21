@@ -3,8 +3,9 @@
 Everything else in this dashboard reads local files. This module is the one part that
 talks to the internet, and only when you ask it to (the Refresh button / --cloud-sync).
 
-Keys are never stored by the UI. Put them in the environment, or in
-config/secrets.local.json (gitignored, never packaged by --share):
+Keys are never stored by the UI. Put them in the environment, or store one with
+`claude-finops --set-key`, which writes ~/.claude-finops/secrets.local.json (0600,
+outside the install tree, never packaged):
 
     {"anthropic_admin_key": "sk-ant-admin...", "cursor_api_key": "key_..."}
 
@@ -15,7 +16,7 @@ config/secrets.local.json (gitignored, never packaged by --share):
   Cursor     Team/Org admin key from Cursor dashboard → Settings → Admin API.
              POST /teams/daily-usage-data, /teams/spend, GET /teams/members
 
-Responses are cached in data/cloud_cache.json so the dashboard never calls out on its own.
+Responses are cached in ~/.claude-finops/data/cloud_cache.json so the dashboard never calls out on its own.
 """
 import base64
 import json

@@ -2548,7 +2548,7 @@ VIEWS.cloud = async (page) => {
       <div class="dt"><b>Gives you:</b> ${esc(p.covers)}</div>
       <div class="dt"><b>Get a key:</b> ${esc(p.how)}</div>
       <div class="dt">Then set <code>${esc(p.env)}</code> in your environment, or add
-        <code>"${esc(p.field)}"</code> to <code>config/secrets.local.json</code>
+        <code>"${esc(p.field)}"</code> to <code>~/.claude-finops/secrets.local.json</code>
         (gitignored, never packaged). Restart the dashboard afterwards.</div>
     </div>`).join('');
   page.innerHTML = `
@@ -2791,7 +2791,7 @@ const TOURS = {
     {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'}],
   cloud: [
     {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: 'Click <b>↯ Refresh from APIs</b> to fetch — this is the only page that goes online.'},
-    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Put the key in an environment variable or config/secrets.local.json, then restart.'},
+    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Run claude-finops --set-key, or set the environment variable, then restart.'},
     {el: 'card:Billed vs local', t: 'The comparison', see: 'Billed totals against local totals for the same period.', get: 'Proof of how much of the bill this machine explains.', act: 'A large gap means most spend happens elsewhere: check the user tables.'},
     {el: 'card:Claude Code users', t: 'Users org-wide', see: 'Each Claude Code user in the organisation and their usage.', get: 'Who drives the bill across the team.', act: 'Compare your own row with the team average.'},
     {el: 'card:Cursor members', t: 'Cursor members', see: 'Cursor team members and their spend.', get: 'The same picture for Cursor seats.', act: 'Look for seats with no usage at all.'},
