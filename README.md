@@ -287,6 +287,23 @@ place for you to delete once you are happy.
 
 ---
 
+## Running the trial, not just recommending one
+
+The evidence table ends by admitting its own limit: your prompts were never
+randomly assigned to models, so a category can simply have been easier on one of
+them. **Try it →** on any row closes that gap. It pulls prompts you actually
+typed in that category, re-runs them headlessly on the candidate model, and
+prices the result against what they cost the first time.
+
+Nothing runs on its own: a trial spends real money and drives a real agent, so
+it takes two clicks and shows the first-time bill before you commit. Runs happen
+in a scratch directory, and headless Claude cannot ask for permission — so tools
+that need it are denied and counted, and a task that needs your repo will look
+smaller than it is. The verdict says which way it went: *confirmed*, *smaller
+than advertised*, or *history overstated it*.
+
+---
+
 ## Live model advice
 
 The back-test tells you what to use next time. These tell you mid-session, while

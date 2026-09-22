@@ -113,6 +113,15 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/live/"):
                 self._payload = payload
                 return self.session_action(path)
+            if path == "/api/trial/run":
+                # Spends real money and drives a real agent, so it is guarded like
+                # the other side-effecting routes and only ever reached by a click.
+                if not self._same_origin():
+                    return self.send_json({"ok": False, "error": "forbidden"}, 403)
+                from .trial import run
+                return self.send_json(run(payload.get("category"), payload.get("model"),
+                                          payload.get("prompts") or [],
+                                          cwd=payload.get("cwd") or None))
             if path.startswith("/api/do/"):
                 if not self._same_origin():
                     return self.send_json({"ok": False, "error": "forbidden"}, 403)
@@ -292,6 +301,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.context_analysis(f))
         if route == "waste":
             return self.send_json(a.waste(f))
+        if route == "trial":
+            from .trial import samples, available
+            return self.send_json({"available": available(),
+                                   "samples": samples(qs.get("category", [""])[0],
+                                                      int(qs.get("limit", ["3"])[0]))})
         if route == "model_evidence":
             return self.send_json(a.model_evidence(f))
         if route == "model_switch":

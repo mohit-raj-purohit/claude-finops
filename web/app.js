@@ -1354,6 +1354,8 @@ function evidenceBody(ev) {
       statusChip(VERDICT[r.x.verdict][2], VERDICT[r.x.verdict][1])}</span>`},
     {h: 'Would save', num: 1, f: r => r.x.verdict === 'supported'
       ? `<b>${fmtUSD(r.x.estimated_savings_usd)}</b>` : `<span class="note">${fmtUSD(r.x.estimated_savings_usd)}</span>`},
+    {h: '', f: r => `<button class="act ghost trial-btn" data-cat="${esc(r.c.category)}"
+       data-model="${esc(r.x.model)}" data-name="${esc(r.x.name)}">Try it →</button>`},
   ], rows) + `<div class="note" style="padding:10px 14px">${esc(ev.method)}</div>`;
 }
 
@@ -1416,6 +1418,7 @@ VIEWS.modelswitch = async (page) => {
     {h: 'Could save', num: 1, f: r => fmtUSD(r.estimated_savings_usd)},
     {h: 'Why', f: r => esc(r.why)},
   ], m.projects);
+  wireTrials(page);
   addChart(page, 'Savings by switch', el => C.barsH(el, {
     rows: m.switches.slice(0, 10), label: r => clip(`${r.scope} → ${r.recommended_name}`, 48),
     value: r => r.estimated_savings_usd,
@@ -1425,6 +1428,116 @@ VIEWS.modelswitch = async (page) => {
       <div class="row"><span class="k">Confidence</span><span class="v">${esc(r.confidence)}</span></div>`}),
     {badge: BADGE.recommendation, hint: 'Colour = confidence (green high, blue medium, amber low)'});
 };
+
+/* ---------- trial: stop recommending, start measuring ----------
+   The evidence ends at "strong evidence for a trial, not proof". This runs the
+   trial: real prompts out of your own history, re-run headlessly on the
+   candidate model, priced against what they cost the first time. It spends real
+   money, so nothing happens without two clicks. */
+function trialPanelHTML(cat, model, name, s) {
+  if (!s.available) {
+    return `<div class="empty">The <code>claude</code> CLI is not on PATH, so a trial cannot be
+      run from here.</div>`;
+  }
+  if (!s.samples.length) {
+    return `<div class="empty">No prompt you actually typed in this category is short enough to
+      re-run safely.</div>`;
+  }
+  const base = s.samples.reduce((a, x) => a + (x.baseline_cost_usd || 0), 0);
+  return `
+    <div class="dt">These are ${s.samples.length} prompts you really sent in
+      <b>${esc(cat.replace('_', ' '))}</b>. Running them again on <b>${esc(name)}</b> costs money —
+      they cost ${fmtUSD(base)} the first time, and the cheaper model should come in under that.</div>
+    <div class="stack trial-samples">${s.samples.map((x, i) => `
+      <div class="dt trial-s" data-i="${i}">
+        <span class="note">${esc(x.day)} · ${esc(x.baseline_name)} · ${fmtUSD(x.baseline_cost_usd)} ·
+          ${fmtInt(x.baseline_turns)} turns</span>
+        <div class="trial-text">${esc(x.text.slice(0, 400))}${x.text.length > 400 ? '…' : ''}</div>
+      </div>`).join('')}</div>
+    <div class="dt note">Runs headlessly in a scratch directory. Tools that need permission are
+      denied, because a headless agent cannot ask — so a task that needs your repo will look
+      smaller here than it really is.</div>
+    <div class="live-actions">
+      <button class="act trial-run">▶ Run ${s.samples.length} prompts on ${esc(name)}</button>
+      <button class="act ghost trial-copy">Copy the first prompt instead</button>
+      <span class="trial-msg note"></span>
+    </div>
+    <div class="trial-out"></div>`;
+}
+
+const TRIAL_VERDICT = {
+  confirmed:    ['healthy', 'Confirmed by running it'],
+  marginal:     ['high', 'Smaller than advertised'],
+  contradicted: ['critical', 'History overstated it'],
+  failed:       ['critical', 'Runs failed'],
+  unclear:      ['high', 'Inconclusive'],
+};
+
+function trialResultHTML(r) {
+  const v = TRIAL_VERDICT[r.verdict] || TRIAL_VERDICT.unclear;
+  return `<div class="dt"><b>${statusChip(v[0], v[1])}</b> ${esc(r.why)}</div>` + table([
+    {h: 'Prompt', trunc: 1, f: x => esc(x.prompt)},
+    {h: 'First time', num: 1, f: x => fmtUSD(x.baseline_cost_usd)},
+    {h: 'On ' + esc(r.alias), num: 1, f: x => x.ok ? fmtUSD(x.cost_usd) : '—'},
+    {h: 'Turns', num: 1, f: x => x.ok ? fmtInt(x.turns) : '—'},
+    {h: 'Took', num: 1, f: x => x.ok ? x.elapsed_s + 's' : '—'},
+    {h: 'Denied', num: 1, f: x => x.denials ? fmtInt(x.denials) : ''},
+    {h: 'Result', f: x => x.ok ? `<span class="note">${esc((x.result || '').slice(0, 120))}</span>`
+      : `<span class="status critical">${esc((x.error || 'failed').slice(0, 120))}</span>`},
+  ], r.runs) + `<div class="note" style="padding:8px 14px">${esc(r.note)}</div>`;
+}
+
+function wireTrials(page) {
+  page.querySelectorAll('.trial-btn').forEach(b => b.onclick = async () => {
+    const row = b.closest('tr');
+    if (row.nextElementSibling?.classList.contains('trial-row')) {
+      row.nextElementSibling.remove(); return;
+    }
+    const {cat, model, name} = b.dataset;
+    const tr = h(`<tr class="trial-row"><td colspan="10"><div class="trial-panel">
+      <div class="empty">Finding prompts you sent…</div></div></td></tr>`);
+    row.after(tr);
+    const host = tr.querySelector('.trial-panel');
+    let s;
+    try {
+      s = await fetch(`/api/trial?category=${encodeURIComponent(cat)}&limit=3`).then(r => r.json());
+    } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    host.innerHTML = trialPanelHTML(cat, model, name, s);
+    const msg = host.querySelector('.trial-msg');
+    host.querySelector('.trial-copy')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(s.samples[0].text); msg.textContent = 'Copied.'; }
+      catch { msg.textContent = 'Could not copy.'; }
+    });
+    host.querySelector('.trial-run')?.addEventListener('click', async ev => {
+      const btn = ev.currentTarget;
+      if (btn.dataset.armed !== '1') {
+        btn.dataset.armed = '1';
+        btn.textContent = 'Click again to spend real money';
+        btn.classList.add('warn');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      msg.textContent = 'Each prompt runs to completion; this can take a few minutes.';
+      try {
+        const r = await fetch('/api/trial/run', {
+          method: 'POST',
+          headers: {'X-FinOps-Action': '1', 'Content-Type': 'application/json'},
+          body: JSON.stringify({category: cat, model, prompts: s.samples}),
+        }).then(x => x.json());
+        host.querySelector('.trial-out').innerHTML = r.ok
+          ? trialResultHTML(r) : `<div class="empty">${esc(r.error || 'failed')}</div>`;
+        msg.textContent = '';
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+      btn.disabled = false;
+      btn.classList.remove('warn');
+      btn.textContent = '▶ Run again';
+      btn.dataset.armed = '';
+    });
+  });
+}
 
 /* ---------- waste ---------- */
 VIEWS.waste = async (page) => {

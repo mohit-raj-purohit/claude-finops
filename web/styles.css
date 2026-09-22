@@ -425,3 +425,13 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
    so it reads as a note with an accent edge rather than a warning. */
 .switch-tip { border-left: 2px solid var(--accent, #eb6834); padding-left: 9px; }
 .switch-tip .act { margin-left: 8px; }
+
+/* Trial panel: an experiment you are about to pay for, so it reads as a quiet
+   workbench rather than another recommendation. */
+.trial-row > td { padding: 0 !important; background: var(--surface-2); }
+.trial-panel { padding: 12px 14px; display: grid; gap: 8px;
+               border-left: 2px solid var(--accent, #eb6834); }
+.trial-text { font-size: 12px; margin-top: 3px; white-space: pre-wrap;
+              max-height: 76px; overflow: auto; color: var(--text-2); }
+.trial-s { border-top: 1px solid var(--border); padding-top: 7px; }
+.trial-out:empty { display: none; }
