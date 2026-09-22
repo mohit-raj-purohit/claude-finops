@@ -3,6 +3,15 @@ import html
 from datetime import datetime, timezone
 
 
+def _who(acct):
+    """"Mohit Raj Purohit <mohit@example.com>" when we know both, else whichever
+    one we have. A report that leaves the house should name its account."""
+    name, email = acct.get("name") or "", acct.get("email") or acct.get("label") or ""
+    if name and email:
+        return f"{name} <{email}>"
+    return name or email or "unknown"
+
+
 def _f(v, kind="usd"):
     if v is None:
         return "&mdash;"
@@ -52,7 +61,7 @@ td:nth-child(n+2) {{ font-variant-numeric: tabular-nums; }}
 ul {{ margin:6px 0 12px 18px; padding:0; }} li {{ margin-bottom:4px; }}
 </style></head><body>
 <h1>Claude AI FinOps Report</h1>
-<div class="sub">Account {html.escape(str(a.settings['account'].get('label')))} &middot;
+<div class="sub">Account {html.escape(_who(a.settings['account']))} &middot;
  Billing period {bp['start']} &rarr; {bp['end']} &middot;
  Data {ov['date_range']['first']} &ndash; {ov['date_range']['last']} &middot;
  Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</div>

@@ -30,22 +30,57 @@ def _merge(base, over):
     return base
 
 
+# claude_max -> "Max", claude_pro -> "Pro": the tier string carries a 5x/20x
+# suffix we keep, because which Max you are on changes every limit in the app.
+_PLANS = {"claude_max": "Max", "claude_pro": "Pro", "claude_team": "Team",
+          "claude_enterprise": "Enterprise"}
+
+
+def _plan(acct):
+    base = _PLANS.get(acct.get("organizationType") or "")
+    mult = ""
+    tier = str(acct.get("organizationRateLimitTier") or "")
+    if base == "Max":
+        for m in ("5x", "20x"):
+            if tier.endswith(m):
+                mult = " " + m
+    return (base + mult) if base else ""
+
+
 def detect_account():
-    """The signed-in Claude Code account, read from ~/.claude.json (actual, not guessed)."""
+    """Who Claude Code is signed in as, read from ~/.claude.json (actual, not guessed).
+
+    Everything here is already on this machine, written by Claude Code itself at
+    login. We only surface it, so a shared screenshot says whose numbers these
+    are — a dashboard with no name on it is the one people misread.
+    """
     try:
         with open(os.path.expanduser("~/.claude.json")) as fh:
             acct = json.load(fh).get("oauthAccount") or {}
     except (OSError, ValueError):
         return {}
-    return {"label": acct.get("emailAddress")} if acct.get("emailAddress") else {}
+    email = acct.get("emailAddress") or ""
+    name = acct.get("fullName") or acct.get("displayName") or ""
+    org = acct.get("organizationName") or ""
+    out = {"name": name, "email": email,
+           # A personal plan names the org after the person; repeating it is noise.
+           "org": "" if org == name else org,
+           "plan": _plan(acct)}
+    if email:
+        out["label"] = email
+    return {k: v for k, v in out.items() if v}
 
 
 def load_settings():
     """Shared defaults (settings.json) + this machine's overrides (settings.local.json)."""
     with open(SETTINGS_PATH) as fh:
         cur = json.load(fh)
-    if not cur.get("account", {}).get("label"):
-        cur.setdefault("account", {}).update(detect_account())
+    # Detected identity first, so a configured settings.json still wins below.
+    detected = detect_account()
+    acct = cur.setdefault("account", {})
+    for k, v in detected.items():
+        if not acct.get(k):
+            acct[k] = v
     if os.path.exists(LOCAL_SETTINGS_PATH):
         with open(LOCAL_SETTINGS_PATH) as fh:
             _merge(cur, json.load(fh))

@@ -151,7 +151,8 @@ function shell() {
       <nav class="nav">${NAV.map(([g, items], gi) => `<div class="group g${gi}">${g}</div>` +
         items.map(([id, ic, label]) =>
           `<a data-view="${id}" class="g${gi}${id === 'diagnose' ? ' start' : ''}"><span class="ic">${ic}</span>${label}<span class="nb" data-nb="${id}"></span></a>`).join('')).join('')}
-      </nav></aside>
+      </nav>
+      <div class="who" id="who"></div></aside>
     <div class="main">
       <header class="topbar">
         <div class="r1">
@@ -2223,9 +2224,27 @@ const navAllowed = scope => !scope || (scope === 'claude' ? hasClaude()
   : scope === 'cloud' ? hasCloudKey() : hasPriced());
 // "Claude Code", "Codex", or "agent" for a mixed selection: used in data-availability text
 const agentWord = () => { const a = selAgents(); return a.length === 1 ? a[0].name : 'agent'; };
+// Whose usage this is. Read from ~/.claude.json by the server, so a screenshot
+// or a shared dashboard always says which account the numbers belong to.
+function whoBlock() {
+  const el = $('#who'), a = S.opts?.settings?.account || {};
+  if (!el) return;
+  if (!a.name && !a.email) { el.innerHTML = ''; return; }
+  const initials = (a.name || a.email || '?').split(/[\s@.]+/).filter(Boolean)
+    .slice(0, 2).map(w => w[0].toUpperCase()).join('');
+  el.innerHTML = `<div class="av">${esc(initials)}</div>
+    <div class="id">
+      <div class="nm">${esc(a.name || a.email)}</div>
+      <div class="em" title="${esc(a.email || '')}">${esc(a.email || '')}</div>
+      ${a.plan || a.org ? `<div class="pl">${esc([a.plan, a.org].filter(Boolean).join(' · '))}</div>` : ''}
+    </div>`;
+  el.title = `Claude Code is signed in as ${a.name || ''} <${a.email || ''}>`.trim();
+}
+
 function applyAgentChrome() {
   const a = selAgents();
   const label = a.length === 1 ? a[0].name.replace(/ (Code|CLI)$/, '') : a.length ? 'Multi-agent' : 'AI';
+  whoBlock();
   const mark = $('.brand .mark');
   if (mark) mark.innerHTML = `<span class="dot"></span>${esc(label)} FinOps`;
   const sub = $('.brand .sub');
