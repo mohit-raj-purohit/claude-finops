@@ -1,6 +1,6 @@
 {
   "name": "claude-finops",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local FinOps dashboard for Claude Code: what you used, what it cost, why it cost that much, and what to change. Reads your own transcripts, no API key, no data leaves the machine.",
   "bin": {
     "claude-finops": "bin/claude-finops.js"
