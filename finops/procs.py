@@ -85,6 +85,7 @@ def _transcript_stats(session_id, pricing):
     steps = tokens = 0
     ctx = None
     cost = 0.0
+    model = None          # the model of the most recent assistant turn: what you are on now
     with open(fp, errors="replace") as fh:
         for line in fh:
             if '"usage"' not in line:
@@ -108,7 +109,8 @@ def _transcript_stats(session_id, pricing):
             if not (c5 or c1):
                 c5 = cw
             cost += pricing.estimate(m.get("model"), inp, out, cr, c5, c1)
-    return {"transcript": fp, "steps": steps, "tokens": tokens, "context": ctx,
+            model = m.get("model") or model
+    return {"transcript": fp, "steps": steps, "tokens": tokens, "context": ctx, "model": model,
             "est_cost_usd": cost, "last_write_s": time.time() - os.path.getmtime(fp)}
 
 

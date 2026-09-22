@@ -1644,6 +1644,10 @@ VIEWS.live = async (page) => {
         <div class="dt">${x.status === 'busy' ? '<b>Working now</b>' : 'Idle'}${x.uptime ? ` · up ${esc(x.uptime)}` : ''} ·
           last activity ${x.last_write_s == null ? '—' : dur(x.last_write_s)} ago${x.memory_mb == null ? '' : ` · ${fmtInt(x.memory_mb)} MB`} ·
           <span class="note">${esc(x.cwd)}</span></div>
+        ${x.advice ? `<div class="dt switch-tip"><b>${x.advice.trial ? 'Worth trying' : 'Cheaper model'}:</b>
+          ${esc(x.advice.line)}
+          <button class="act ghost" data-copy="${esc(x.advice.command)}"
+            title="${esc(x.advice.why)}">Copy ${esc(x.advice.command)}</button></div>` : ''}
         ${x.severity !== 'ok' ? `<div class="dt"><b>Advice:</b> ${x.severity === 'high'
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}

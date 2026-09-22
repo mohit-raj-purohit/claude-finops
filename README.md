@@ -287,6 +287,28 @@ place for you to delete once you are happy.
 
 ---
 
+## Live model advice
+
+The back-test tells you what to use next time. These tell you mid-session, while
+you can still act on it:
+
+```
+claude-finops --advise               what every running session should switch to
+claude-finops --install-hook         suggest a cheaper model as you send each prompt
+claude-finops --install-statusline   model, context pressure and advice in your statusline
+```
+
+The hook and statusline read the same evidence as the dashboard, cached for an
+hour, and stay quiet unless your own history shows a cheaper model doing that
+category of work without taking more turns. Neither can block or slow a prompt:
+they fail silent and always exit 0. Undo with `--uninstall-hook` /
+`--uninstall-statusline`; your `~/.claude/settings.json` is backed up first.
+
+The Running sessions view shows the same line per live session, with the
+`/model` command ready to copy.
+
+---
+
 ## Privacy
 
 `~/.claude-finops/data/finops.db` and the prompt/CSV exports contain **your full prompt text**. The

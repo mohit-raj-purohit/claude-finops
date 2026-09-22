@@ -171,6 +171,9 @@ HELP = """Claude FinOps Command Center
   claude-finops --keys          list which provider keys are configured
   claude-finops --share         write ../claude-finops.zip (code only, never your data)
   claude-finops --version       print the installed version, and whether a newer one is out
+  claude-finops --advise        what to switch to in the sessions running right now
+  claude-finops --install-hook  suggest a cheaper model in Claude Code, as you send each prompt
+  claude-finops --install-statusline   show model, context and advice in your statusline
   claude-finops --help          this message
 
 Environment:
@@ -180,6 +183,28 @@ Environment:
   CLAUDE_FINOPS_PYTHON=/path    which Python the npm wrapper should use
   NO_UPDATE_NOTIFIER=1          never check npm for a newer release
 """
+
+
+def advise_now():
+    """What every session running right now should consider switching to."""
+    from finops.advisor import advise, evidence
+    from finops.procs import list_sessions
+    from finops.analytics import Analytics
+    ev = evidence()
+    if not ev:
+        return print("No model evidence yet — you need two models run on the same kind of "
+                     "work before there is anything to compare.")
+    rows = list_sessions(Analytics(DB_PATH).pricing)
+    if not rows:
+        return print("No Claude Code sessions are running.")
+    for r in rows:
+        a = advise(model=r.get("model"), transcript=r.get("transcript"), ev=ev)
+        head = f"  {r.get('project') or r.get('session_id') or 'session'}"
+        if a:
+            print(f"{head}: {a['line']}")
+            print(f"{' ' * len(head)}  run {a['command']}")
+        else:
+            print(f"{head}: nothing to change.")
 
 
 def _version():
@@ -292,6 +317,23 @@ def main():
         return print(HELP)
     if "--version" in args or "-v" in args or "-V" in args:
         return version()
+    # Integration entry points. --hook and --statusline are invoked by Claude Code
+    # with a JSON payload on stdin, many times a session; they print one line and
+    # never fail loudly.
+    if "--hook" in args:
+        from finops.integrate import hook
+        return sys.exit(hook())
+    if "--statusline" in args:
+        from finops.integrate import statusline
+        return sys.exit(statusline())
+    if "--install-hook" in args or "--uninstall-hook" in args:
+        from finops.integrate import install_hook
+        return install_hook(remove="--uninstall-hook" in args)
+    if "--install-statusline" in args or "--uninstall-statusline" in args:
+        from finops.integrate import install_statusline
+        return install_statusline(remove="--uninstall-statusline" in args)
+    if "--advise" in args:
+        return advise_now()
     if "--where" in args:
         return where()
     if "--keys" in args:

@@ -323,6 +323,17 @@ class Handler(BaseHTTPRequestHandler):
             others = list_agent_sessions(a.pricing, [x for x in want if x != "claude"] or None) \
                 if not want or any(x != "claude" for x in want) else []
             rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
+            # Live model advice, while the session can still act on it. One cached
+            # evidence read for the whole list, and never fatal to the view.
+            try:
+                from .advisor import advise, evidence
+                ev = evidence()
+                for r in rows:
+                    r["advice"] = advise(model=r.get("model"), transcript=r.get("transcript"),
+                                         ev=ev) if ev else None
+            except Exception:
+                for r in rows:
+                    r.setdefault("advice", None)
             return self.send_json({"sessions": rows})
         if route == "cloud":
             from .cloud import report

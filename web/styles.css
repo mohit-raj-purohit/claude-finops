@@ -367,6 +367,9 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .live-msg.ok { color: var(--good-ink); } .live-msg.err { color: var(--critical-ink); }
 .item.gone { opacity: .45; }
 
+/* An explicit display beats the hidden attribute, so the panel has to opt back
+   out or it is permanently open. */
+.handover[hidden] { display: none; }
 .handover { margin-top: 8px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; display: grid; gap: 8px; }
 .handover textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 12.5px; padding: 8px; border-radius: 6px;
   border: 1px solid var(--border); background: transparent; color: inherit; resize: vertical; }
@@ -417,3 +420,8 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .who .em, .who .pl { font-size:10px; color:var(--muted); line-height:1.35;
                      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Live model advice on a running session: it is an opportunity, not a problem,
+   so it reads as a note with an accent edge rather than a warning. */
+.switch-tip { border-left: 2px solid var(--accent, #eb6834); padding-left: 9px; }
+.switch-tip .act { margin-left: 8px; }
