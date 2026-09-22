@@ -435,3 +435,9 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
               max-height: 76px; overflow: auto; color: var(--text-2); }
 .trial-s { border-top: 1px solid var(--border); padding-top: 7px; }
 .trial-out:empty { display: none; }
+
+/* Version badge beside the wordmark: small, muted, and always the version of
+   the copy actually serving the page. */
+.brand .ver { font-size: 9.5px; font-weight: 600; color: var(--muted);
+              border: 1px solid var(--border); border-radius: 99px;
+              padding: 1px 5px; margin-left: 5px; letter-spacing: .01em; }

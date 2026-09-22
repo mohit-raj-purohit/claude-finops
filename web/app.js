@@ -146,7 +146,8 @@ const NAV = [
 function shell() {
   document.body.innerHTML = `<div class="app">
     <aside class="sidebar">
-      <div class="brand"><div class="mark"><span class="dot"></span>Claude FinOps</div>
+      <div class="brand"><div class="mark"><span class="dot"></span>Claude FinOps
+          <span class="ver" id="ver"></span></div>
         <div class="sub">Command Center</div></div>
       <nav class="nav">${NAV.map(([g, items], gi) => `<div class="group g${gi}">${g}</div>` +
         items.map(([id, ic, label]) =>
@@ -2414,8 +2415,16 @@ function applyAgentChrome() {
   const a = selAgents();
   const label = a.length === 1 ? a[0].name.replace(/ (Code|CLI)$/, '') : a.length ? 'Multi-agent' : 'AI';
   whoBlock();
+  // Stamp the version onto the logo. Two copies of this app can be installed at
+  // once (npm global, a checkout) and the browser cannot tell them apart.
+  const ver = $('#ver');
+  if (ver && S.opts?.version) {
+    ver.textContent = 'v' + S.opts.version;
+    ver.title = 'Version serving this page';
+  }
   const mark = $('.brand .mark');
-  if (mark) mark.innerHTML = `<span class="dot"></span>${esc(label)} FinOps`;
+  if (mark) mark.innerHTML = `<span class="dot"></span>${esc(label)} FinOps` +
+    (S.opts?.version ? `<span class="ver" id="ver" title="Version serving this page">v${esc(S.opts.version)}</span>` : '');
   const sub = $('.brand .sub');
   if (sub) sub.textContent = a.length > 1 ? a.map(x => x.name).join(' + ') : 'Command Center';
   document.title = `${label} FinOps Command Center`;

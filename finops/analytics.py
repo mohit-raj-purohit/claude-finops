@@ -47,6 +47,19 @@ def _plan(acct):
     return (base + mult) if base else ""
 
 
+def _version():
+    """The version of the copy that is actually serving this page.
+
+    Worth surfacing: a global npm install and a checkout look identical in the
+    browser, and "why is my new feature missing" is almost always this.
+    """
+    try:
+        from .update import _installed
+        return _installed()
+    except Exception:
+        return ""
+
+
 def detect_account():
     """Who Claude Code is signed in as, read from ~/.claude.json (actual, not guessed).
 
@@ -1759,5 +1772,6 @@ class Analytics:
             "pricing": {"updated": self.pricing.updated, "source": self.pricing.source,
                         "models": self.pricing.models},
             "settings": self.settings,
+            "version": _version(),
             "unavailable_label": UNAVAILABLE,
         }
