@@ -686,7 +686,7 @@ class Diagnoser:
         rows = a.q(f"""SELECT r.session_id, s.title, pj.name project, COUNT(*) steps,
             MAX(r.context_tokens) peak, AVG(r.context_tokens) avg_ctx,
             SUM(r.billable_tokens) tokens, SUM(r.est_cost_usd) cost,
-            SUM(CASE WHEN r.context_tokens > {base} THEN r.context_tokens - {base} ELSE 0 END) over_base,
+            COALESCE(SUM(CASE WHEN r.context_tokens > {base} THEN r.context_tokens - {base} ELSE 0 END), 0) over_base,
             SUM(CASE WHEN r.context_tokens > {self.CTX_WARN} THEN 1 ELSE 0 END) heavy_steps,
             COUNT(DISTINCT r.prompt_id) prompts, SUM(r.is_sidechain) side
             FROM requests r JOIN sessions s ON s.id=r.session_id JOIN projects pj ON pj.id=r.project_id
@@ -698,8 +698,12 @@ class Diagnoser:
         for r in rows:
             sid = r["session_id"]
             fixes = []
-            r["avoidable_tokens"] = r["over_base"]
-            r["avoidable_cost"] = r["over_base"] * rate
+            # A session with no priced requests sums to NULL, not 0 — and one
+            # NULL used to take the whole diagnose page down with a 500.
+            over = r["over_base"] or 0
+            r["over_base"] = over
+            r["avoidable_tokens"] = over
+            r["avoidable_cost"] = over * rate
             if not compacts.get(sid):
                 fixes.append(f"Never compacted. {r['heavy_steps']:,} steps ran above "
                              f"{self.CTX_WARN // 1000}K context; /compact (or /clear between the "

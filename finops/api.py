@@ -58,11 +58,33 @@ def flatten(rows):
     return buf.getvalue()
 
 
+# A browser that navigates away, reloads, or is closed mid-response resets the
+# socket. That is the client's normal behaviour, not our error, but socketserver
+# prints a full traceback for it — pages of noise in server.log that look like a
+# crash. These two are the only disconnect shapes it produces.
+DISCONNECTS = (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)
+
+
+class Server(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        import sys
+        if not isinstance(sys.exception(), DISCONNECTS):
+            super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *a):
         pass
+
+    def handle_one_request(self):
+        # The reset can also land while we are still writing the response, past
+        # the point handle_error covers.
+        try:
+            super().handle_one_request()
+        except DISCONNECTS:
+            self.close_connection = True
 
     def send_json(self, obj, code=200):
         body = json.dumps(obj, default=str).encode()
@@ -423,7 +445,7 @@ def serve(port=8787, db=DB_PATH, background=None):
     if background and hasattr(os, "fork"):
         detach(port)
     A = Analytics(db)
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    srv = Server(("127.0.0.1", port), Handler)
     print(f"Claude FinOps Command Center -> http://127.0.0.1:{port}")
     print(f"  warehouse: {db}")
     print(f"  data      : {A.first_day} .. {A.last_day}")
