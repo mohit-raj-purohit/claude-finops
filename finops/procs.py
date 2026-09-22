@@ -497,3 +497,163 @@ def handover(pid, opts):
         res["closed"] = act(pid, "close")
         res["message"] += " Old session closed (resumable)."
     return res
+
+
+# ------------------------------------------------------------------ compact ----
+# /compact is typed *into* the running session — there is no signal for it. Nothing
+# can write to another process's terminal directly (TIOCSTI is off on macOS and on
+# modern Linux), so the keystrokes are handed to whatever owns that terminal:
+# tmux if the session runs inside one, else Terminal.app or iTerm2 via
+# AppleScript, else Windows Terminal/console via SendKeys. When none of those owns
+# it, the UI falls back to copying the command for you to paste.
+
+def _tty_of(pid):
+    """Controlling terminal of a pid, as a device path ('/dev/ttys004')."""
+    if os.name == "nt":
+        return ""
+    try:
+        t = subprocess.run(["ps", "-o", "tty=", "-p", str(pid)],
+                           capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if not t or t in ("?", "??", "-"):
+        return ""
+    return t if t.startswith("/dev/") else "/dev/" + t
+
+
+def _send_tmux(tty, pid, text):
+    if not shutil.which("tmux"):
+        return False, ""
+    try:
+        out = subprocess.run(["tmux", "list-panes", "-a", "-F",
+                              "#{pane_tty}\t#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    if out.returncode != 0:
+        return False, ""
+    procs = _ps()
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        pane_tty, pane_pid, target = parts
+        if pane_tty != tty and not (pane_pid.isdigit() and int(pane_pid) in _ancestors(pid, procs)):
+            continue
+        r = subprocess.run(["tmux", "send-keys", "-t", target, "--", text],
+                           capture_output=True, text=True)
+        if r.returncode:
+            return False, (r.stderr or "").strip()
+        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"], capture_output=True)
+        return True, "tmux"
+    return False, ""
+
+
+def _send_macos(tty, text):
+    """Terminal.app / iTerm2 both expose each tab's tty, so the right one is addressable."""
+    if sys.platform != "darwin" or not tty:
+        return False, ""
+    t = json.dumps(text)
+    dev = json.dumps(tty)
+    osa_terminal = f'''
+      tell application "System Events" to set running_ to (exists process "Terminal")
+      if running_ then
+        tell application "Terminal"
+          repeat with w in windows
+            repeat with tb in tabs of w
+              if (tty of tb) is {dev} then
+                do script {t} in tb
+                return "ok"
+              end if
+            end repeat
+          end repeat
+        end tell
+      end if
+      return "no"'''
+    osa_iterm = f'''
+      tell application "System Events" to set running_ to (exists process "iTerm2")
+      if running_ then
+        tell application "iTerm2"
+          repeat with w in windows
+            repeat with tb in tabs of w
+              repeat with s in sessions of tb
+                if (tty of s) is {dev} then
+                  tell s to write text {t}
+                  return "ok"
+                end if
+              end repeat
+            end repeat
+          end repeat
+        end tell
+      end if
+      return "no"'''
+    for script, who in ((osa_terminal, "Terminal.app"), (osa_iterm, "iTerm2")):
+        try:
+            r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=25)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0 and r.stdout.strip() == "ok":
+            return True, who
+        if r.returncode and "not allowed" in (r.stderr or "").lower():
+            return False, ("macOS blocked the keystroke: allow this terminal under System Settings → "
+                           "Privacy & Security → Automation.")
+    return False, ""
+
+
+def _send_windows(pid, text):
+    """Windows: focus the session's console window, then SendKeys into it."""
+    if os.name != "nt":
+        return False, ""
+    ps = ('$ErrorActionPreference="Stop";'
+          'Add-Type -AssemblyName Microsoft.VisualBasic;'
+          'Add-Type -AssemblyName System.Windows.Forms;'
+          f'$p=Get-Process -Id {pid};'
+          '$h=$p.MainWindowHandle;'
+          'while($h -eq 0 -and $p.Parent){$p=$p.Parent;$h=$p.MainWindowHandle};'
+          'if($h -eq 0){"no";exit};'
+          '[Microsoft.VisualBasic.Interaction]::AppActivate($p.Id);'
+          'Start-Sleep -Milliseconds 300;'
+          f'[System.Windows.Forms.SendKeys]::SendWait({json.dumps(text)}+"{{ENTER}}");"ok"')
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return (r.returncode == 0 and r.stdout.strip().endswith("ok")), ""
+
+
+def compact(pid, opts=None):
+    """Type `/compact` into a running Claude Code session's terminal.
+
+    opts: instructions – optional focus for the summary ("/compact <instructions>")
+    """
+    opts = opts or {}
+    extra = " ".join((opts.get("instructions") or "").split())[:400]
+    text = "/compact" + (f" {extra}" if extra else "")
+    try:
+        with open(os.path.join(REG, f"{pid}.json")) as fh:
+            reg = json.load(fh)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "Not a registered Claude Code session.", "copy": text}
+    p = _ps().get(pid)
+    if not p or not _is_claude(p):
+        return {"ok": False, "error": "Process is no longer running.", "copy": text}
+    if reg.get("procStart") and reg["procStart"] != p["lstart"]:
+        return {"ok": False, "error": "PID was reused by another process; refusing.", "copy": text}
+
+    tty = _tty_of(pid)
+    hint = ""
+    for send in (lambda: _send_tmux(tty, pid, text),
+                 lambda: _send_macos(tty, text),
+                 lambda: _send_windows(pid, text)):
+        ok, info = send()
+        if ok:
+            return {"ok": True, "message": f"Sent `{text}` to the session"
+                                           f"{f' via {info}' if info else ''}. "
+                                           "It compacts on its next turn; watch that window.",
+                    "sent": True, "copy": text}
+        if info and not hint:
+            hint = info
+    return {"ok": False, "sent": False, "copy": text,
+            "error": (hint or "Couldn't reach that session's terminal") +
+                     f" — `{text}` is on your clipboard; paste it in that window."}

@@ -177,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"error": "unknown route"}, 404)
 
     def session_action(self, path):
-        """POST /api/live/<pid>/<interrupt|close|kill>.
+        """POST /api/live/<pid>/<interrupt|close|kill|compact|handover>.
 
         Guarded against cross-site requests: a custom header can't be sent by another
         origin without a CORS preflight (which this server never approves), and any
@@ -195,12 +195,16 @@ class Handler(BaseHTTPRequestHandler):
         agent = (self._payload or {}).get("agent") or "claude"
         if agent != "claude":
             from .procs import act_agent
-            if parts[3] == "handover":
-                return self.send_json({"ok": False, "error": "Hand over is only available for Claude Code."})
+            if parts[3] in ("handover", "compact"):
+                return self.send_json({"ok": False,
+                                       "error": f"{parts[3].capitalize()} is only available for Claude Code."})
             return self.send_json(act_agent(int(parts[2]), parts[3], agent))
         if parts[3] == "handover":
             from .procs import handover
             return self.send_json(handover(int(parts[2]), self._payload))
+        if parts[3] == "compact":
+            from .procs import compact
+            return self.send_json(compact(int(parts[2]), self._payload))
         return self.send_json(act(int(parts[2]), parts[3]))
 
     def do_GET(self):
@@ -222,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": traceback.format_exc()}, 500)
 
     def api(self, route, qs):
+        if route == "usage":
+            from .limits import usage
+            return self.send_json(usage(force=qs.get("refresh", [""])[0] == "1"))
         if route.startswith(("free_models", "suggestions", "job/", "sync", "compare")):
             return self.actions_get(route)
         f = filters_from(qs)

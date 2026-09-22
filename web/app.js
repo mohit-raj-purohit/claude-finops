@@ -1510,13 +1510,37 @@ async function sessionAction(pid, action, body = {}) {
     headers: {'X-FinOps-Action': '1', 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   return r.json();
 }
+// Plan limits as `/usage` reports them: asked of Claude Code itself, server-side.
+const usageSev = p => p >= 90 ? 'critical' : p >= 75 ? 'approaching' : p >= 50 ? 'high' : 'healthy';
+const usageBody = u => {
+  if (!u || !u.ok) return `<div class="empty">${esc((u && u.error) || 'Usage is unavailable')}</div>`;
+  const meters = (u.limits || []).map(l => `
+    <div class="item">
+      <div class="hd"><b>${esc(l.label)}</b><span class="spacer"></span>
+        <span style="font-variant-numeric:tabular-nums">${fmtPct(l.pct)} used</span></div>
+      <div class="meter ${usageSev(l.pct)}"><i style="width:${Math.min(100, l.pct)}%"></i></div>
+      ${l.resets ? `<div class="dt note">Resets ${esc(l.resets)}</div>` : ''}</div>`).join('')
+    || `<pre class="note">${esc(u.text || '')}</pre>`;
+  const windows = (u.windows || []).map(w => `
+    <div class="item"><div class="hd">Last ${esc(w.window)}<span class="spacer"></span>
+      <span class="note">${esc(w.detail)}</span></div>
+      ${(w.notes || []).map(n => `<div class="dt">• ${esc(n)}</div>`).join('')}</div>`).join('');
+  return `<div class="stack">${meters}${windows}</div>
+    <div class="note">${esc(u.note || '')}${u.cached ? ` · read ${dur(u.age_s)} ago` : ''}${u.stale
+      ? ` · <b>last good read</b> (refresh failed: ${esc(u.error || '')})` : ''}</div>`;
+};
 VIEWS.live = async (page) => {
-  const res = await fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json());   // never cached: always live
+  const [res, usage0] = await Promise.all([
+    fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
+    fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message}))]);
   const list = res.sessions || [];
   const agentName = id => ((S.opts?.agents || []).find(a => a.id === id) || {}).name || id;
   const busy = list.filter(x => x.status === 'busy');
   const sevOf = x => x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low';
   page.innerHTML = `
+    ${card('Plan usage right now', `<div id="live-usage">${usageBody(usage0)}</div>`,
+      {badge: BADGE.actual, hint: 'Claude Code\'s own /usage: plan limits, not cost. Costs no tokens.',
+       actions: '<button class="btn pb-copy" id="usage-refresh">↻ Refresh usage</button>'})}
     <div class="grid g4">
       ${kpi('Running sessions', fmtInt(list.length), `${busy.length} working right now`, {badge: BADGE.actual})}
       ${kpi('Working (spending now)', fmtInt(busy.length), 'Only these consume tokens right now')}
@@ -1525,6 +1549,8 @@ VIEWS.live = async (page) => {
     </div>
     <div class="note"><b>Idle sessions don't use tokens</b>; they only cost again when you send the next message,
       which re-reads their whole context. <b>Interrupt</b> stops the current turn (like Esc).
+      <b>Compact</b> types <code>/compact</code> into that session's terminal (tmux, Terminal.app, iTerm2 or
+      Windows console; anywhere else it lands on your clipboard to paste).
       <b>Close</b> exits the session cleanly; copy its resume command to bring it back.
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
       Codex, Gemini and Cursor keep no session registry, so they count as running when their transcript was
@@ -1543,9 +1569,10 @@ VIEWS.live = async (page) => {
           <span class="note">${esc(x.cwd)}</span></div>
         ${x.severity !== 'ok' ? `<div class="dt"><b>Advice:</b> ${x.severity === 'high'
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
-          : 'Getting heavy. /compact at the next break, or close it if the task is done.'}</div>` : ''}
+          : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}
         <div class="live-actions">
           ${x.signalable ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>⏸ Interrupt</button>
+          ${x.agent === 'claude' ? '<button class="act" data-a="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>' : ''}
           <button class="act warn" data-a="close">⏹ Close session</button>
           <button class="act danger" data-a="kill">✖ Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}
           ${x.resume ? `<button class="act ghost" data-copy="${esc(x.resume)}">Copy resume command</button>` : ''}
@@ -1566,6 +1593,15 @@ VIEWS.live = async (page) => {
         </div>`}
       </div>`).join('') || `<div class="empty">No ${esc(agentWord())} sessions are running</div>`}</div>`;
   $('#live-refresh', page).onclick = () => render();
+  const ub = $('#usage-refresh', page);
+  ub.onclick = async () => {
+    ub.disabled = true; ub.textContent = 'Reading…';
+    try {
+      const u = await fetch('/api/usage?refresh=1').then(r => r.json());
+      $('#live-usage', page).innerHTML = usageBody(u);
+    } catch (e) { $('#live-usage', page).innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    ub.disabled = false; ub.textContent = '↻ Refresh usage';
+  };
   page.querySelectorAll('.item[data-i]').forEach(row => {
     const x = list[+row.dataset.i], pid = x.pid, msg = row.querySelector('.live-msg');
     const ho = row.querySelector('.handover'), ta = ho?.querySelector('textarea'), hoOut = ho?.querySelector('.ho-out');
@@ -1597,7 +1633,7 @@ VIEWS.live = async (page) => {
         if (!b.classList.contains('armed')) {
           row.querySelectorAll('button.armed').forEach(o => { o.classList.remove('armed'); o.textContent = o.dataset.label; });
           b.dataset.label = label; b.classList.add('armed');
-          b.textContent = x.hosts_dashboard && b.dataset.a !== 'interrupt'
+          b.textContent = x.hosts_dashboard && !['interrupt', 'compact'].includes(b.dataset.a)
             ? 'Sure? This is the session that launched the dashboard (the dashboard keeps running)' : `Click again to ${b.dataset.a}`;
           setTimeout(() => { if (b.classList.contains('armed')) { b.classList.remove('armed'); b.textContent = label; } }, 4000);
           return;
@@ -1605,6 +1641,7 @@ VIEWS.live = async (page) => {
         b.classList.remove('armed'); b.disabled = true; b.textContent = 'Working…';
         try {
           const r = await sessionAction(pid, b.dataset.a, {agent: x.agent});
+          if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
           msg.textContent = r.ok ? r.message : `Failed: ${r.error}`;
           msg.className = 'live-msg ' + (r.ok ? 'ok' : 'err');
           if (r.ok && r.exited) { row.classList.add('gone'); setTimeout(() => render(), 1500); }
