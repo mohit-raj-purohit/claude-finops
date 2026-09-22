@@ -93,6 +93,7 @@ HELP = """Claude FinOps Command Center
   claude-finops --set-key       store a provider API key (prompts, never echoes)
   claude-finops --keys          list which provider keys are configured
   claude-finops --share         write ../claude-finops.zip (code only, never your data)
+  claude-finops --version       print the installed version, and whether a newer one is out
   claude-finops --help          this message
 
 Environment:
@@ -102,6 +103,33 @@ Environment:
   CLAUDE_FINOPS_PYTHON=/path    which Python the npm wrapper should use
   NO_UPDATE_NOTIFIER=1          never check npm for a newer release
 """
+
+
+def version():
+    """Which copy is this, and is it current?
+
+    The second half matters more than the first: people run a global install and
+    a repo checkout side by side, and the usual confusion is not "what version
+    am I on" but "why does the one I am looking at not have the feature".
+    """
+    from finops.update import check, disabled, _key
+    # Asking outright is worth a fresh request: a day-old cached answer is the
+    # one thing this command must not give you.
+    u = check(force=True)
+    print(f"  claude-finops {u['current'] or 'unknown'}")
+    print(f"  installed at  {ROOT}")
+    if u.get("update_available"):
+        print(f"  update        {u['latest']} is out - {u['command']}")
+    elif disabled():
+        print("  update        check is off (NO_UPDATE_NOTIFIER)")
+    elif u.get("latest") and _key(u["current"]) > _key(u["latest"]):
+        # A checkout mid-release is ahead of what is published. Saying "up to
+        # date" there would hide exactly the gap you are looking for.
+        print(f"  update        ahead of npm (published latest is {u['latest']})")
+    elif u.get("latest"):
+        print(f"  update        up to date (npm latest is {u['latest']})")
+    else:
+        print("  update        could not reach the npm registry")
 
 
 def where():
@@ -180,6 +208,8 @@ def main():
     migrate()
     if "--help" in args or "-h" in args:
         return print(HELP)
+    if "--version" in args or "-v" in args or "-V" in args:
+        return version()
     if "--where" in args:
         return where()
     if "--keys" in args:
