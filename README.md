@@ -290,8 +290,15 @@ place for you to delete once you are happy.
 ## Privacy
 
 `~/.claude-finops/data/finops.db` and the prompt/CSV exports contain **your full prompt text**. The
-server binds to `127.0.0.1` only and makes no outbound requests, but treat the
-database and any export you generate as sensitive.
+server binds to `127.0.0.1` only, but treat the database and any export you
+generate as sensitive.
+
+The app makes exactly one outbound request of its own: once a day it asks
+`registry.npmjs.org` what the latest `claude-finops` version is, so it can tell
+you when an upgrade is out (npm has no way to push one at you). It sends nothing
+about you or your usage. Turn it off with `NO_UPDATE_NOTIFIER=1` or
+`CLAUDE_FINOPS_NO_UPDATE_CHECK=1`. Provider cost APIs are called only if you
+configure a key with `--set-key`.
 
 ---
 

@@ -100,6 +100,7 @@ Environment:
   CLAUDE_FINOPS_HOME=/path      where your data lives (default ~/.claude-finops)
   CLAUDE_PROJECTS=/path         where to read transcripts from
   CLAUDE_FINOPS_PYTHON=/path    which Python the npm wrapper should use
+  NO_UPDATE_NOTIFIER=1          never check npm for a newer release
 """
 
 

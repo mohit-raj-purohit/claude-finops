@@ -385,3 +385,13 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 #tour .tour-ft .spacer { flex: 1; }
 #tour .act.primary { background: var(--accent, #eb6834); border-color: var(--accent, #eb6834); color: #fff; }
 #tour .act[disabled] { opacity: .45; cursor: default; }
+
+/* Update notice in the topbar: present, never alarming — this is good news,
+   not a problem, so it borrows the accent colour rather than the warning one. */
+.iconbtn.upd {
+  border-color: var(--accent, #eb6834);
+  color: var(--accent, #eb6834);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.iconbtn.upd:hover { background: var(--accent, #eb6834); color: #fff; }

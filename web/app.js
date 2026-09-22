@@ -160,6 +160,7 @@ function shell() {
           <span class="spacer"></span>
           <div class="search"><span class="mag">⌕</span>
             <input id="gsearch" placeholder="Search prompts, sessions, models, dates…"></div>
+          <button class="iconbtn upd" id="upd" hidden></button>
           <button class="iconbtn" id="tour-btn" title="Walk through this dashboard">? Tour</button>
           <button class="iconbtn" id="theme" title="Toggle theme">◐</button>
           <button class="iconbtn" id="refresh" title="Reload data">↻</button>
@@ -182,12 +183,35 @@ function shell() {
     render();
   };
   $('#refresh').onclick = () => { bust(); render(); };
+  updateChip();
   $('#sync').onclick = runSync;
   syncLabel();
   let t;
   $('#gsearch').oninput = e => { clearTimeout(t); const v = e.target.value;
     t = setTimeout(() => { if (v.trim().length >= 2) { S.searchTerm = v; go('search'); }
       else if (S.view === 'search') go('overview'); }, 260); };
+}
+
+/* ---------- update notice ----------
+   npm cannot push a new release at anyone, so the server asks the registry once
+   a day and we surface the answer here. Silent when you are current, when the
+   check is switched off, and when it simply could not reach the registry. */
+async function updateChip() {
+  const el = $('#upd');
+  if (!el) return;
+  let u;
+  try { u = await fetch('/api/update').then(r => r.json()); } catch { return; }
+  if (!u || !u.update_available) return;
+  el.hidden = false;
+  el.textContent = `↑ v${u.latest} available`;
+  el.title = `You are on ${u.current}. Click to copy:  ${u.command}`;
+  el.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(u.command);
+      el.textContent = '✓ command copied';
+      setTimeout(() => { el.textContent = `↑ v${u.latest} available`; }, 2200);
+    } catch { prompt('Run this to upgrade:', u.command); }
+  };
 }
 
 /* ---------- filter bar ---------- */

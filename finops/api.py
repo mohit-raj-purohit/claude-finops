@@ -226,6 +226,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": traceback.format_exc()}, 500)
 
     def api(self, route, qs):
+        if route == "update":
+            from .update import check
+            return self.send_json(check(force=qs.get("refresh", [""])[0] == "1"))
         if route == "usage":
             from .limits import usage
             return self.send_json(usage(force=qs.get("refresh", [""])[0] == "1"))
@@ -406,6 +409,11 @@ def _sync_job(log):
     return {"built_at": A.q("SELECT value FROM meta WHERE key='built_at'")[0]["value"]}
 
 
+def _notify_update():
+    from .update import notify
+    notify()
+
+
 def serve(port=8787, db=DB_PATH, background=None):
     global A
     if not os.path.exists(db):
@@ -420,6 +428,8 @@ def serve(port=8787, db=DB_PATH, background=None):
     print(f"  warehouse: {db}")
     print(f"  data      : {A.first_day} .. {A.last_day}")
     print("  Ctrl-C to stop.")
+    # Off the main thread: a slow registry must never delay the dashboard.
+    threading.Thread(target=_notify_update, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
