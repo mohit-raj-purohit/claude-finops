@@ -209,16 +209,16 @@ class Diagnoser:
                 "est_savings_usd": None, "savings_basis": None})
         fm = d.get("frontier_model")
         if fm and fm["share_pct"] > 70:
-            mr = a.recommendations(f)
-            save = sum(r["estimated_savings_usd"] for r in mr["recommendations"]
-                       if r["type"] == "model_downgrade")
+            # No dollar figure: the repriced model-switch estimate was removed because it
+            # held turn counts fixed and ignored the per-model cache. The observation
+            # (most spend is on the frontier model) stands; the saving is not knowable
+            # without running the work on both models.
             recs.append({
                 "priority": 2, "title": v["cheaper"],
                 "why": fm["detail"],
                 "how": v["model_how"],
-                "est_savings_usd": round(save, 2) if save else None,
-                "savings_basis": "Model-downgrade estimate from the Recommendations view; "
-                                 "quality not modelled"})
+                "est_savings_usd": None,
+                "savings_basis": None})
         th = d.get("tool_heavy")
         if th and th.get("evidence"):
             bash = next((x for x in th["evidence"] if x["name"] in v["shell"]), None)

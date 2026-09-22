@@ -318,8 +318,8 @@ class Handler(BaseHTTPRequestHandler):
                                                       int(qs.get("limit", ["3"])[0]))})
         if route == "model_evidence":
             return self.send_json(a.model_evidence(f))
-        if route == "model_switch":
-            return self.send_json(a.model_switch(f))
+        if route == "context_window_fit":
+            return self.send_json(a.context_window_fit(f))
         if route == "recommendations":
             return self.send_json(a.recommendations(f))
         if route == "forecast":

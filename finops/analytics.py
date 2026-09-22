@@ -1015,30 +1015,7 @@ class Analytics:
 
     # ---------------- recommendations ----------------
     # ---------------- model switch advisor ----------------
-    # Which work needs the frontier model and which does not. "keep" = reasoning-heavy work
-    # where a cheaper model is a quality risk; the rest is routed down a tier.
-    SWITCH_RULES = {
-        "casual": ("economy", "high"), "other": ("economy", "medium"),
-        "documentation": ("balanced", "high"), "writing": ("balanced", "high"),
-        "learning": ("balanced", "high"), "testing": ("balanced", "medium"),
-        "research": ("balanced", "medium"), "data_analysis": ("balanced", "medium"),
-        "automation": ("balanced", "medium"), "coding": ("balanced", "low"),
-        "refactoring": ("balanced", "low"),
-        "debugging": ("keep", None), "architecture": ("keep", None),
-        "planning": ("keep", None), "code_review": ("keep", None),
-    }
     TIER_RANK = {"economy": 0, "balanced": 1, "frontier": 2}
-
-    # How each vendor's agent is told to change model. Used by model_switch() and by the
-    # model_downgrade recommendations, which must name the agent they keep you inside.
-    SWITCH_HOW_BY_AGENT = {
-        "anthropic": {"agent": "Claude Code", "session": "/model <name>",
-                      "project": '"model": "<name>" in <repo>/.claude/settings.json'},
-        "openai": {"agent": "Codex", "session": "/model in Codex, or codex -m <name>",
-                   "project": 'model = "<name>" in ~/.codex/config.toml (or a profile)'},
-        "google": {"agent": "Gemini CLI", "session": "/model in Gemini CLI, or gemini -m <name>",
-                   "project": '"model": {"name": "<name>"} in <repo>/.gemini/settings.json'},
-    }
 
     # A request shape representative of agentic coding: cache reads dominate and output
     # is a rounding error. Ranking candidates on the output rate alone picks the wrong
@@ -1069,10 +1046,10 @@ class Analytics:
                                       order.index(m)))
 
     # ---------------- evidence: what the cheaper model actually did ----------------
-    # model_switch() reprices your tokens on a cheaper model, which assumes the cheaper
-    # model would have done the same work in the same number of turns. Often it would
-    # not: a weaker model can take five times the turns on the same task, and the
-    # repricing then promises a saving that never arrives.
+    # Repricing your tokens on a cheaper model assumes it would have done the same work
+    # in the same number of turns. Often it would not: a weaker model can take five
+    # times the turns on the same task, and the repricing then promises a saving that
+    # never arrives. That reprice was removed from the product for exactly this reason.
     #
     # Where you have already run more than one model on the same kind of work, we do not
     # have to assume anything. This compares what each model actually cost per prompt on
@@ -1132,7 +1109,6 @@ class Analytics:
             # The incumbent is what you spend the most on here — that is the bill a
             # switch would actually change.
             cur = max(models, key=lambda m: m["cost"])
-            rule = self.SWITCH_RULES.get(cat, ("balanced", "low"))[0]
             cands = []
             for m in models:
                 if m["model"] == cur["model"] or m["cost_per_prompt"] >= cur["cost_per_prompt"]:
@@ -1161,11 +1137,6 @@ class Analytics:
                         f"{save_pct:.0f}% cheaper per prompt, but you re-asked "
                         f"{m['repeat_pct']:.0f}% of these prompts against "
                         f"{cur['repeat_pct']:.0f}% on {cur['name']} — rework you paid for twice.")
-                elif rule == "keep":
-                    verdict, why = "caution", (
-                        f"{save_pct:.0f}% cheaper per prompt and no more turns, but {cat.replace('_',' ')} "
-                        f"is reasoning-heavy work where a miss is expensive in ways this data "
-                        f"cannot show. Worth a trial, not a default.")
                 else:
                     verdict, why = "supported", (
                         f"{save_pct:.0f}% cheaper per prompt on {m['prompts']} of your own "
@@ -1199,7 +1170,6 @@ class Analytics:
                 "estimated_savings_usd": best["estimated_savings_usd"] if best else 0.0,
                 "verdict": best["verdict"] if best else cands[0]["verdict"],
                 "why": best["why"] if best else cands[0]["why"],
-                "rule": rule,
             })
         out.sort(key=lambda c: -c["estimated_savings_usd"])
         return {
@@ -1217,218 +1187,70 @@ class Analytics:
                        "trial, not proof."),
         }
 
-    def model_switch(self, f=None):
-        """Per-request what-if: reprice each request on the model its work needs.
+    # How close to the ceiling counts as "near". 90% was the cut the old reprice used
+    # to decide a request could not move to a smaller window; it is kept as the
+    # observation threshold because that is where re-read cost visibly concentrates.
+    NEAR_WINDOW_PCT = 0.9
 
-        Token counts are held constant (actual); costs on both sides are estimated at the
-        configured prices. Requests whose context exceeds the target's window stay put.
+    def context_window_fit(self, f=None):
+        """How much spend ran near the ceiling of the context window actually in use.
+
+        This is the one piece of the old model-switch reprice worth keeping — the
+        window check — turned from a what-if into an observation. Nothing is
+        repriced and no alternative model is assumed. A request is "near" when its
+        prompt side is at least NEAR_WINDOW_PCT of its model's window, and "over"
+        when it exceeds it, which can only mean the long-context variant served it.
         """
         w, p = self.where(f)
-        rows = self.q(f"""SELECT r.model, r.is_sidechain side, r.agent_type,
-            COALESCE(pr.category,'other') category, r.context_tokens ctx,
-            pj.id project_id, pj.name project,
-            r.prompt_id, r.session_id, r.input_tokens i, r.output_tokens o,
-            r.cache_read_tokens cr, r.cache_write_5m c5, r.cache_write_1h c1, r.est_cost_usd cost
-            FROM requests r LEFT JOIN prompts pr ON pr.id=r.prompt_id
-            JOIN projects pj ON pj.id=r.project_id WHERE {w}""", p)
-        target_of = {}
-        agents, proj_prov = set(), {}
-        groups, projects = {}, defaultdict(lambda: defaultdict(float))
-        total = blocked = 0.0
-        blocked_n = 0
+        rows = self.q(f"""SELECT r.model, r.priced_as, r.context_tokens ctx, r.est_cost_usd cost
+                          FROM requests r WHERE {w}""", p)
+        per = {}
+        unknown = {"requests": 0, "cost_usd": 0.0}
+        total_n = total_cost = near_cost = over_cost = 0.0
+        near_n = over_n = 0
         for r in rows:
             cost = r["cost"] or 0.0
-            total += cost
-            tier = self.pricing.tier(r["model"])
-            if tier not in self.TIER_RANK:
+            total_n += 1
+            total_cost += cost
+            win = self.pricing.context_window(r["priced_as"] or r["model"])
+            if not win:
+                unknown["requests"] += 1
+                unknown["cost_usd"] += cost
                 continue
-            if r["side"]:
-                is_explore = (r["agent_type"] or "").lower() == "explore"
-                want, conf = ("economy", "high") if is_explore else ("balanced", "medium")
-                scope = f"Subagent: {r['agent_type'] or 'general'}"
-            else:
-                want, conf = self.SWITCH_RULES.get(r["category"], ("balanced", "low"))
-                scope = f"Prompts: {r['category'].replace('_', ' ')}"
-            pj = projects[(r["project_id"], r["project"])]
-            pj["cost"] += cost
-            if tier == "frontier":
-                pj["frontier_cost"] += cost
-                proj_prov[(r["project_id"], r["project"])] = \
-                    self.pricing.rates(r["model"]).get("provider", "anthropic")
-            if want == "keep" or self.TIER_RANK[want] >= self.TIER_RANK[tier]:
-                if want == "keep" and tier == "frontier":
-                    pj["keep_cost"] += cost
-                continue
-            prov = self.pricing.rates(r["model"]).get("provider", "anthropic")
-            if (want, prov) not in target_of:
-                target_of[(want, prov)] = self._cheapest(want, prov)
-            tgt = target_of[(want, prov)]
-            agents.add(prov)
-            if not tgt:
-                continue
-            win = self.pricing.context_window(tgt) or 0
-            if win and (r["ctx"] or 0) > win * 0.9:
-                blocked += cost
-                blocked_n += 1
-                continue
-            alt = self.pricing.estimate(tgt, r["i"] or 0, r["o"] or 0, r["cr"] or 0,
-                                        r["c5"] or 0, r["c1"] or 0)
-            # Requests where the "cheaper" model is dearer stay in the group. Dropping
-            # them would count only the wins, and the recommendation is to move the
-            # whole scope — you cannot switch a category and keep the losses behind.
-            key = (scope, r["model"], tgt)
-            g = groups.setdefault(key, {"scope": scope, "current_model": r["model"],
-                                        "recommended_model": tgt, "confidence": conf,
-                                        "requests": 0, "prompts": set(), "sessions": set(),
-                                        "cost": 0.0, "alt": 0.0})
-            g["requests"] += 1
-            g["prompts"].add(r["prompt_id"])
-            g["sessions"].add(r["session_id"])
-            g["cost"] += cost
-            g["alt"] += alt
-            pj["savings"] += cost - alt
-
-        out = []
-        for g in groups.values():
-            save = g["cost"] - g["alt"]
-            if save < 0.5:
-                continue
-            out.append({**g, "prompts": len(g["prompts"] - {None}), "sessions": len(g["sessions"]),
-                        "current_name": self.pricing.display_name(g["current_model"]),
-                        "recommended_name": self.pricing.display_name(g["recommended_model"]),
-                        "estimated_savings_usd": save,
-                        "estimated_savings_pct": round(100 * save / g["cost"], 1) if g["cost"] else 0})
-        out.sort(key=lambda x: -x["estimated_savings_usd"])
-
-        by_conf = defaultdict(float)
-        for g in out:
-            by_conf[g["confidence"]] += g["estimated_savings_usd"]
-
-        proj = []
-        for (pid, name), v in projects.items():
-            if v["frontier_cost"] < 1:
-                continue
-            balanced = self._cheapest("balanced", proj_prov.get((pid, name), "anthropic"))
-            keep_pct = round(100 * v["keep_cost"] / v["frontier_cost"], 1)
-            default = "keep" if keep_pct >= 50 else "switch"
-            proj.append({"project": name, "project_id": pid, "cost": v["cost"],
-                         "frontier_cost": v["frontier_cost"], "keep_pct": keep_pct,
-                         "estimated_savings_usd": v["savings"],
-                         "suggested_default": (self.pricing.display_name(balanced)
-                                               if default == "switch" and balanced else "Keep current"),
-                         "why": (f"{keep_pct}% of frontier spend here is debugging/architecture/"
-                                 f"planning/review, which benefits from the top model."
-                                 if default == "keep" else
-                                 f"Only {keep_pct}% of frontier spend here is reasoning-heavy work. "
-                                 f"Make {self.pricing.display_name(balanced)} the default and "
-                                 f"switch up with /model only for hard problems.")})
-        proj.sort(key=lambda x: -x["estimated_savings_usd"])
-
+            m = per.setdefault(r["model"], {
+                "model": r["model"], "display_name": self.pricing.display_name(r["model"]),
+                "context_window": win, "requests": 0, "cost_usd": 0.0,
+                "near_requests": 0, "near_cost_usd": 0.0,
+                "over_requests": 0, "over_cost_usd": 0.0})
+            m["requests"] += 1
+            m["cost_usd"] += cost
+            ctx = r["ctx"] or 0
+            if ctx > win:
+                m["over_requests"] += 1; m["over_cost_usd"] += cost
+                over_n += 1; over_cost += cost
+            elif ctx >= win * self.NEAR_WINDOW_PCT:
+                m["near_requests"] += 1; m["near_cost_usd"] += cost
+                near_n += 1; near_cost += cost
+        out = sorted(per.values(), key=lambda m: -(m["near_cost_usd"] + m["over_cost_usd"]))
+        for m in out:
+            m["near_or_over_cost_pct"] = (round(100.0 * (m["near_cost_usd"] + m["over_cost_usd"])
+                                                / m["cost_usd"], 1) if m["cost_usd"] else 0.0)
         return {
-            "total_cost_usd": total,
-            "switches": out,
-            "projects": proj,
-            "savings_by_confidence": dict(by_conf),
-            "estimated_savings_usd": sum(by_conf.values()),
-            "safe_savings_usd": by_conf.get("high", 0) + by_conf.get("medium", 0),
-            "blocked_by_context_usd": blocked, "blocked_by_context_requests": blocked_n,
-            "rules": {k: v[0] for k, v in self.SWITCH_RULES.items()},
-            "how": {"session": "/model <name> in Claude Code",
-                    "project": '"model": "<name>" in <repo>/.claude/settings.json',
-                    "subagent": "model: haiku (or sonnet) in the agent's frontmatter in .claude/agents/"},
-            "how_by_agent": self.SWITCH_HOW_BY_AGENT,
-            "providers": sorted(agents),
-            "caveat": "Same token counts repriced on the cheaper model. Output quality and any "
-                      "extra turns a cheaper model might need are not modelled. Try it on a "
-                      "sample of work before switching everything.",
-            "basis": "recommendation",
+            "threshold_pct": int(self.NEAR_WINDOW_PCT * 100),
+            "models": out,
+            "requests": int(total_n), "cost_usd": total_cost,
+            "near_requests": near_n, "near_cost_usd": near_cost,
+            "over_requests": over_n, "over_cost_usd": over_cost,
+            "near_or_over_cost_pct": (round(100.0 * (near_cost + over_cost) / total_cost, 1)
+                                      if total_cost else 0.0),
+            "unknown_window": unknown,
+            "basis": "actual",
         }
 
     def recommendations(self, f=None):
         w, p = self.where(f)
         recs = []
 
-        # Frontier work a cheaper model could have done. Candidates are always from the
-        # same vendor: an agent can only switch within its own family (Codex can't run
-        # Haiku), so mixed frontier spend is split per vendor before anything is compared.
-        # Each recommendation offers the ladder — one step down (balanced) and the floor
-        # (economy) — priced separately, because that trade-off is the user's to make.
-        frontier_by_provider = defaultdict(list)
-        for m, v in self.pricing.models.items():
-            if v.get("tier") == "frontier":
-                frontier_by_provider[v.get("provider", "anthropic")].append(m)
-
-        for prov, models in sorted(frontier_by_provider.items()):
-            cands = []
-            for tier in ("balanced", "economy"):
-                c = self._cheapest(tier, prov)
-                if c and c not in cands:
-                    cands.append(c)
-            if not cands:
-                continue           # this vendor exposes nothing cheaper to move to
-            ph = ",".join("?" * len(models))
-            rows = self.q(f"""SELECT pr.category, COUNT(DISTINCT pr.id) prompts,
-                              GROUP_CONCAT(DISTINCT r.model) mods,
-                              SUM(r.est_cost_usd) cost, SUM(r.input_tokens) i,
-                              SUM(r.output_tokens) o, SUM(r.cache_read_tokens) cr,
-                              SUM(r.cache_write_5m) c5, SUM(r.cache_write_1h) c1
-                              FROM prompts pr JOIN requests r ON r.prompt_id=pr.id
-                              WHERE {w} AND r.model IN ({ph})
-                              GROUP BY pr.category HAVING prompts >= 3 AND cost > 0.5
-                              ORDER BY cost DESC""", p + models)
-            for r in rows:
-                # The same rules the Model switch dashboard applies, so the two pages can
-                # never contradict each other: work the rules say to keep on a frontier
-                # model is not offered a downgrade at all.
-                target, conf = self.SWITCH_RULES.get(r["category"], ("balanced", "low"))
-                if target == "keep":
-                    continue
-                alts = []
-                for m in cands:
-                    alt = self.pricing.estimate(m, r["i"], r["o"], r["cr"], r["c5"], r["c1"])
-                    if alt >= r["cost"] * 0.9:
-                        continue   # too close to the current cost to be worth the quality risk
-                    alts.append({
-                        "model": m, "name": self.pricing.display_name(m),
-                        "tier": self.pricing.tier(m),
-                        "estimated_cost_usd": alt,
-                        "estimated_savings_usd": r["cost"] - alt,
-                        "estimated_savings_pct": round(100.0 * (r["cost"] - alt) / r["cost"], 1),
-                    })
-                if not alts:
-                    continue
-                # Safest step first: balanced before economy, so the ladder reads as
-                # increasing saving and increasing risk.
-                alts.sort(key=lambda a: -self.TIER_RANK.get(a["tier"], 0))
-                for a in alts:
-                    a["suggested"] = a["tier"] == target
-                # The headline is the tier the rules actually recommend for this kind of
-                # work, not simply the smallest step; the rest stay on offer below it.
-                head = next((a for a in alts if a["suggested"]), alts[0])
-                agent = self.SWITCH_HOW_BY_AGENT.get(prov, {}).get("agent", prov)
-                recs.append({
-                    "type": "model_downgrade",
-                    "confidence": conf or "low",
-                    "title": f"Consider a cheaper {agent} model for '{r['category']}' work",
-                    "current_model": ", ".join(self.pricing.display_name(m)
-                                               for m in (r["mods"] or "").split(",") if m),
-                    "recommended_model": head["name"],
-                    "provider": prov,
-                    "agent": agent,
-                    "alternatives": alts,
-                    "scope": f"{r['prompts']} prompts categorized as {r['category']}",
-                    "actual_cost_usd": r["cost"],
-                    "estimated_alternative_cost_usd": head["estimated_cost_usd"],
-                    "estimated_savings_usd": head["estimated_savings_usd"],
-                    "estimated_savings_pct": head["estimated_savings_pct"],
-                    "caveat": f"Both options stay inside {agent}, so this is a setting change, not "
-                              "a change of agent. Assumes identical token usage on the cheaper "
-                              "model. Output quality is not modelled — validate on a sample "
-                              "before switching.",
-                    "basis": "recommendation",
-                })
-        # Biggest opportunity first, now that several vendors can each contribute one.
-        recs.sort(key=lambda r: -r["estimated_savings_usd"])
 
         eff = self.efficiency(f)
         c = eff["cache"]

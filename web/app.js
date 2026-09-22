@@ -128,7 +128,6 @@ const NAV = [
     ['diagnose', '✚', 'Why so many tokens?', 'priced'],
     ['attribution', '⧉', 'Who used the tokens', 'priced'],
     ['waste', '⚠', 'Waste detection'],
-    ['modelswitch', '⇄', 'Model switch', 'priced'],
     ['freemodels', '◇', 'Free models', 'claude'],
     ['compare', '⚖', 'Compare models', 'priced'],
     ['toolkit', '✎', 'Skills & MCP', 'claude'],
@@ -1444,76 +1443,6 @@ function evidenceBody(ev) {
   ], rows) + `<div class="note" style="padding:10px 14px">${esc(ev.method)}</div>`;
 }
 
-VIEWS.modelswitch = async (page) => {
-  const [m, ev] = await Promise.all([
-    api('model_switch'),
-    api('model_evidence').catch(() => null),
-  ]);
-  const sc = m.savings_by_confidence || {};
-  const conf = c => `<span class="badge rec">${esc(c)} confidence</span>`;
-  page.innerHTML = `
-    <div class="grid g4">
-      ${kpi('Backed by your own runs', fmtUSD(ev?.estimated_savings_usd || 0),
-        `${ev?.categories?.filter(c => c.recommended).length || 0} categories where a cheaper model
-         already did the same work for less`, {badge: BADGE.actual})}
-      ${kpi('Potential savings', fmtUSD(m.estimated_savings_usd),
-        `${fmtPct(m.total_cost_usd ? 100 * m.estimated_savings_usd / m.total_cost_usd : 0)} of ${fmtUSD(m.total_cost_usd)} in range`,
-        {badge: BADGE.recommendation})}
-      ${kpi('Safe to switch', fmtUSD(m.safe_savings_usd), 'High + medium confidence only', {badge: BADGE.recommendation})}
-      ${kpi('Try on a sample first', fmtUSD(sc.low || 0), 'Low confidence: coding and refactoring', {badge: BADGE.recommendation})}
-      ${kpi('Stays on current model', fmtUSD(m.blocked_by_context_usd),
-        `${fmtInt(m.blocked_by_context_requests)} requests too big for the cheaper model's context`, {badge: BADGE.estimated})}
-    </div>
-    ${card('What actually happened when you used a cheaper model',
-      `<div id="ms-ev">${evidenceBody(ev)}</div>`, {badge: BADGE.actual, flush: 1,
-      hint: 'Measured from your own prompts — no repricing, no assumptions about tokens',
-      footer: ev ? esc(ev.caveat) : ''})}
-    <div class="note">The table above is history; the one below is a model. Where they disagree,
-      believe the history: repricing assumes the cheaper model would finish in the same number of
-      turns, and your data shows that is often where the saving goes.</div>
-    ${card('Switch these (repriced, not measured)', `<div id="ms-sw"></div>`,
-      {badge: BADGE.recommendation, flush: 1,
-      hint: 'Each request repriced on the model its work needs, same tokens',
-      footer: esc(m.caveat)})}
-    ${card('Default model per project', `<div id="ms-pj"></div>`, {badge: BADGE.recommendation, flush: 1,
-      hint: 'Based on how much frontier-model spend is reasoning-heavy work'})}
-    ${card('How to switch', `<div class="stack">
-      ${(m.providers?.length ? m.providers : ['anthropic']).map(pv => { const h = (m.how_by_agent || {})[pv] || m.how; return `
-      <div class="dt"><b>${esc(h.agent || 'Claude Code')}</b></div>
-      <div class="dt"><b>This session:</b> <code>${esc(h.session)}</code></div>
-      <div class="dt"><b>Whole project:</b> <code>${esc(h.project)}</code></div>
-      ${pv === 'anthropic' ? `<div class="dt"><b>Subagents:</b> <code>${esc(m.how.subagent)}</code></div>` : ''}`; }).join('')}
-      <div class="dt note">Kept on the top model: ${esc(Object.entries(m.rules).filter(([, v]) => v === 'keep').map(([k]) => k.replace('_', ' ')).join(', '))}.</div>
-    </div>`)}`;
-  $('#ms-sw', page).innerHTML = table([
-    {h: 'Work', f: r => esc(r.scope)},
-    {h: 'Now', f: r => esc(r.current_name)},
-    {h: 'Switch to', f: r => `<b>${esc(r.recommended_name)}</b>`},
-    {h: 'Confidence', f: r => conf(r.confidence)},
-    {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
-    {h: 'Est. cost now', num: 1, f: r => fmtUSD(r.cost)},
-    {h: 'After switch', num: 1, f: r => fmtUSD(r.alt)},
-    {h: 'Saves', num: 1, f: r => `<b>${fmtUSD(r.estimated_savings_usd)}</b> (${fmtPct(r.estimated_savings_pct)})`},
-  ], m.switches);
-  $('#ms-pj', page).innerHTML = table([
-    {h: 'Project', trunc: 1, f: r => esc(r.project)},
-    {h: 'Frontier spend', num: 1, f: r => fmtUSD(r.frontier_cost)},
-    {h: 'Reasoning-heavy', num: 1, f: r => fmtPct(r.keep_pct)},
-    {h: 'Suggested default', f: r => `<b>${esc(r.suggested_default)}</b>`},
-    {h: 'Could save', num: 1, f: r => fmtUSD(r.estimated_savings_usd)},
-    {h: 'Why', f: r => esc(r.why)},
-  ], m.projects);
-  wireTrials(page);
-  addChart(page, 'Savings by switch', el => C.barsH(el, {
-    rows: m.switches.slice(0, 10), label: r => clip(`${r.scope} → ${r.recommended_name}`, 48),
-    value: r => r.estimated_savings_usd,
-    color: r => r.confidence === 'high' ? seriesVar(2) : r.confidence === 'medium' ? seriesVar(0) : 'var(--warning)',
-    sub: r => `<div class="row"><span class="k">Now</span><span class="v">${fmtUSD(r.cost)}</span></div>
-      <div class="row"><span class="k">After</span><span class="v">${fmtUSD(r.alt)}</span></div>
-      <div class="row"><span class="k">Confidence</span><span class="v">${esc(r.confidence)}</span></div>`}),
-    {badge: BADGE.recommendation, hint: 'Colour = confidence (green high, blue medium, amber low)'});
-};
-
 /* ---------- trial: stop recommending, start measuring ----------
    The evidence ends at "strong evidence for a trial, not proof". This runs the
    trial: real prompts out of your own history, re-run headlessly on the
@@ -2575,7 +2504,9 @@ async function render() {
   applyRange('30d');
   // ?view=<name> opens straight to one screen, so a link (or a screenshot run)
   // can point at a specific report rather than always landing on the overview.
-  const want = new URLSearchParams(location.search).get('view');
+  let want = new URLSearchParams(location.search).get('view');
+  // The repriced Model switch view was removed; its links now open the measured comparison.
+  if (want === 'modelswitch') want = 'compare';
   if (want && NAV.some(([, items]) => items.some(([id]) => id === want))) S.view = want;
   await render();
   if (!want) maybeFirstTour();   // arriving on a deep link is not a first visit
@@ -2708,7 +2639,7 @@ VIEWS.freemodels = async (page) => {
   const d = await fetch('/api/free_models').then(r => r.json());
   page.innerHTML = `
     <div class="note">${esc(d.how_it_works)} Free models are weaker than Claude: use them for routine
-      work (see <a data-go="modelswitch">Model switch</a> for which work that is) and keep Claude for hard problems.</div>
+      work (see <a data-go="compare">Compare models</a> for what your own history shows) and keep Claude for hard problems.</div>
     ${!d.bin_on_path ? `<div class="item sev-medium"><div class="dt">${esc(d.bin_dir)} is not on your PATH, so the new commands
       won't run by name. Add <code>export PATH="$HOME/.local/bin:$PATH"</code> to ~/.zshrc.</div></div>` : ''}
     ${card('How to use and test a free model', `<div class="stack">
@@ -2811,7 +2742,7 @@ VIEWS.compare = async (page) => {
       hint: hasFree ? `This machine: ${esc(d.os)}, ${d.ram_gb} GB RAM` : 'List prices, your usage in range', footer: esc(d.note)})}
     ${!hasFree ? '' : `<div class="grid g3">
       ${card('Use Claude for', `<div class="dt">Multi-file changes, debugging, anything agentic or long-running.
-        Sonnet is the value pick; keep Opus for the hardest problems (see <a data-go="modelswitch">Model switch</a>).</div>`)}
+        Sonnet is the value pick; keep Opus for the hardest problems (see <a data-go="compare">Compare models</a>).</div>`)}
       ${card('Use a free model for', `<div class="dt">Offline or private work, throwaway snippets, explanations,
         single-file edits. Cloud Qwen is the strongest free option; locally, pick the biggest one that fits your RAM.</div>`)}
       ${card('Try it on your own work', `<div class="dt">Give the same small task to a free model (e.g. <code>claude-qwen</code>)
@@ -3104,11 +3035,6 @@ const TOURS = {
     {el: 'card:🔴 High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},
     {el: 'card:🟡 Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of savings.', act: 'Batch these into one config change.'},
     {el: 'card:⚪ Low-priority observations', t: 'Low-priority observations', see: 'Small findings, kept for completeness.', get: 'Context for the numbers above.', act: 'Skim them; act only if one matches a habit you want to change.'}],
-  modelswitch: [
-    {el: 'kpis', t: 'Model switch', see: 'What you\'d save running routine work on a cheaper model from the same vendor, split by confidence.', get: 'Savings you can trust, separated from savings that need a judgement call.', act: 'Start with the high-confidence figure.'},
-    {el: 'card:Switch these', t: 'Switch these', see: 'The specific prompts or categories that a smaller model could have handled.', get: 'Evidence per item, not a blanket recommendation.', act: 'Check a few prompts yourself before you trust the pattern.'},
-    {el: 'card:Default model per project', t: 'Default per project', see: 'A suggested default model for each project, from the work you do there.', get: 'A setting you change once instead of choosing per prompt.', act: 'Apply it to your cheapest, most repetitive repo first.'},
-    {el: 'card:How to switch', t: 'How to switch', see: 'The exact command or setting for each agent.', get: 'No guessing at flag names.', act: 'Copy the command for your agent and try it on a small task.'}],
   freemodels: [
     {el: 'card:How to use and test a free model', t: 'How it works', see: 'How to plug a local or free cloud model into Claude Code, and how to test it.', get: 'Zero-cost options for simple or private work.', act: 'Read the RAM guidance before you pick a model.'},
     {el: 'card1', t: 'A model', see: 'Each model with its size, RAM needs, strengths and limits.', get: 'A realistic idea of what runs on your machine.', act: 'Click <b>＋ Add</b> on a model that fits your RAM.'}],
