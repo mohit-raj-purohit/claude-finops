@@ -1322,12 +1322,53 @@ VIEWS.context = async (page) => {
 };
 
 /* ---------- model switch ---------- */
+// Verdicts from the back-test. Wording matters here: "supported" means your own
+// history backs the switch, not that we modelled it.
+const VERDICT = {
+  supported: ['🟢', 'Backed by your data', 'healthy'],
+  caution:   ['🟠', 'Trial first', 'approaching'],
+  risky:     ['🔴', 'Cost more work', 'critical'],
+  marginal:  ['⚪', 'Too close to call', 'high'],
+};
+
+function evidenceBody(ev) {
+  if (!ev || !ev.categories?.length) {
+    return `<div class="empty">No category yet has ${ev?.min_prompts || 8}+ prompts on two
+      different models of the same agent, so there is nothing to compare. Run a cheaper model on
+      a handful of real tasks and this fills in.</div>`;
+  }
+  const rows = [];
+  ev.categories.forEach(c => c.candidates.forEach((x, i) => rows.push({c, x, first: i === 0})));
+  return table([
+    {h: 'Work', f: r => r.first ? `<b>${esc(r.c.category.replace('_', ' '))}</b>` : ''},
+    {h: 'You use now', f: r => r.first
+      ? `${esc(r.c.current.name)} <span class="note">${fmtUSD(r.c.current.cost_per_prompt)}/prompt ·
+         ${Math.round(r.c.current.turns)} turns</span>` : ''},
+    {h: 'Instead of', f: r => `<b>${esc(r.x.name)}</b>`},
+    {h: '$ / prompt', num: 1, f: r => fmtUSD(r.x.cost_per_prompt)},
+    {h: 'Turns', num: 1, f: r => `${Math.round(r.x.turns)} <span class="note">(${r.x.turn_ratio}×)</span>`},
+    {h: 'Re-asked', num: 1, f: r => `${fmtPct(r.x.repeat_pct)}<span class="note">${
+      r.x.repeat_delta > 0 ? ' +' + r.x.repeat_delta : ''}</span>`},
+    {h: 'On', num: 1, f: r => `${fmtInt(r.x.prompts)} prompts`},
+    {h: 'Verdict', f: r => `<span title="${esc(r.x.why)}">${
+      statusChip(VERDICT[r.x.verdict][2], VERDICT[r.x.verdict][1])}</span>`},
+    {h: 'Would save', num: 1, f: r => r.x.verdict === 'supported'
+      ? `<b>${fmtUSD(r.x.estimated_savings_usd)}</b>` : `<span class="note">${fmtUSD(r.x.estimated_savings_usd)}</span>`},
+  ], rows) + `<div class="note" style="padding:10px 14px">${esc(ev.method)}</div>`;
+}
+
 VIEWS.modelswitch = async (page) => {
-  const m = await api('model_switch');
+  const [m, ev] = await Promise.all([
+    api('model_switch'),
+    api('model_evidence').catch(() => null),
+  ]);
   const sc = m.savings_by_confidence || {};
   const conf = c => `<span class="badge rec">${esc(c)} confidence</span>`;
   page.innerHTML = `
     <div class="grid g4">
+      ${kpi('Backed by your own runs', fmtUSD(ev?.estimated_savings_usd || 0),
+        `${ev?.categories?.filter(c => c.recommended).length || 0} categories where a cheaper model
+         already did the same work for less`, {badge: BADGE.actual})}
       ${kpi('Potential savings', fmtUSD(m.estimated_savings_usd),
         `${fmtPct(m.total_cost_usd ? 100 * m.estimated_savings_usd / m.total_cost_usd : 0)} of ${fmtUSD(m.total_cost_usd)} in range`,
         {badge: BADGE.recommendation})}
@@ -1336,7 +1377,15 @@ VIEWS.modelswitch = async (page) => {
       ${kpi('Stays on current model', fmtUSD(m.blocked_by_context_usd),
         `${fmtInt(m.blocked_by_context_requests)} requests too big for the cheaper model's context`, {badge: BADGE.estimated})}
     </div>
-    ${card('Switch these', `<div id="ms-sw"></div>`, {badge: BADGE.recommendation, flush: 1,
+    ${card('What actually happened when you used a cheaper model',
+      `<div id="ms-ev">${evidenceBody(ev)}</div>`, {badge: BADGE.actual, flush: 1,
+      hint: 'Measured from your own prompts — no repricing, no assumptions about tokens',
+      footer: ev ? esc(ev.caveat) : ''})}
+    <div class="note">The table above is history; the one below is a model. Where they disagree,
+      believe the history: repricing assumes the cheaper model would finish in the same number of
+      turns, and your data shows that is often where the saving goes.</div>
+    ${card('Switch these (repriced, not measured)', `<div id="ms-sw"></div>`,
+      {badge: BADGE.recommendation, flush: 1,
       hint: 'Each request repriced on the model its work needs, same tokens',
       footer: esc(m.caveat)})}
     ${card('Default model per project', `<div id="ms-pj"></div>`, {badge: BADGE.recommendation, flush: 1,

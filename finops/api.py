@@ -292,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.context_analysis(f))
         if route == "waste":
             return self.send_json(a.waste(f))
+        if route == "model_evidence":
+            return self.send_json(a.model_evidence(f))
         if route == "model_switch":
             return self.send_json(a.model_switch(f))
         if route == "recommendations":

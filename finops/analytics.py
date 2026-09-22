@@ -886,6 +886,155 @@ class Analytics:
               and (provider is None or v.get("provider", "anthropic") == provider)]
         return min(ms, key=lambda m: self.pricing.rates(m).get("output", 1e9)) if ms else None
 
+    # ---------------- evidence: what the cheaper model actually did ----------------
+    # model_switch() reprices your tokens on a cheaper model, which assumes the cheaper
+    # model would have done the same work in the same number of turns. Often it would
+    # not: a weaker model can take five times the turns on the same task, and the
+    # repricing then promises a saving that never arrives.
+    #
+    # Where you have already run more than one model on the same kind of work, we do not
+    # have to assume anything. This compares what each model actually cost per prompt on
+    # that category, and how much work it took to get there.
+
+    MIN_PROMPTS = 8          # below this a per-category average is noise, not evidence
+    SAVING_FLOOR_PCT = 20    # smaller gaps are inside the noise of what you happened to ask
+    TURN_TOLERANCE = 1.35    # more turns than this and the cheaper model was grinding
+    REPEAT_TOLERANCE = 12.0  # percentage points of extra re-asking we will accept
+
+    def model_evidence(self, f=None):
+        """Back-test a model switch against your own history.
+
+        For every category where you ran more than one model, report what each one
+        actually cost per prompt and what it took: turns, tool calls, and how often you
+        had to ask the same thing again. A candidate is only recommended when it was
+        genuinely cheaper per prompt *and* did not need materially more work to get
+        there — which is the part a repricing cannot see.
+        """
+        w, p = self.where(f)
+        # The filter is request-scoped, so select the prompts it touches as a subquery.
+        # Joining requests directly would repeat each prompt once per request and quietly
+        # multiply both the counts and every average by the turn count.
+        scope = f"pr.id IN (SELECT r.prompt_id FROM requests r WHERE {w})"
+        # Single-model prompts only: a prompt answered by two models cannot be
+        # attributed to either, and mixed rows would blur the comparison.
+        clean = ("pr.models IS NOT NULL AND pr.models NOT LIKE '%,%' "
+                 "AND pr.models != '<synthetic>' AND pr.est_cost_usd > 0")
+        rows = self.q(f"""SELECT COALESCE(pr.category,'other') category, pr.models model,
+            pr.agent agent, COUNT(*) prompts, SUM(pr.est_cost_usd) cost,
+            AVG(pr.est_cost_usd) cost_per_prompt,
+            AVG(pr.request_count) turns, AVG(pr.tool_calls) tools,
+            AVG(pr.output_tokens) out_tokens, AVG(pr.max_context_tokens) ctx
+            FROM prompts pr WHERE {scope} AND {clean}
+            GROUP BY 1, 2, 3 HAVING prompts >= ?""", p + [self.MIN_PROMPTS])
+
+        repeats = {(r["category"], r["model"]): r["pct"] for r in self.q(f"""
+            SELECT COALESCE(pr.category,'other') category, pr.models model,
+                ROUND(100.0 * SUM(CASE WHEN dup.n > 1 THEN 1 ELSE 0 END) / COUNT(*), 1) pct
+            FROM prompts pr
+            LEFT JOIN (SELECT norm_hash, COUNT(*) n FROM prompts GROUP BY norm_hash) dup
+                   ON dup.norm_hash = pr.norm_hash
+            WHERE {scope} AND {clean}
+            GROUP BY 1, 2""", p)}
+
+        by_cat = defaultdict(list)
+        for r in rows:
+            r["repeat_pct"] = repeats.get((r["category"], r["model"]), 0.0) or 0.0
+            r["name"] = self.pricing.display_name(r["model"])
+            r["tier"] = self.pricing.tier(r["model"])
+            by_cat[r["category"]].append(r)
+
+        out, total_save = [], 0.0
+        for cat, models in by_cat.items():
+            if len(models) < 2:
+                continue
+            # The incumbent is what you spend the most on here — that is the bill a
+            # switch would actually change.
+            cur = max(models, key=lambda m: m["cost"])
+            rule = self.SWITCH_RULES.get(cat, ("balanced", "low"))[0]
+            cands = []
+            for m in models:
+                if m["model"] == cur["model"] or m["cost_per_prompt"] >= cur["cost_per_prompt"]:
+                    continue
+                # Only models the same agent can run. Telling a Claude Code user to use a
+                # GPT model is not a setting change, it is a different tool, and the
+                # comparison would be between two different ways of working.
+                if m["agent"] != cur["agent"]:
+                    continue
+                save_pct = 100.0 * (1 - m["cost_per_prompt"] / cur["cost_per_prompt"])
+                turn_ratio = (m["turns"] / cur["turns"]) if cur["turns"] else 1.0
+                repeat_delta = m["repeat_pct"] - cur["repeat_pct"]
+                # Observed, not repriced: what your own prompts cost on each side.
+                save = (cur["cost_per_prompt"] - m["cost_per_prompt"]) * cur["prompts"]
+                if save_pct < self.SAVING_FLOOR_PCT:
+                    verdict, why = "marginal", (
+                        f"Only {save_pct:.0f}% cheaper per prompt — inside the noise of what "
+                        f"you happened to ask each model.")
+                elif turn_ratio > self.TURN_TOLERANCE:
+                    verdict, why = "risky", (
+                        f"Cost {save_pct:.0f}% less per prompt but took {turn_ratio:.1f}x the "
+                        f"turns ({m['turns']:.0f} vs {cur['turns']:.0f}). It got there by "
+                        f"grinding, and that is the cost the headline number misses.")
+                elif repeat_delta > self.REPEAT_TOLERANCE:
+                    verdict, why = "risky", (
+                        f"{save_pct:.0f}% cheaper per prompt, but you re-asked "
+                        f"{m['repeat_pct']:.0f}% of these prompts against "
+                        f"{cur['repeat_pct']:.0f}% on {cur['name']} — rework you paid for twice.")
+                elif rule == "keep":
+                    verdict, why = "caution", (
+                        f"{save_pct:.0f}% cheaper per prompt and no more turns, but {cat.replace('_',' ')} "
+                        f"is reasoning-heavy work where a miss is expensive in ways this data "
+                        f"cannot show. Worth a trial, not a default.")
+                else:
+                    verdict, why = "supported", (
+                        f"{save_pct:.0f}% cheaper per prompt on {m['prompts']} of your own "
+                        f"{cat.replace('_',' ')} prompts, in {turn_ratio:.1f}x the turns "
+                        f"({m['turns']:.0f} vs {cur['turns']:.0f}) with "
+                        f"{'less' if repeat_delta <= 0 else 'similar'} re-asking. "
+                        f"This is measured, not modelled.")
+                cands.append({
+                    "model": m["model"], "name": m["name"], "tier": m["tier"],
+                    "prompts": m["prompts"], "cost_per_prompt": m["cost_per_prompt"],
+                    "turns": m["turns"], "tools": m["tools"], "repeat_pct": m["repeat_pct"],
+                    "savings_pct": round(save_pct, 1), "turn_ratio": round(turn_ratio, 2),
+                    "repeat_delta": round(repeat_delta, 1),
+                    "estimated_savings_usd": round(save, 2), "verdict": verdict, "why": why})
+            if not cands:
+                continue
+            cands.sort(key=lambda c: (c["verdict"] != "supported", -c["estimated_savings_usd"]))
+            best = cands[0] if cands[0]["verdict"] == "supported" else None
+            if best:
+                total_save += best["estimated_savings_usd"]
+            out.append({
+                "category": cat,
+                "agent": cur["agent"],
+                "current": {"model": cur["model"], "name": cur["name"], "prompts": cur["prompts"],
+                            "cost": cur["cost"], "cost_per_prompt": cur["cost_per_prompt"],
+                            "turns": cur["turns"], "tools": cur["tools"],
+                            "repeat_pct": cur["repeat_pct"]},
+                "candidates": cands,
+                "recommended": best["model"] if best else None,
+                "recommended_name": best["name"] if best else None,
+                "estimated_savings_usd": best["estimated_savings_usd"] if best else 0.0,
+                "verdict": best["verdict"] if best else cands[0]["verdict"],
+                "why": best["why"] if best else cands[0]["why"],
+                "rule": rule,
+            })
+        out.sort(key=lambda c: -c["estimated_savings_usd"])
+        return {
+            "categories": out,
+            "estimated_savings_usd": round(total_save, 2),
+            "min_prompts": self.MIN_PROMPTS,
+            "basis": "actual",
+            "method": (f"Compares what each model actually cost per prompt on the same category "
+                       f"of work, using only categories where you ran both with at least "
+                       f"{self.MIN_PROMPTS} prompts each. Turns and re-asked prompts are shown "
+                       f"because a cheaper model that needs more of both is not cheaper. "
+                       f"Nothing here is repriced or modelled."),
+            "caveat": ("Your prompts were not randomly assigned to models, so a category can "
+                       "differ in difficulty between them. Treat this as strong evidence for a "
+                       "trial, not proof."),
+        }
+
     def model_switch(self, f=None):
         """Per-request what-if: reprice each request on the model its work needs.
 
