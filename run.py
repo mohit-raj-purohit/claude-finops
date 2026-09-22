@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +45,86 @@ def _alive(pid):
         return False
 
 
-def stop():
+def _free_port(start):
+    """The first free port at or above start+1, for the suggestion we print."""
+    import socket
+    for p in range(start + 1, start + 40):
+        with socket.socket() as sk:
+            try:
+                sk.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    return start + 1
+
+
+def _port_owner(port):
+    """PID listening on 127.0.0.1:<port>, or None.
+
+    The pidfile is not enough on its own: a dashboard started from a different
+    copy (a global npm install alongside a checkout) writes its own, and one
+    that was killed hard leaves a stale file behind. Asking the OS who actually
+    holds the port is the only answer that is always true.
+    """
+    try:
+        if IS_WIN:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            for line in out.splitlines():
+                f = line.split()
+                if len(f) >= 5 and f[1].endswith(f":{port}") and f[3] == "LISTENING":
+                    return int(f[4])
+            return None
+        out = subprocess.run(["lsof", "-tnP", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                             capture_output=True, text=True, timeout=10).stdout
+        return int(out.split()[0]) if out.split() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _is_ours(pid):
+    """True only if that PID is a claude-finops server.
+
+    Whatever is on the port may be someone else's service. We stop our own
+    dashboard without asking; anything else we report and leave alone.
+    """
+    try:
+        if IS_WIN:
+            out = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+                capture_output=True, text=True, timeout=10).stdout
+        else:
+            out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "finops.api" in out or "claude-finops" in out
+
+
+def _kill(pid):
+    if IS_WIN:
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
+def stop(port=None):
+    """Stop a running dashboard. Returns True if we stopped one."""
+    if stop_pidfile():
+        return True
+    # No usable pidfile: fall back to whoever owns the port, but only if it is
+    # ours to stop.
+    pid = _port_owner(port or os.environ.get("PORT", "8787"))
+    if pid and _is_ours(pid):
+        try:
+            _kill(pid)
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def stop_pidfile():
     for pidfile in (PIDFILE, LEGACY_PIDFILE):   # LEGACY_: a server started before the move
         try:
             with open(pidfile) as fh:
@@ -55,10 +135,7 @@ def stop():
     else:
         return False
     if _alive(pid):
-        if IS_WIN:
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
-        else:
-            os.kill(pid, signal.SIGTERM)
+        _kill(pid)
         os.remove(pidfile)
         return True
     os.remove(pidfile)
@@ -237,13 +314,35 @@ def main():
         print(f"This is claude-finops {_version() or 'unknown'}; "
               f"run --help to see what it supports.")
         sys.exit(2)
-    stop()   # replace a previous detached server
     port = os.environ.get("PORT", "8787")
+    # Decide from who actually holds *this* port, not from the pidfile alone:
+    # the pidfile may describe a dashboard serving some other port entirely.
+    owner = _port_owner(port)
+    if owner is None or _is_ours(owner):
+        if owner is not None:
+            # flush=True: execv below replaces this process without flushing,
+            # so an unflushed line would simply never reach your terminal.
+            print(f"Restarting the dashboard already running on {port} …", flush=True)
+        stop(port)                                # replace it, whoever started it
+        for _ in range(20):                       # give the socket a moment to clear
+            if _port_owner(port) is None:
+                break
+            time.sleep(0.25)
+    # Still occupied means it is not ours: say so instead of dying in a traceback.
+    if (busy := _port_owner(port)) is not None:
+        free = _free_port(int(port))
+        print(f"Port {port} is already in use by PID {busy}, and it is not a "
+              f"claude-finops dashboard.")
+        print(f"Start on another port:  PORT={free} claude-finops")
+        print(f"Or find out what is holding it:  "
+              + (f"netstat -ano -p TCP | findstr :{port}" if IS_WIN
+                 else f"lsof -iTCP:{port} -sTCP:LISTEN"))
+        sys.exit(1)
     source = os.environ.get("CLAUDE_PROJECTS", os.path.join(os.path.expanduser("~"), ".claude", "projects"))
     if "--rebuild" in args or not os.path.exists(DB_PATH):
         if not os.path.isdir(source):
             sys.exit(f"No Claude Code transcripts at {source}. Use Claude Code once, or set CLAUDE_PROJECTS.")
-        print(f"Building warehouse from {source} …")
+        print(f"Building warehouse from {source} …", flush=True)
         subprocess.run(_python() + ["-m", "finops.etl", source], check=True)
     rest = [a for a in args if a != "--rebuild"]
     if IS_WIN:
