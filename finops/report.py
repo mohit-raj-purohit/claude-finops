@@ -120,7 +120,7 @@ transcripts contain no billed amounts, so no figure here is an actual invoice va
   ("Est. cost per 1K output tokens", f"${ef['cost_per_1k_output']:.3f}"),
   ("Est. cost with caching", _f(ef['cache']['cost_with_cache'])),
   ("Est. cost without caching", _f(ef['cache']['cost_without_cache'])),
-  ("Est. caching savings", f"{_f(ef['cache']['estimated_savings_usd'])} ({ef['cache']['savings_pct']}%)"),
+  ("Uncached counterfactual — not a saving", f"{_f(ef['cache']['uncached_counterfactual_delta_usd'])} ({ef['cache']['uncached_counterfactual_pct']}%)"),
 ])}
 
 <h2>8. Top 10 most expensive prompts <span class="badge est">Estimated</span></h2>

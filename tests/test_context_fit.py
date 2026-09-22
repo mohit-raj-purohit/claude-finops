@@ -28,6 +28,48 @@ class FixedWindowPricing:
     def display_name(self, model):
         return model
 
+    def tier(self, model):
+        return "balanced"
+
+
+class TestModelsUtilisation(unittest.TestCase):
+    """models() utilisation is measured against the window that served each request."""
+
+    def analytics(self, rows):
+        path = make_db(rows)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        a = Analytics(path)
+        a.pricing = FixedWindowPricing()
+        return a
+
+    def test_long_context_requests_use_their_own_window(self):
+        # two standard requests at 50% of 200K, two long-context at 50% of 1M
+        a = self.analytics([
+            ("m200k", "m200k", 100_000, 1.0), ("m200k", "m200k", 100_000, 1.0),
+            ("m200k", "m200k[1m]", 500_000, 1.0), ("m200k", "m200k[1m]", 500_000, 1.0),
+        ])
+        row = a.models()["rows"][0]
+        self.assertAlmostEqual(row["utilization_pct"], 50.0)   # never 200%+ any more
+        self.assertEqual(row["long_context_requests"], 2)
+        self.assertEqual(row["over_window_requests"], 0)
+
+    def test_unexplained_over_window_requests_are_counted_not_averaged(self):
+        path = make_db([("m200k", "m200k", 100_000, 1.0)])
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        db = sqlite3.connect(path)
+        db.execute("""INSERT INTO requests (uuid, session_id, project_id, prompt_id, ts, day,
+                        model, priced_as, context_tokens, est_cost_usd, unpriced_long_context,
+                        input_tokens, output_tokens, thinking_tokens, cache_read_tokens,
+                        cache_write_tokens, billable_tokens)
+                      VALUES ('u9', 's', 1, 1, '2026-01-01T00:00:09Z', '2026-01-01',
+                              'm200k', 'm200k', 400000, 1.0, 1, 0, 100, 0, 400000, 0, 400100)""")
+        db.commit(); db.close()
+        a = Analytics(path)
+        a.pricing = FixedWindowPricing()
+        row = a.models()["rows"][0]
+        self.assertAlmostEqual(row["utilization_pct"], 50.0)
+        self.assertEqual(row["over_window_requests"], 1)
+
 
 def make_db(rows):
     """rows: (model, priced_as, context_tokens, est_cost_usd)"""
@@ -37,9 +79,12 @@ def make_db(rows):
     db.execute("INSERT INTO meta (key, value) VALUES ('built_at', 'test')")
     for i, (model, priced_as, ctx, cost) in enumerate(rows):
         db.execute("""INSERT INTO requests (uuid, session_id, project_id, prompt_id, ts, day,
-                        model, priced_as, context_tokens, est_cost_usd)
-                      VALUES (?, 's', 1, 1, ?, '2026-01-01', ?, ?, ?, ?)""",
-                   (f"u{i}", f"2026-01-01T00:00:{i:02d}Z", model, priced_as, ctx, cost))
+                        model, priced_as, context_tokens, est_cost_usd,
+                        input_tokens, output_tokens, thinking_tokens, cache_read_tokens,
+                        cache_write_tokens, billable_tokens)
+                      VALUES (?, 's', 1, 1, ?, '2026-01-01', ?, ?, ?, ?, 0, 100, 0, ?, 0, ?)""",
+                   (f"u{i}", f"2026-01-01T00:00:{i:02d}Z", model, priced_as, ctx, cost,
+                    ctx, ctx + 100))
     db.commit()
     db.close()
     return path

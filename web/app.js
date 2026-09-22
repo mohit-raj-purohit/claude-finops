@@ -702,9 +702,7 @@ function renderAdvisorHero(page, advisor) {
           : a.basis === 'recommendation' ? 'rec' : 'est'}">${esc(a.basis.split(':')[0])}</span></b>
         <span>${esc(a.detail)}</span></div></div>`).join('')
       : '<div class="empty">Nothing needs your attention in this range</div>'}</div>
-    ${advisor.estimated_savings_range_usd[1] > 0 ? `<div class="note" style="margin-top:9px">
-      Estimated savings opportunity in range: <b>${fmtUSD(advisor.estimated_savings_range_usd[0])}
-      – ${fmtUSD(advisor.estimated_savings_range_usd[1])}</b> — modelled, not booked.</div>` : ''}
+
   </div>`);
   page.insertBefore(hero, page.firstChild);
 }
@@ -731,14 +729,14 @@ VIEWS.advisor = async (page) => {
     </div>
     ${card('All recommendations', recs.recommendations.length ? `<div class="stack">
       ${recs.recommendations.map(r => `<div class="item"><div class="hd">${esc(r.title)}
-        <span class="spacer"></span><span class="badge rec">${esc(r.confidence)} confidence</span></div>
+        <span class="spacer"></span><span class="badge">${esc(r.confidence)}</span></div>
         ${r.current_model ? `<div class="dt"><b>Currently on:</b> ${esc(r.current_model)}${
           r.scope ? ` · ${esc(r.scope)}` : ''}</div>` : ''}
+        ${r.detail ? `<div class="dt">${esc(r.detail)}</div>` : ''}
         <div class="grid g3" style="gap:8px;margin:4px 0">
-          ${kpi('Actual cost', fmtUSD(r.actual_cost_usd), null, {small: 1, badge: BADGE.estimated})}
-          ${kpi('Est. alternative', fmtUSD(r.estimated_alternative_cost_usd), null, {small: 1})}
-          ${kpi('Est. potential saving', fmtUSD(r.estimated_savings_usd),
-            `${r.estimated_savings_pct}%`, {small: 1, badge: BADGE.recommendation})}
+          ${kpi('Spend involved', fmtUSD(r.actual_cost_usd), null, {small: 1, badge: BADGE.estimated})}
+          ${r.estimated_savings_usd != null ? kpi('Est. alternative', fmtUSD(r.estimated_alternative_cost_usd), null, {small: 1})
+            + kpi('Est. potential saving', fmtUSD(r.estimated_savings_usd), `${r.estimated_savings_pct}%`, {small: 1, badge: BADGE.recommendation}) : ''}
         </div>
         ${r.alternatives && r.alternatives.length ? `<div class="dt" style="margin-top:6px">
           <b>Your options${r.agent ? ` within ${esc(r.agent)}` : ''}</b> — pick the trade-off you want:</div>
@@ -753,7 +751,7 @@ VIEWS.advisor = async (page) => {
         <div class="note">${esc(r.caveat)}</div></div>`).join('')}</div>`
       : '<div class="empty">No recommendation met the evidence threshold for this range</div>',
       {badge: BADGE.recommendation,
-       footer: 'Estimated potential savings are modelled from token counts and configured pricing. They are opportunities to evaluate, never booked savings, and do not account for output quality.'})}
+       footer: 'These are observations from your own usage. No dollar saving is attached unless the method can support one — a guessed percentage of spend is not a saving.'})}
     ${card('Anomalies to inspect', `<div class="stack" id="anolist">${anos.anomalies.map((a, i) =>
       `<div class="item sev-${a.severity} clickable" data-i="${i}"><div class="hd">
         ${a.severity === 'high' ? '🚨' : '⚠️'} ${esc(a.title)}</div>
@@ -1004,7 +1002,8 @@ VIEWS.models = async (page) => {
     {h: 'Cache write', num: 1, f: r => fmtNum(r.cache_write_tokens)},
     {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
     {h: 'Avg context', num: 1, f: r => fmtNum(r.avg_context)},
-    {h: 'Ctx util', num: 1, f: r => r.utilization_pct == null ? '—' : fmtPct(r.utilization_pct)},
+    {h: 'Ctx util', num: 1, f: r => (r.utilization_pct == null ? '—' : fmtPct(r.utilization_pct))
+      + (r.over_window_requests ? ` <span class="note" title="requests over a window this price table cannot explain">· ${fmtInt(r.over_window_requests)} over</span>` : '')},
     {h: 'Avg latency', num: 1, f: r => r.avg_latency_ms ? (r.avg_latency_ms/1000).toFixed(1)+'s' : '—'},
     {h: '$/1K out', num: 1, f: r => r.cost_per_1k_output ? '$' + r.cost_per_1k_output.toFixed(3) : '—'},
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
@@ -1366,8 +1365,8 @@ VIEWS.context = async (page) => {
         <div class="grid g3" style="gap:8px">
           ${kpi('Est. cost with caching', fmtUSD(ca.cost_with_cache), null, {small: 1, badge: BADGE.estimated})}
           ${kpi('Est. cost without caching', fmtUSD(ca.cost_without_cache), 'same tokens at input rates', {small: 1})}
-          ${kpi('Est. savings', fmtUSD(ca.estimated_savings_usd), fmtPct(ca.savings_pct),
-            {small: 1, badge: BADGE.estimated})}
+          ${kpi('Uncached counterfactual', fmtUSD(ca.uncached_counterfactual_delta_usd),
+            `${fmtPct(ca.uncached_counterfactual_pct)} · not a saving`, {small: 1, badge: BADGE.estimated})}
         </div>
         <div class="chart" id="cachebar" style="margin-top:10px"></div>
         <dl class="kv" style="margin-top:10px">
@@ -2980,7 +2979,7 @@ const TOURS = {
   context: [
     {el: 'kpis', t: 'Context & cache', see: 'Average and peak context per request, and how much is served from cache.', get: 'How much re-reading history costs you, and what caching saves.', act: 'Large average context? Clear or compact sessions more often.'},
     {el: 'card:Cost by context size', t: 'Cost by context size', see: 'Spend grouped by how large the context was.', get: 'Proof of how quickly cost climbs with context.', act: 'See how much sits in the largest buckets.'},
-    {el: 'card:Caching: with vs without', t: 'What caching saves', see: 'What you paid against what the same work would cost with no cache.', get: 'The value of cache hits in money.', act: 'A small gap means sessions are restarted too often to build a cache.'},
+    {el: 'card:Caching: with vs without', t: 'Caching, with vs without', see: 'What you paid against what the same tokens would cost with no cache at all.', get: 'A counterfactual, not a saving: nobody would have run it that way.', act: 'A small gap means sessions are restarted too often to build a cache.'},
     {el: 'card:Sessions with the largest context', t: 'Largest contexts', see: 'The sessions that carried the most history.', get: 'The sessions to split or hand over next time.', act: 'Click one to see where it grew.'},
     {el: 'card:Context distribution', t: 'Context distribution', see: 'How your requests spread across context sizes.', get: 'Whether large contexts are the exception or the norm.', act: 'A long right tail means /compact earlier.'}],
   projects: [

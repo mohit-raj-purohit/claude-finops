@@ -198,8 +198,10 @@ class Diagnoser:
                 "how": f"Run {v['clear']} when you switch to an unrelated task, and {v['compact']} once a "
                        "session passes ~100K context. Start one session per ticket rather than "
                        "one per day.",
-                "est_savings_usd": round(cr_rate_cost * 0.3, 2),
-                "savings_basis": "30% fewer cache-read tokens, priced at your main model's rate"})
+                # No dollar figure: the old one assumed 30% fewer cache-read tokens, a
+                # number that came from nowhere in the data.
+                "est_savings_usd": None,
+                "savings_basis": None})
         if d.get("long_sessions", {}).get("share_pct", 0) > 30:
             recs.append({
                 "priority": 1, "title": "Break up marathon sessions",

@@ -459,7 +459,7 @@ def _sync_job(log):
     res = X.sync(log)
     with _lock:
         try:
-            A.db.close()          # Windows can't replace a file that's still open
+            A.close()             # Windows can't replace a file that's still open
         except Exception:
             pass
         X.finish_sync(res["tmp"])

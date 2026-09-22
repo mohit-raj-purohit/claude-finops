@@ -11,6 +11,7 @@ import math
 import os
 import sqlite3
 import statistics
+import threading
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
@@ -106,13 +107,42 @@ def _d(s):
 
 class Analytics:
     def __init__(self, db_path=DB_PATH):
-        self.db = sqlite3.connect(db_path, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        # One connection per thread. The HTTP server is threaded, and a single sqlite
+        # connection shared across threads fails under concurrent use with "bad
+        # parameter or other API misuse" — which is exactly what a page firing several
+        # requests at once produces. Every connection is tracked so close() can release
+        # them all before the warehouse file is swapped on sync.
+        self._db_path = db_path
+        self._local = threading.local()
+        self._conns = []
+        self._conns_lock = threading.Lock()
         self.pricing = Pricing()
         self.settings = load_settings()
         self.meta = {r["key"]: r["value"] for r in self.db.execute("SELECT * FROM meta")}
         row = self.db.execute("SELECT MIN(day) a, MAX(day) b FROM requests WHERE day<>''").fetchone()
         self.first_day, self.last_day = row["a"], row["b"]
+
+    @property
+    def db(self):
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self._db_path)
+            c.row_factory = sqlite3.Row
+            self._local.conn = c
+            with self._conns_lock:
+                self._conns.append(c)
+        return c
+
+    def close(self):
+        """Close every thread's connection, so the warehouse file can be replaced."""
+        with self._conns_lock:
+            conns, self._conns = self._conns, []
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+        self._local = threading.local()
 
     def q(self, sql, params=()):
         return [dict(r) for r in self.db.execute(sql, params)]
@@ -357,6 +387,24 @@ class Analytics:
           FROM requests r WHERE {w} GROUP BY r.model ORDER BY cost DESC""", p)
         tc = sum(r["cost"] for r in rows) or 1
         tt = sum(r["tokens"] for r in rows) or 1
+        # Utilisation is measured against the window that actually served each request —
+        # a long-context variant has a bigger one — and requests that ran over a window
+        # this price table cannot explain are counted, not averaged into a figure above
+        # 100%, which is what dividing by the base model's window used to produce.
+        util = {}
+        for v in self.q(f"""SELECT r.model, r.priced_as, r.unpriced_long_context u,
+                              COUNT(*) n, AVG(r.context_tokens) avg_ctx
+                            FROM requests r WHERE {w}
+                            GROUP BY r.model, r.priced_as, r.unpriced_long_context""", p):
+            u = util.setdefault(v["model"], {"num": 0.0, "den": 0, "over": 0, "long": 0})
+            win = self.pricing.context_window(v["priced_as"] or v["model"])
+            if v["u"] or not win:
+                u["over"] += v["n"]
+                continue
+            u["num"] += v["n"] * 100.0 * (v["avg_ctx"] or 0) / win
+            u["den"] += v["n"]
+            if v["priced_as"] and v["priced_as"] != v["model"]:
+                u["long"] += v["n"]
         for r in rows:
             r["display_name"] = self.pricing.display_name(r["model"])
             r["tier"] = self.pricing.tier(r["model"])
@@ -368,8 +416,10 @@ class Analytics:
             r["output_per_input"] = (r["output_tokens"] / (r["input_tokens"] + r["cache_read_tokens"]
                                      + r["cache_write_tokens"])) if r["tokens"] else 0
             r["tokens_per_request"] = r["tokens"] / r["requests"] if r["requests"] else 0
-            r["utilization_pct"] = (round(100.0 * (r["avg_context"] or 0) / r["context_window"], 1)
-                                    if r["context_window"] else None)
+            u = util.get(r["model"], {})
+            r["utilization_pct"] = round(u["num"] / u["den"], 1) if u.get("den") else None
+            r["over_window_requests"] = u.get("over", 0)
+            r["long_context_requests"] = u.get("long", 0)
         priced = [r for r in rows if r["tokens"] and r["tier"] != "none"]
         superlatives = {}
         if priced:
@@ -704,9 +754,11 @@ class Analytics:
                 "reads": t["cr"], "writes": t["cw"],
                 "cost_split": cache_cost,
                 "cost_with_cache": t["cost"], "cost_without_cache": t["cost_nc"],
-                "estimated_savings_usd": (t["cost_nc"] or 0) - (t["cost"] or 0),
-                "savings_pct": (round(100.0 * ((t["cost_nc"] or 0) - (t["cost"] or 0))
-                                      / (t["cost_nc"] or 1), 1)),
+                # Named for what it is. This used to be "estimated_savings_usd", and the
+                # UI called it a saving; it is the gap to a run that never happened.
+                "uncached_counterfactual_delta_usd": (t["cost_nc"] or 0) - (t["cost"] or 0),
+                "uncached_counterfactual_pct": (round(100.0 * ((t["cost_nc"] or 0) - (t["cost"] or 0))
+                                                      / (t["cost_nc"] or 1), 1)),
                 "basis": "estimated",
             },
             "low_efficiency_sessions": scored[:10],
@@ -1252,39 +1304,48 @@ class Analytics:
         recs = []
 
 
+        # What follows are observations, not priced savings. The cache item used to
+        # carry the no-cache counterfactual as a "saving" (tens of thousands of dollars
+        # on a bill a fraction of that) and the context item multiplied its spend by a
+        # guessed 20%. Neither number was something the method could support, so
+        # neither is shown; what is observable is.
         eff = self.efficiency(f)
         c = eff["cache"]
-        if c["reads"] and c["estimated_savings_usd"] > 0:
+        split = c.get("cost_split") or {}
+        if c["reads"] and split.get("read_cost_share"):
             recs.append({
-                "type": "cache_working", "confidence": "high",
-                "title": "Prompt caching is already saving money — keep sessions long-lived",
+                "type": "cache_working", "confidence": "observed",
+                "title": "Prompt caching is doing its job — keep sessions long-lived",
+                "detail": (f"Reads are {split['read_cost_share']*100:.0f}% of your cache cost "
+                           f"({eff['cache_hit_ratio']*100:.0f}% of cache tokens). Restarting "
+                           f"sessions throws that prefix away and pays to write it again."),
                 "actual_cost_usd": c["cost_with_cache"],
-                "estimated_alternative_cost_usd": c["cost_without_cache"],
-                "estimated_savings_usd": c["estimated_savings_usd"],
-                "estimated_savings_pct": c["savings_pct"],
-                "caveat": "Savings vs a hypothetical no-cache baseline at configured list prices.",
-                "basis": "recommendation",
+                "estimated_alternative_cost_usd": None,
+                "estimated_savings_usd": None, "estimated_savings_pct": None,
+                "caveat": "No saving is claimed: what an uncached run would have cost is a "
+                          "counterfactual, not money you avoided.",
+                "basis": "actual",
             })
 
         ctx = self.context_analysis(f)
         if ctx["large_context_cost_pct"] > 15:
             recs.append({
-                "type": "context_reduction", "confidence": "medium",
+                "type": "context_reduction", "confidence": "observed",
                 "title": f"{ctx['large_context_cost_pct']}% of spend comes from >"
                          f"{ctx['threshold']//1000}K-context requests",
+                "detail": (f"{ctx['large_context_requests']:,} requests re-sent a large prefix "
+                           f"on every turn. /compact or a fresh session resets it; how much "
+                           f"that would have saved depends on what the work needed, and is "
+                           f"not estimated here."),
                 "scope": f"{ctx['large_context_requests']:,} requests",
                 "actual_cost_usd": ctx["large_context_cost"],
-                "estimated_savings_usd": ctx["large_context_cost"] * 0.2,
-                "estimated_savings_pct": 20.0,
-                "caveat": "Assumes a 20% context reduction is achievable via /compact and tighter "
-                          "file scoping. Not a measured saving.",
-                "basis": "recommendation",
+                "estimated_alternative_cost_usd": None,
+                "estimated_savings_usd": None, "estimated_savings_pct": None,
+                "caveat": "Observed share of spend. No reduction is assumed.",
+                "basis": "actual",
             })
-        recs.sort(key=lambda r: -(r.get("estimated_savings_usd") or 0))
-        return {"recommendations": recs,
-                "total_estimated_savings_usd": sum(r.get("estimated_savings_usd") or 0
-                                                   for r in recs if r["type"] != "cache_working"),
-                "basis": "recommendation"}
+        recs.sort(key=lambda r: -(r.get("actual_cost_usd") or 0))
+        return {"recommendations": recs, "basis": "actual"}
 
     # ---------------- forecast ----------------
     def forecast(self, f=None):
@@ -1593,16 +1654,9 @@ class Analytics:
         for r in recs["recommendations"][:2]:
             if r["type"] == "cache_working":
                 continue
-            # Name the models. A saving is meaningless without the swap it assumes, and
-            # the options are what the reader actually has to choose between.
-            opts = " or ".join(f"{a['name']} (~${a['estimated_savings_usd']:,.0f}, "
-                               f"{a['estimated_savings_pct']}%)" for a in r.get("alternatives", []))
-            swap = f"{r['current_model']} → {opts}. " if opts else ""
             actions.append({"priority": 3, "kind": "recommendation", "text": r["title"],
-                            "detail": f"{swap}Estimated saving ~${r['estimated_savings_usd']:,.2f} "
-                                      f"({r['estimated_savings_pct']}%) on the suggested option. "
-                                      f"{r['caveat']}",
-                            "basis": "recommendation"})
+                            "detail": r.get("detail") or r.get("caveat") or "",
+                            "basis": r.get("basis", "recommendation")})
         ml = next((l for l in bud["lines"] if l["name"] == "Monthly spend"), None)
         if ml and ml.get("configured") and ml.get("forecast_pct"):
             if ml["forecast_pct"] >= 90:
@@ -1622,11 +1676,11 @@ class Analytics:
                     "detail": "; ".join(f"\"{x['preview'][:60]}…\" (${x['pcost']:,.2f})" for x in pr),
                     "basis": "estimated"})
         actions.sort(key=lambda a: a["priority"])
-        savings = recs["total_estimated_savings_usd"]
+        # No "savings opportunity" range: the old one was a guessed 20% of large-context
+        # spend, then 0.6x of that for a low end. Neither factor came from the data.
         return {
             "question": "What should I do today?",
             "actions": actions[:6],
-            "estimated_savings_range_usd": [round(savings * 0.6, 2), round(savings, 2)],
             "generated_from": "Live dashboard data for the current filter selection.",
             "basis": "mixed: see per-item basis",
         }
