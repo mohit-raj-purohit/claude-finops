@@ -105,6 +105,11 @@ Environment:
 """
 
 
+def _version():
+    from finops.update import _installed
+    return _installed()
+
+
 def version():
     """Which copy is this, and is it current?
 
@@ -222,6 +227,16 @@ def main():
         return
     if "--share" in args:
         return share()
+    # A flag we do not know used to fall straight through and start the
+    # dashboard, so a typo (or a flag from a newer release than the one you
+    # have installed) looked like the command silently doing nothing.
+    known = {"--rebuild", "--detach", "--foreground"}
+    unknown = [a for a in args if a.startswith("-") and a not in known]
+    if unknown:
+        print(f"Unknown option: {unknown[0]}")
+        print(f"This is claude-finops {_version() or 'unknown'}; "
+              f"run --help to see what it supports.")
+        sys.exit(2)
     stop()   # replace a previous detached server
     port = os.environ.get("PORT", "8787")
     source = os.environ.get("CLAUDE_PROJECTS", os.path.join(os.path.expanduser("~"), ".claude", "projects"))

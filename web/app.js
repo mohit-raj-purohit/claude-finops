@@ -485,7 +485,10 @@ async function openSession(id) {
 /* ---------- charts added to table-first pages ---------- */
 // Inserts a chart card after the page's KPI row (or at the top) and draws into it.
 function addChart(page, title, draw, opts = {}) {
-  const c = h(card(title, '<div class="cchart"></div>', opts));
+  // .chart carries every chart style (text fill, gridlines, axes); .cchart is
+  // just the hook this helper looks up. Missing .chart left SVG labels at the
+  // browser default fill — black text, invisible on the dark theme.
+  const c = h(card(title, '<div class="chart cchart"></div>', opts));
   const anchor = opts.after ? page.querySelector(opts.after) : page.querySelector(':scope > .grid');
   if (anchor) anchor.after(c); else page.prepend(c);
   draw(c.querySelector('.cchart'));
