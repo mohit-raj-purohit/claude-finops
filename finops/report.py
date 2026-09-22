@@ -112,7 +112,9 @@ transcripts contain no billed amounts, so no figure here is an actual invoice va
 {table(["Metric","Value"], [
   ("Output share of billable tokens", f"{ef['output_ratio']*100:.2f}%"),
   ("Output per prompt-side token", f"{ef['output_per_input']*100:.2f}%"),
-  ("Cache hit ratio", (f"{ef['cache_hit_ratio']*100:.1f}%" if ef['cache_hit_ratio'] is not None else "&mdash;")),
+  ("Cache hit ratio (by token)", (f"{ef['cache_hit_ratio']*100:.1f}%" if ef['cache_hit_ratio'] is not None else "&mdash;")),
+  ("Cache reads as share of cache cost", (f"{ef['cache_read_cost_share']*100:.1f}%"
+                                          if ef.get('cache_read_cost_share') is not None else "&mdash;")),
   ("Tokens per request", _f(ef['tokens_per_request'],'int')),
   ("Avg context per request", _f(ef['avg_context_tokens'],'int')),
   ("Est. cost per 1K output tokens", f"${ef['cost_per_1k_output']:.3f}"),

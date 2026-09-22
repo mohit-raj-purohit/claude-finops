@@ -44,9 +44,11 @@
     "_low_output_note": "Sessions are flagged when their output/billable ratio falls below this fraction of YOUR median session ratio, rather than an absolute number, because a healthy ratio depends on how agentic your workload is."
   },
   "anomaly": {
+    "_comment": "session_ratio is measured against the MEDIAN session, not the mean: session sizes are right-skewed enough that a mean lets the outliers inflate their own baseline. Session token counts are heavy-tailed, so max_session_outliers, not the ratio, is what keeps the list short and leaves room for the other anomaly types.",
     "daily_zscore": 2.0,
     "daily_ratio": 2.0,
-    "session_ratio": 3.0
+    "session_ratio": 20.0,
+    "max_session_outliers": 5
   },
   "scorecard": {
     "_comment": "Reference points the 0-100 dimension scores are graded against. Derived from your own data by default; override to hold yourself to a different bar.",

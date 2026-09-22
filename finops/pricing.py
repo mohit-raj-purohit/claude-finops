@@ -45,6 +45,27 @@ class Pricing:
     def context_window(self, model):
         return self.rates(model).get("context_window")
 
+    def effective_model(self, model, context_tokens=0):
+        """The price list that actually applied, given how much context was sent.
+
+        A request whose prompt side exceeds the model's standard context window cannot
+        have been served by the standard variant — it was the long-context one, which
+        is billed at a premium. The transcript records only the base model name, so
+        pricing off that name alone understates every long-context request.
+
+        Returns (model_id_to_price_with, unpriced_long_context). The flag is set when
+        the context clearly exceeded the window but no `[1m]` entry exists to price it
+        with, so callers can surface it rather than quietly bill it at the low rate.
+        """
+        r = self.models.get(model)
+        win = (r or {}).get("context_window") or 0
+        if not r or not win or not context_tokens or context_tokens <= win:
+            return model, False
+        alt = f"{model}[1m]"
+        if alt in self.models:
+            return alt, False
+        return model, True
+
     def estimate(self, model, input_tokens=0, output_tokens=0, cache_read=0,
                  cache_write_5m=0, cache_write_1h=0):
         """Return estimated USD for one request."""

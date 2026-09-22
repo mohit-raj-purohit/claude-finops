@@ -94,11 +94,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_text(self, body, ctype, filename=None, code=200):
+    def send_text(self, body, ctype, filename=None, code=200, no_store=False):
         if isinstance(body, str):
             body = body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if no_store:
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
@@ -250,7 +252,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_text("not found", "text/plain", code=404)
             ext = os.path.splitext(fp)[1]
             with open(fp, "rb") as fh:
-                self.send_text(fh.read(), MIME.get(ext, "application/octet-stream"))
+                # Served from disk on every request and revalidated every time: this is
+                # localhost, so the fetch is free, and a stale cached app.js after an
+                # upgrade looks exactly like "the new feature is missing".
+                self.send_text(fh.read(), MIME.get(ext, "application/octet-stream"),
+                               no_store=True)
         except BrokenPipeError:
             pass
         except Exception:
@@ -297,6 +303,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.categories(f))
         if route == "efficiency":
             return self.send_json(a.efficiency(f))
+        if route == "long_context_pricing":
+            return self.send_json(a.long_context_pricing(f))
+        if route == "ttl_replay":
+            return self.send_json(a.ttl_replay(f))
         if route == "context":
             return self.send_json(a.context_analysis(f))
         if route == "waste":

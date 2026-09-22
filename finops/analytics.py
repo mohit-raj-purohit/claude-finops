@@ -152,6 +152,32 @@ class Analytics:
             cl.append("r.billable_tokens >= ?"); p.append(int(f["min_tokens"]))
         return (" AND ".join(cl) if cl else "1=1"), p
 
+    def daily_series(self, f, days=None, end=None):
+        """Per-day cost/token series with idle days present as zeros.
+
+        A plain GROUP BY day only returns days you actually worked, so a mean taken
+        over it is a per-ACTIVE-day rate. Every projection here multiplies that rate
+        by calendar days remaining, so the zero days have to be filled in or the
+        forecast is inflated by exactly the share of days you were idle.
+        """
+        w, p = self.where(f)
+        rows = self.q(f"""SELECT r.day, SUM(r.est_cost_usd) cost, SUM(r.billable_tokens) tokens,
+                          COUNT(*) requests FROM requests r WHERE {w} AND r.day <> ''
+                          GROUP BY 1 ORDER BY 1""", p)
+        if not rows:
+            return []
+        by_day = {r["day"]: r for r in rows}
+        last = _d(end or rows[-1]["day"])
+        first = _d(rows[0]["day"])
+        if days:
+            first = max(first, last - timedelta(days=days - 1))
+        out, cur = [], first
+        while cur <= last:
+            k = cur.isoformat()
+            out.append(by_day.get(k) or {"day": k, "cost": 0.0, "tokens": 0, "requests": 0})
+            cur += timedelta(days=1)
+        return out
+
     # ---------------- billing period ----------------
     def billing_period(self, today=None):
         bp = self.settings["billing_period"]
@@ -233,14 +259,12 @@ class Analytics:
         elapsed = max(bp["elapsed_days"], 1)
         daily_avg = used_cost / elapsed
 
-        # Trailing rates are measured over the last N days of ACTUAL activity, not
-        # only the slice inside the billing period — early in a period that slice is
-        # too short to be a rate. This keeps burn and forecast on one methodology.
-        recent = self.q(f"""SELECT r.day, SUM(r.est_cost_usd) cost,
-                            SUM(r.billable_tokens) tokens, COUNT(*) requests
-                            FROM requests r WHERE {w} AND r.day <> ''
-                            GROUP BY 1 ORDER BY 1""", p)
-        last7, last14 = recent[-7:], recent[-14:]
+        # Trailing rates are measured over the last N CALENDAR days, not only the
+        # slice inside the billing period — early in a period that slice is too short
+        # to be a rate. Idle days count as zero, because these rates get multiplied by
+        # calendar days remaining. This keeps burn and forecast on one methodology.
+        last7 = self.daily_series(f, days=7)
+        last14 = self.daily_series(f, days=14)
         avg7 = (sum(r["cost"] for r in last7) / len(last7)) if last7 else 0.0
         tok_avg7 = (sum(r["tokens"] for r in last7) / len(last7)) if last7 else 0.0
         # the projection rate matches Analytics.forecast()'s "expected" scenario
@@ -261,7 +285,8 @@ class Analytics:
             "projected_period_cost": projected,
             "projected_period_tokens": used_tokens + tok_burn * bp["remaining_days"],
             "forecast_basis": "forecast",
-            "forecast_note": ("Projection uses the %d-day mean daily spend, the same rate as the "
+            "forecast_note": ("Projection uses the %d-calendar-day mean daily spend, idle days "
+                              "included as zero — the same rate as the "
                               "Forecast view's expected scenario." % len(last14)),
             "series": rows,
             "allowances": {},
@@ -543,6 +568,110 @@ class Analytics:
         }
 
     # ---------------- efficiency ----------------
+    def ttl_replay(self, f=None):
+        """5m vs 1h cache TTL over real segments — arithmetic, no behavioural assumption.
+
+        Gated on reconciliation: if replaying the TTL you actually used cannot reproduce
+        the cost that was logged, the counterfactual is not trustworthy either and no
+        number is returned.
+        """
+        from .segments import replay, split_segments
+        w, p = self.where(f)
+        turns = self.q(f"""SELECT r.session_id, r.ts, r.model, r.priced_as, r.is_sidechain, r.agent_id,
+                             r.input_tokens, r.output_tokens, r.cache_read_tokens,
+                             r.cache_write_5m, r.cache_write_1h, r.est_cost_usd
+                           FROM requests r WHERE {w} AND r.agent='claude' AND r.ts <> ''
+                           ORDER BY r.session_id, r.ts""", p)
+        segs = split_segments(turns)
+        out = replay(segs, self.pricing)
+        out["turns"] = len(turns)
+        out["undetectable_boundaries"] = ["/clear", "/compact"]
+        out["note"] = ("Segments break at session start, subagent start and model change. "
+                       "Claude Code does not record /clear or /compact, so a compaction "
+                       "sits inside a segment and is not modelled.")
+        return out
+
+    def long_context_pricing(self, f=None):
+        """Requests whose context exceeded the model's standard window.
+
+        These could only have been served by the long-context variant, which bills at a
+        premium. Where a `[1m]` price list exists they are already repriced; where it
+        does not, they are billed at the standard rate and the estimate is LOW — that is
+        a gap in config/pricing.json, not in the data, so it is reported rather than
+        guessed at.
+        """
+        w, p = self.where(f)
+        rows = self.q(f"""SELECT r.model, r.priced_as, r.unpriced_long_context u,
+                            COUNT(*) n, SUM(r.est_cost_usd) cost, MAX(r.context_tokens) mx
+                          FROM requests r WHERE {w} AND r.context_tokens > 0
+                            AND (r.priced_as <> r.model OR r.unpriced_long_context = 1)
+                          GROUP BY r.model, r.priced_as, r.unpriced_long_context""", p)
+        repriced = [r for r in rows if not r["u"]]
+        unpriced = [r for r in rows if r["u"]]
+        return {
+            "repriced": repriced,
+            "unpriced": unpriced,
+            "repriced_requests": sum(r["n"] for r in repriced),
+            "unpriced_requests": sum(r["n"] for r in unpriced),
+            "unpriced_cost_usd": sum(r["cost"] or 0 for r in unpriced),
+            "unpriced_models": sorted({r["model"] for r in unpriced}),
+            "message": (
+                "%d requests exceeded their model's standard context window with no "
+                "long-context price configured, so their cost is understated. Add a "
+                "\"<model>[1m]\" entry to config/pricing.json for: %s."
+                % (sum(r["n"] for r in unpriced), ", ".join(sorted({r["model"] for r in unpriced})))
+                if unpriced else ""),
+            "basis": "estimated",
+        }
+
+    def cache_cost_split(self, f=None):
+        """Cache read vs write split by estimated cost, not just by token count.
+
+        A read is billed at a fraction of the input rate and a write at a premium, so
+        the token split and the dollar split are different numbers — writes are a small
+        share of cache tokens and a much larger share of cache spend. Reporting only the
+        token ratio overstates how healthy caching is, which is why the scorecard grades
+        this dimension on cost. Prices are re-derived per model here rather than read off
+        requests.est_cost_usd, which is a single blended figure per request.
+        """
+        w, p = self.where(f)
+        rows = self.q(f"""SELECT model,
+                            SUM(cache_read_tokens) cr,
+                            SUM(cache_write_5m) w5, SUM(cache_write_1h) w1
+                          FROM requests r WHERE {w} GROUP BY model""", p)
+        read_tok = w5_tok = w1_tok = 0
+        read_cost = w5_cost = w1_cost = 0.0
+        for r in rows:
+            cr, w5, w1 = (r["cr"] or 0), (r["w5"] or 0), (r["w1"] or 0)
+            read_tok += cr
+            w5_tok += w5
+            w1_tok += w1
+            read_cost += self.pricing.estimate(r["model"], cache_read=cr)
+            w5_cost += self.pricing.estimate(r["model"], cache_write_5m=w5)
+            w1_cost += self.pricing.estimate(r["model"], cache_write_1h=w1)
+
+        write_tok = w5_tok + w1_tok
+        write_cost = w5_cost + w1_cost
+        tok_total = read_tok + write_tok
+        cost_total = read_cost + write_cost
+        per_read = (read_cost / read_tok) if read_tok else 0
+        per_write = (write_cost / write_tok) if write_tok else 0
+        return {
+            "read_tokens": read_tok, "write_tokens": write_tok,
+            "write_5m_tokens": w5_tok, "write_1h_tokens": w1_tok,
+            "read_cost_usd": read_cost, "write_cost_usd": write_cost,
+            "write_5m_cost_usd": w5_cost, "write_1h_cost_usd": w1_cost,
+            "read_token_share": (read_tok / tok_total) if tok_total else None,
+            "read_cost_share": (read_cost / cost_total) if cost_total else None,
+            "write_cost_share": (write_cost / cost_total) if cost_total else None,
+            # how much more a write token costs than a read token, same workload
+            "write_vs_read_multiple": (per_write / per_read) if per_read else None,
+            # 1h writes cost more per token than 5m writes; whether that premium is worth
+            # paying depends on the real inter-turn gaps, which ttl_replay() prices
+            "write_1h_token_share": (w1_tok / write_tok) if write_tok else None,
+            "basis": "estimated",
+        }
+
     def efficiency(self, f=None):
         w, p = self.where(f)
         t = self.one(f"""SELECT SUM(input_tokens) i, SUM(output_tokens) o,
@@ -554,6 +683,7 @@ class Analytics:
         tot = t["tot"] or 1
         prompt_side = (t["i"] or 0) + (t["cr"] or 0) + (t["cw"] or 0)
         cache_total = (t["cr"] or 0) + (t["cw"] or 0)
+        cache_cost = self.cache_cost_split(f)
         sess = self.sessions(f, limit=100000, order="cost")
         scored = [s for s in sess if s["tokens"] and s["prompts"]]
         for s in scored:
@@ -564,6 +694,7 @@ class Analytics:
             "output_per_input": ((t["o"] or 0) / prompt_side) if prompt_side else 0,
             "thinking_share_of_output": ((t["think"] or 0) / (t["o"] or 1)),
             "cache_hit_ratio": ((t["cr"] or 0) / cache_total) if cache_total else None,
+            "cache_read_cost_share": cache_cost["read_cost_share"],
             "tokens_per_request": tot / (t["n"] or 1),
             "avg_context_tokens": t["avgctx"],
             "cost_per_1k_output": (1000.0 * (t["cost"] or 0) / (t["o"] or 1)),
@@ -571,6 +702,7 @@ class Analytics:
                                 max(self.one(f"SELECT COUNT(DISTINCT r.prompt_id) n FROM requests r WHERE {w}", p)["n"], 1)),
             "cache": {
                 "reads": t["cr"], "writes": t["cw"],
+                "cost_split": cache_cost,
                 "cost_with_cache": t["cost"], "cost_without_cache": t["cost_nc"],
                 "estimated_savings_usd": (t["cost_nc"] or 0) - (t["cost"] or 0),
                 "savings_pct": (round(100.0 * ((t["cost_nc"] or 0) - (t["cost"] or 0))
@@ -692,11 +824,18 @@ class Analytics:
 
         # 3. low-yield sessions — excess is what the session cost ABOVE what the same
         #    output would have cost at your own median session efficiency.
+        #    The baseline is drawn from the SAME population that is eligible to be
+        #    flagged — sessions above huge_session_tokens, inside the current filter.
+        #    Grading big sessions against the median of all sessions punishes them for
+        #    something inherent to long agentic work: output ratio falls as a session
+        #    grows, so a small-session median flags most large sessions by construction.
         ratios = [r["x"] for r in self.q(
-            "SELECT CAST(output_tokens AS REAL)/billable_tokens x FROM sessions"
-            " WHERE billable_tokens > 100000")]
+            f"""SELECT CAST(s.output_tokens AS REAL)/s.billable_tokens x FROM sessions s
+                WHERE {sfilter} AND s.billable_tokens > ?""",
+            p + [rules["huge_session_tokens"]])]
         median_ratio = statistics.median(ratios) if ratios else 0.0
         cutoff = median_ratio * rules["low_output_ratio_vs_median"]
+        baseline_n = len(ratios)
         low = self.q(f"""SELECT s.id session_id, s.title, s.billable_tokens tokens,
                          s.output_tokens out_tokens, s.est_cost_usd cost, s.request_count requests,
                          (CAST(s.output_tokens AS REAL)/MAX(s.billable_tokens,1)) output_ratio,
@@ -712,10 +851,12 @@ class Analytics:
         if low:
             add("high", "low_yield_sessions",
                 f"{len(low)} large sessions yielded under {cutoff*100:.2f}% output tokens",
-                f"Your median session turns {median_ratio*100:.2f}% of billable tokens into output. "
-                f"These ran well below that while consuming heavy context.",
+                f"Among your {baseline_n} comparably large sessions the median turns "
+                f"{median_ratio*100:.2f}% of billable tokens into output. These ran well below "
+                f"that while consuming heavy context.",
                 low, "Start a fresh session or /compact once a thread stops producing new output.",
-                "session_id", "spend above what the same output would cost at your median session efficiency")
+                "session_id", "spend above what the same output would cost at the median "
+                              "efficiency of your other comparably large sessions")
 
         # 4. frontier model on small tasks — excess is computed against the cheaper tier.
         frontier = [m for m, v in self.pricing.models.items()
@@ -733,7 +874,11 @@ class Analytics:
             small = self.q(f"""SELECT pr.id prompt_id, substr(pr.text,1,160) preview, pr.category,
                                pr.session_id, pr.est_cost_usd cost, pr.output_tokens out_tokens,
                                pr.billable_tokens tokens, pr.models, pr.input_tokens,
-                               pr.cache_read_tokens, pr.cache_write_tokens
+                               pr.cache_read_tokens, pr.cache_write_tokens,
+                               (SELECT COALESCE(SUM(rq.cache_write_5m),0) FROM requests rq
+                                  WHERE rq.prompt_id = pr.id) c5,
+                               (SELECT COALESCE(SUM(rq.cache_write_1h),0) FROM requests rq
+                                  WHERE rq.prompt_id = pr.id) c1
                                FROM prompts pr WHERE {pfilter}
                                  AND pr.output_tokens < ? AND pr.est_cost_usd > 0
                                  AND EXISTS (SELECT 1 FROM requests r2 WHERE r2.prompt_id=pr.id
@@ -741,8 +886,11 @@ class Analytics:
                                ORDER BY cost DESC LIMIT 15""",
                            p + [rules["simple_task_output_tokens"]] + frontier)
             for r in small:
+                # the 5m/1h split has to be carried through: a 1h write is priced well
+                # above a 5m one, so folding every write into the 5m slot prices the
+                # alternative too cheaply and overstates the excess
                 alt = (self.pricing.estimate(cheaper, r["input_tokens"], r["out_tokens"],
-                                             r["cache_read_tokens"], r["cache_write_tokens"], 0)
+                                             r["cache_read_tokens"], r["c5"], r["c1"])
                        if cheaper else r["cost"])
                 r["excess"] = max(r["cost"] - alt, 0)
             if small:
@@ -892,12 +1040,33 @@ class Analytics:
                    "project": '"model": {"name": "<name>"} in <repo>/.gemini/settings.json'},
     }
 
+    # A request shape representative of agentic coding: cache reads dominate and output
+    # is a rounding error. Ranking candidates on the output rate alone picks the wrong
+    # model whenever a tier's members differ on cache pricing, which is where the money
+    # actually is — output is well under 1% of billable tokens.
+    _RANK_SHAPE = dict(input_tokens=500, output_tokens=2_000,
+                       cache_read=200_000, cache_write_5m=0, cache_write_1h=10_000)
+
     def _cheapest(self, tier, provider=None):
         """Cheapest model in a tier — from the same provider, since an agent can only
-        switch between its own vendor's models (Codex can't run Haiku)."""
+        switch between its own vendor's models (Codex can't run Haiku).
+
+        Cheapest is measured on a representative request, not on the output rate, so a
+        model that is cheap per output token but expensive per cached token does not win.
+        Long-context `[1m]` variants are excluded: they are the same model at premium
+        pricing, never the cheap option.
+        """
         ms = [m for m, v in self.pricing.models.items() if v.get("tier") == tier
+              and "[1m]" not in m
               and (provider is None or v.get("provider", "anthropic") == provider)]
-        return min(ms, key=lambda m: self.pricing.rates(m).get("output", 1e9)) if ms else None
+        if not ms:
+            return None
+        # Ties are common — a tier's models often share a price list — so break them on
+        # the order they are declared in pricing.json, which is curated, rather than
+        # alphabetically, which would pick a model for an accident of its name.
+        order = list(self.pricing.models)
+        return min(ms, key=lambda m: (self.pricing.estimate(m, **self._RANK_SHAPE),
+                                      order.index(m)))
 
     # ---------------- evidence: what the cheaper model actually did ----------------
     # model_switch() reprices your tokens on a cheaper model, which assumes the cheaper
@@ -1104,8 +1273,9 @@ class Analytics:
                 continue
             alt = self.pricing.estimate(tgt, r["i"] or 0, r["o"] or 0, r["cr"] or 0,
                                         r["c5"] or 0, r["c1"] or 0)
-            if alt >= cost:
-                continue
+            # Requests where the "cheaper" model is dearer stay in the group. Dropping
+            # them would count only the wins, and the recommendation is to move the
+            # whole scope — you cannot switch a category and keep the losses behind.
             key = (scope, r["model"], tgt)
             g = groups.setdefault(key, {"scope": scope, "current_model": r["model"],
                                         "recommended_model": tgt, "confidence": conf,
@@ -1302,7 +1472,9 @@ class Analytics:
                           FROM requests r WHERE {w} AND r.day <> '' GROUP BY 1 ORDER BY 1""", p)
         if not rows:
             return {"available": False, "message": "No usage in the selected range."}
-        recent = rows[-14:]
+        # calendar days, idle days as zero — the rate below is multiplied by calendar
+        # days remaining, so a per-active-day mean would overstate every scenario
+        recent = self.daily_series(f, days=14)
         costs = [r["cost"] for r in recent]
         mean = statistics.fmean(costs)
         sd = statistics.pstdev(costs) if len(costs) > 1 else 0.0
@@ -1330,7 +1502,8 @@ class Analytics:
 
         out = {
             "available": True,
-            "method": "14-day mean daily spend with ±1 standard deviation bands",
+            "method": ("14-calendar-day mean daily spend (idle days counted as zero) "
+                       "with ±1 standard deviation bands"),
             "sample_days": len(recent),
             "daily_mean": mean, "daily_stdev": sd,
             "period_used": used, "period_used_tokens": used_tok,
@@ -1429,14 +1602,28 @@ class Analytics:
                     })
         sess = self.sessions(f, limit=100000, order="cost")
         if len(sess) >= 5:
-            vals = [s["tokens"] for s in sess]
-            mean = statistics.fmean(vals) or 1
-            for s in sess[:40]:
+            # Median, not mean: session token counts are heavily right-skewed, and a
+            # mean lets the outliers inflate the very baseline they are measured
+            # against — which understates how far out they really are. Candidates are
+            # ranked by tokens too, since that is the metric being tested; ordering by
+            # cost hid token-heavy work on cheap models.
+            # Sessions with no token data (Cursor transcripts don't always carry it)
+            # are not comparable and would drag the baseline down.
+            vals = [s["tokens"] for s in sess if (s["tokens"] or 0) > 0]
+            mean = (statistics.median(vals) if vals else 0) or 1
+            # Session sizes are heavy-tailed enough that any fixed multiple of the
+            # baseline still matches a fifth of them, so the threshold alone cannot
+            # keep this list short. Take the most extreme few and leave room for the
+            # other anomaly types, which have much smaller ratios and would otherwise
+            # be sorted off the end of the list.
+            outliers = 0
+            for s in sorted(sess, key=lambda x: -(x["tokens"] or 0))[:40]:
                 ratio = s["tokens"] / mean
-                if ratio >= cfg["session_ratio"]:
+                if ratio >= cfg["session_ratio"] and outliers < cfg.get("max_session_outliers", 5):
+                    outliers += 1
                     found.append({
                         "severity": "medium", "type": "session_outlier",
-                        "title": f"Session consumed {ratio:.1f}x the average session tokens",
+                        "title": f"Session consumed {ratio:.1f}x the median session tokens",
                         "detail": f"{s['title'] or s['session_id'][:8]} — {s['tokens']:,} tokens, "
                                   f"${s['cost']:,.2f} in {s['project']}.",
                         "metric_value": s["tokens"], "baseline": mean, "ratio": round(ratio, 2),
@@ -1482,11 +1669,25 @@ class Analytics:
                          "detail": detail, "weight": weight})
 
         chr_ = eff["cache_hit_ratio"]
-        if chr_ is None:
+        ccs = eff["cache_read_cost_share"]
+        if chr_ is None or ccs is None:
             dim("Cache efficiency", 50, "No cache activity in range", 1.0)
         else:
-            dim("Cache efficiency", chr_ * 100,
-                f"{chr_*100:.1f}% of cache tokens were reads (reuse) rather than writes.", 1.2)
+            # Graded on cost share, not token share: writes are a couple of percent of
+            # cache tokens but a much larger share of cache spend, so the token ratio
+            # scores near 100 even when writes are material money.
+            split = eff["cache"]["cost_split"]
+            detail = (f"Reads are {ccs*100:.1f}% of cache cost "
+                      f"({chr_*100:.1f}% of cache tokens).")
+            mult = split.get("write_vs_read_multiple")
+            if mult:
+                detail += f" A write token costs {mult:.1f}x a read token."
+            h1 = split.get("write_1h_token_share")
+            if h1 is not None and h1 >= 0.5 and split.get("write_tokens"):
+                detail += (f" {h1*100:.0f}% of your writes are 1h writes; the TTL replay in"
+                           " Context & cache prices whether that is the cheaper choice for"
+                           " your real inter-turn gaps.")
+            dim("Cache efficiency", ccs * 100, detail, 1.2)
 
         sc_cfg = self.settings.get("scorecard", {})
         target = sc_cfg.get("target_output_ratio", 0.0088)

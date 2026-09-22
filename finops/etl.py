@@ -88,6 +88,8 @@ CREATE TABLE requests (
   context_tokens INTEGER,    -- input + cache read + cache write  (prompt side)
   est_cost_usd REAL,
   est_cost_no_cache_usd REAL,
+  priced_as TEXT,            -- price list used; differs from model for long context
+  unpriced_long_context INTEGER DEFAULT 0,  -- over the window with no [1m] price to use
   latency_ms REAL,
   tool_call_count INTEGER DEFAULT 0,
   is_sidechain INTEGER DEFAULT 0,
@@ -389,8 +391,12 @@ class Loader:
         billable = inp + out + cr + cw
         context = inp + cr + cw
 
-        cost = self.pricing.estimate(model, inp, out, cr, c5, c1)
-        no_cache_part, cache_part = self.pricing.uncached_baseline(model, cr, c5, c1)
+        # Price against the variant the context proves was used, not just the name in
+        # the transcript: anything above the standard window was the long-context
+        # variant and is billed at a premium.
+        priced_as, unpriced_long = self.pricing.effective_model(model, context)
+        cost = self.pricing.estimate(priced_as, inp, out, cr, c5, c1)
+        no_cache_part, cache_part = self.pricing.uncached_baseline(priced_as, cr, c5, c1)
         cost_no_cache = cost - cache_part + no_cache_part
 
         ts = r.get("timestamp")
@@ -409,14 +415,16 @@ class Loader:
             " ts, day, hour, model, model_known, effort, service_tier, stop_reason,"
             " input_tokens, output_tokens, thinking_tokens, cache_read_tokens,"
             " cache_write_5m, cache_write_1h, cache_write_tokens, billable_tokens,"
-            " context_tokens, est_cost_usd, est_cost_no_cache_usd, latency_ms,"
+            " context_tokens, est_cost_usd, est_cost_no_cache_usd,"
+            " priced_as, unpriced_long_context, latency_ms,"
             " tool_call_count, is_sidechain, agent_id, agent_type, agent_desc)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (r.get("uuid"), r.get("requestId"), session_id, pid, prompt_id, ts,
              (ts or "")[:10], (t.hour if t else None), model,
              1 if self.pricing.is_known(model) else 0, r.get("effort"),
              u.get("service_tier"), msg.get("stop_reason"), inp, out, think, cr,
-             c5, c1, cw, billable, context, cost, cost_no_cache, latency,
+             c5, c1, cw, billable, context, cost, cost_no_cache,
+             priced_as, 1 if unpriced_long else 0, latency,
              len(tools), 1 if (r.get("isSidechain") or self.agent) else 0,
              *((self.agent["id"], self.agent["type"], self.agent["desc"]) if self.agent
                else (None, "inline" if r.get("isSidechain") else None, None))))

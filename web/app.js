@@ -297,6 +297,9 @@ function openPop(btn, kind) {
       <input type="number" step="0.01" id="mc" value="${f.min_cost ?? ''}" placeholder="any">
       <div class="hd">Minimum billable tokens</div>
       <input type="number" id="mt" value="${f.min_tokens ?? ''}" placeholder="any">
+      <div class="note" style="margin:8px 0 6px">These apply per <strong>request</strong>, not per
+        session or prompt. A session's totals will count only its requests above the
+        threshold, so filtered totals read lower than the session's real cost.</div>
       <button class="chip on" id="applyth" style="width:100%;justify-content:center">Apply</button>`;
   } else {
     const key = kind, src = kind === 'models' ? o.models.map(m => [m.model, modelName(m.model), m.n])
@@ -807,7 +810,10 @@ VIEWS.usage = async (page) => {
       </div>
       <div class="chart" id="tl"></div>`,
       {badge: S.metric === 'cost' ? BADGE.estimated : BADGE.actual,
-       hint: 'click a bucket to drill into that day', flush: 0})}
+       hint: 'click a bucket to drill into that day',
+       footer: 'Days are bucketed in UTC, as Claude Code timestamps its transcripts. '
+             + 'If you work late in a timezone ahead of UTC, that work lands on the previous day here.',
+       flush: 0})}
     ${card('Model mix over time', '<div class="legend" id="mixleg"></div>' +
       '<div class="chart" id="mix"></div>', {badge: BADGE.estimated,
       hint: 'stacked estimated cost per model'})}
@@ -926,10 +932,23 @@ VIEWS.burn = async (page) => {
 
 /* ---------- models ---------- */
 VIEWS.models = async (page) => {
-  const m = await api('models');
+  const [m, lc] = await Promise.all([api('models'), api('long_context_pricing')]);
   const sup = m.superlatives, rows = m.rows;
   const find = k => rows.find(r => r.model === sup[k]);
   page.innerHTML = `
+    ${lc.unpriced_requests ? `<div class="hero">
+      <h3>⚠️ Some long-context requests are priced low</h3>
+      <div class="stack">
+        <div class="item sev-high">
+          <div class="hd">${fmtInt(lc.unpriced_requests)} requests sent more context than their
+            model's standard window, so they ran on the long-context variant — which bills at a
+            premium this price table does not have.</div>
+          <div class="dt">Affected: ${lc.unpriced_models.map(esc).join(', ')}.
+            Their estimated cost is <strong>understated</strong>. Add a
+            <code>"&lt;model&gt;[1m]"</code> entry to <code>config/pricing.json</code> and rebuild
+            to correct it. Requests with a configured long-context price
+            (${fmtInt(lc.repriced_requests)}) are already billed at it.</div></div>
+      </div></div>` : ''}
     <div class="grid g4">
       ${kpi('Most expensive', sup.most_expensive ? esc(modelName(sup.most_expensive)) : null,
         find('most_expensive') ? fmtUSD(find('most_expensive').cost) + ' estimated' : '', {small: 1})}
@@ -1250,9 +1269,46 @@ VIEWS.categories = async (page) => {
 
 /* ---------- context & cache ---------- */
 VIEWS.context = async (page) => {
-  const [ctx, eff] = await Promise.all([api('context'), api('efficiency')]);
+  const [ctx, eff, ttl] = await Promise.all([api('context'), api('efficiency'), api('ttl_replay')]);
   const ca = eff.cache;
+  const ttlCard = () => {
+    if (!ttl || !ttl.segments) return '';
+    if (!ttl.reconciled) {
+      return card('Cache TTL comparison', `
+        <p class="note" style="margin:0">Not shown. Replaying your actual 1h TTL produced
+          ${fmtUSD(ttl.replay_1h_usd)} against ${fmtUSD(ttl.logged_cost_usd)} of logged cost
+          (${ttl.reconciliation_drift_pct}% drift). A replay that cannot reproduce the bill you
+          did get is not evidence about one you did not, so the comparison is withheld.</p>`,
+        {badge: BADGE.actual, hint: 'arithmetic · failed its own reconciliation check'});
+    }
+    const cheaper5 = ttl.cheaper_ttl === '5m';
+    return card('Cache TTL: what you use vs the alternative', `
+      <p class="note" style="margin:0 0 10px">Replayed over <strong>${fmtInt(ttl.segments)}</strong>
+        cache segments using your real inter-turn gaps. No assumption is made about model
+        behaviour — this is arithmetic on timestamps and token counts.</p>
+      <div class="grid g3" style="gap:8px">
+        ${kpi('Your 1h TTL', fmtUSD(ttl.replay_1h_usd), 'replayed', {small: 1, badge: BADGE.actual})}
+        ${kpi('Same work on a 5m TTL', fmtUSD(ttl.replay_5m_usd), 'counterfactual', {small: 1})}
+        ${kpi(cheaper5 ? 'A 5m TTL would save' : 'Your 1h TTL saves',
+          fmtUSD(Math.abs(ttl.difference_usd)), cheaper5 ? 'switch to save' : 'already the cheaper choice',
+          {small: 1, badge: BADGE.actual})}
+      </div>
+      <div class="stack" style="margin-top:10px">
+        <div class="item sev-${cheaper5 ? 'medium' : 'low'}">
+          <div class="hd">${cheaper5
+            ? 'A shorter TTL would be cheaper for how you actually work.'
+            : 'Keep the 1h TTL — a 5m TTL would cost you more, not less.'}</div>
+          <div class="dt">${cheaper5
+            ? 'Your turns come close enough together that the prefix rarely expires, so you are paying the 2x write premium for protection you do not use.'
+            : 'The gaps where a 5m prefix would expire force a full-prefix rewrite, and that costs more than the cheaper write rate saves.'}
+            This only matters if the TTL is configurable in your setup.</div></div>
+      </div>`,
+      {badge: BADGE.actual,
+       hint: 'arithmetic · reconciled to ' + ttl.reconciliation_drift_pct + '% of logged cost',
+       footer: ttl.note});
+  };
   page.innerHTML = `
+    ${ttlCard()}
     <div class="grid g5">
       ${kpi('Avg context / request', fmtNum(ctx.avg_context), null, {badge: BADGE.actual})}
       ${kpi('Max context seen', fmtNum(ctx.max_context),
@@ -1262,8 +1318,36 @@ VIEWS.context = async (page) => {
         'average vs largest configured window')}
       ${kpi('Tokens / request', fmtNum(eff.tokens_per_request))}
       ${kpi('Cache hit ratio', ca.reads ? fmtPct(eff.cache_hit_ratio * 100) : null,
-        'reads ÷ (reads + writes)', {badge: BADGE.actual})}
+        'reads ÷ (reads + writes), by token', {badge: BADGE.actual})}
     </div>
+    ${(() => {
+      const cs = ca.cost_split;
+      if (!cs || !cs.read_cost_share) return '';
+      const mult = cs.write_vs_read_multiple, h1 = cs.write_1h_token_share;
+      return card('Cache reads vs writes, by cost', `
+        <p class="note" style="margin:0 0 10px">Writes are
+          <strong>${fmtPct(100 * (1 - cs.read_token_share))}</strong> of your cache tokens but
+          <strong>${fmtPct(100 * cs.write_cost_share)}</strong> of your cache cost${
+            mult ? `, because a write token costs ${mult.toFixed(1)}x a read token` : ''}.
+          The token ratio above is the flattering number; this is the one that moves the bill.</p>
+        <dl class="kv">
+          <dt>Cache reads</dt><dd>${fmtNum(cs.read_tokens)} tokens · ${fmtUSD(cs.read_cost_usd)}
+            (${fmtPct(100 * cs.read_cost_share)} of cache cost)</dd>
+          <dt>Cache writes</dt><dd>${fmtNum(cs.write_tokens)} tokens · ${fmtUSD(cs.write_cost_usd)}
+            (${fmtPct(100 * cs.write_cost_share)} of cache cost)</dd>
+          <dt>— 5m writes</dt><dd>${fmtNum(cs.write_5m_tokens)} tokens · ${fmtUSD(cs.write_5m_cost_usd)}</dd>
+          <dt>— 1h writes</dt><dd>${fmtNum(cs.write_1h_tokens)} tokens · ${fmtUSD(cs.write_1h_cost_usd)}</dd>
+        </dl>
+        ${h1 !== null && h1 >= 0.5 && cs.write_tokens ? `<div class="stack" style="margin-top:10px">
+          <div class="item sev-low">
+            <div class="hd">${fmtPct(100 * h1)} of your cache writes use the 1h TTL.</div>
+            <div class="dt">A 1h write costs more per token than a 5m one, but that does not make
+              it the wrong choice — whether it pays off depends on your real inter-turn gaps.
+              The TTL comparison above replays them and answers it with arithmetic rather than
+              a rule of thumb.</div></div>
+        </div>` : ''}`, {badge: BADGE.estimated,
+        footer: 'Component costs are re-derived per model from config/pricing.json, since a request stores one blended cost.'});
+    })()}
     ${ctx.large_context_cost_pct > 0 ? `<div class="hero">
       <h3>⚠️ Context warnings</h3>
       <div class="stack">
@@ -2037,7 +2121,7 @@ VIEWS.forecast = async (page) => {
     ${card('Cumulative spend and forecast fan', '<div class="chart" id="fan2"></div>' +
       '<div class="legend" id="fl2"></div>', {badge: BADGE.forecast,
       hint: f.method,
-      footer: 'Scenarios are the 14-day mean daily spend minus, at, and plus one standard deviation, projected across the remaining days of the billing period. They assume your recent pattern continues.'})}
+      footer: 'Scenarios are the 14-calendar-day mean daily spend minus, at, and plus one standard deviation, projected across the remaining days of the billing period. Days you did not use Claude count as zero, since the projection runs over calendar days. They assume your recent pattern continues.'})}
     ${card('Scenarios', table([
       {h: 'Scenario', f: r => `<b>${esc(r[0])}</b>`},
       {h: 'Daily rate', num: 1, f: r => fmtUSD(r[1].daily_rate)},
