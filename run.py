@@ -152,8 +152,8 @@ HELP = """Claude FinOps Command Center
   claude-finops --keys          list which provider keys are configured
   claude-finops --version       print the installed version, and whether a newer one is out
   claude-finops --no-update-check   skip the once-a-day npm version check
-  claude-finops --install-hook  suggest a cheaper model in Claude Code, as you send each prompt
-  claude-finops --install-statusline   show model, context and advice in your statusline
+  claude-finops --install-hook  retired no-op (prints a message, changes nothing)
+  claude-finops --install-statusline   show model and context % in your statusline
   claude-finops --help          this message
 
 Environment:

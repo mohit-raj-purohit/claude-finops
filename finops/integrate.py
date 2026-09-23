@@ -1,16 +1,14 @@
-"""Live advice inside Claude Code itself: a prompt hook and a statusline.
+"""A statusline inside Claude Code itself, showing model and context usage.
 
-The dashboard can only advise you if you are looking at it. These two run where
-the decision is actually made — the terminal you are typing in.
+  claude-finops --statusline    reads a statusline payload on stdin, prints model + context %
+  claude-finops --install-statusline   wire it into settings
+  claude-finops --hook          retired no-op, kept so existing installs do not error
+  claude-finops --install-hook  prints that the hook is retired and does nothing else
 
-  claude-finops --hook          reads a UserPromptSubmit payload on stdin
-  claude-finops --statusline    reads a statusline payload on stdin
-  claude-finops --install-hook / --install-statusline   wire them into settings
-
-Both are on the path of every prompt, so both are built to be boring: fail
-silent, never block, never take long. A hook that erases someone's prompt
-because a database was locked is a far worse bug than missing advice, so the
-hook never returns a blocking exit code — it exits 0 whatever happens.
+The prompt hook that used to "suggest a cheaper model" is retired: that
+suggestion had no basis — it would have meant repricing work that never ran.
+The statusline is on the path of every prompt, so it is built to be boring:
+fail silent, never block, never take long.
 """
 import json
 import os
@@ -105,26 +103,14 @@ def _save_settings(data):
 
 
 def install_hook(remove=False):
-    cmd = f"{_command()} --hook"
-    s = _load_settings()
-    hooks = s.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-    for group in hooks:                       # drop any earlier copy of ours
-        group["hooks"] = [h for h in group.get("hooks", [])
-                          if "--hook" not in str(h.get("command", ""))
-                          or "finops" not in str(h.get("command", ""))]
-    hooks[:] = [g for g in hooks if g.get("hooks")]
-    if not remove:
-        hooks.append({"matcher": "", "hooks": [{"type": "command", "command": cmd,
-                                                "timeout": 10}]})
-    if not hooks:
-        s["hooks"].pop("UserPromptSubmit", None)
-        if not s["hooks"]:
-            s.pop("hooks")
-    _save_settings(s)
-    print(("Removed" if remove else "Installed") + f" the prompt hook in {SETTINGS}")
-    if not remove:
-        print("  It suggests a cheaper model when your own history backs one, before the turn runs.")
-        print("  Start a new Claude Code session to pick it up.  Undo: claude-finops --uninstall-hook")
+    """The prompt hook is retired: it never had a basis for its "cheaper model"
+    suggestion (that would mean repricing work that had not run yet). It is kept
+    as a no-op (see hook() above) so existing installs do not error, but nothing
+    new is installed here.
+    """
+    print("The finops prompt hook has been retired — it made suggestions with no "
+          "basis in your data. Nothing was installed or changed.")
+    print("The statusline (claude-finops --install-statusline) still shows model and context %.")
 
 
 def install_statusline(remove=False):
@@ -143,5 +129,5 @@ def install_statusline(remove=False):
     _save_settings(s)
     print(("Removed" if remove else "Installed") + f" the statusline in {SETTINGS}")
     if not remove:
-        print("  Shows the model, context pressure, and a cheaper model when one is warranted.")
+        print("  Shows the model and context usage percentage.")
         print("  Undo: claude-finops --uninstall-statusline")
