@@ -5,6 +5,7 @@ Entities: account -> billing_period -> project -> session -> prompt -> request
 transcripts are stored as NULL and rendered as "Unavailable from connected Claude
 data" by the UI.
 """
+import hashlib
 import json
 import os
 import re
@@ -135,6 +136,9 @@ FILE_TOOLS = {"Edit": "edit", "Write": "write", "Read": "read", "NotebookEdit": 
 SLASH = re.compile(r"^\s*/([a-z0-9][\w:-]*)(?=\s|$)", re.I)
 CMD_NAME = re.compile(r"<command-name>/?([\w:-]+)</command-name>")
 WS = re.compile(r"\s+")
+
+INJECTED_PREFIXES = ("<task-notification", "<local-command-stdout", "<local-command-caveat",
+                     "<bash-input", "<bash-stdout", "<bash-stderr", "<system-reminder")
 
 
 def _ts(s):
@@ -329,6 +333,9 @@ class Loader:
                         prev_time = t or prev_time
                         continue
                     text = _text_of(msg.get("content"))
+                    if text.lstrip().startswith(INJECTED_PREFIXES):
+                        prev_time = t or prev_time
+                        continue
                     if agent:
                         prev_time = t or prev_time
                         continue
@@ -392,13 +399,14 @@ class Loader:
             src = f"slash:/{m.group(1)}"
             cat = cat if cat != "other" else "automation"
         ts = r.get("timestamp")
-        norm = WS.sub(" ", text.strip().lower())[:500]
+        norm = WS.sub(" ", text.strip().lower())
+        norm_hash = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
         cur = self.db.execute(
             "INSERT INTO prompts (uuid, session_id, project_id, ts, day, text, char_len,"
             " word_len, category, category_confidence, category_evidence, source, norm_hash)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (r.get("uuid"), session_id, pid, ts, (ts or "")[:10], text, len(text),
-             len(text.split()), cat, conf, json.dumps(ev), src, str(hash(norm))))
+             len(text.split()), cat, conf, json.dumps(ev), src, norm_hash))
         return cur.lastrowid
 
     def insert_request(self, lines, session_id, pid, prompt_id, prev_time):

@@ -125,5 +125,28 @@ class TestRequestDedup(unittest.TestCase):
         self.assertEqual(con.execute("SELECT latency_ms FROM requests").fetchone()[0], 5000.0)
 
 
+class TestPromptFiltering(unittest.TestCase):
+    def test_injected_tags_are_not_prompts(self):
+        rows = [user("2026-01-01T00:00:00Z", "real question"),
+                assistant("2026-01-01T00:00:05Z", "r1", "m1", {"type": "text", "text": "a"}),
+                user("2026-01-01T00:00:10Z", "<task-notification>agent done</task-notification>"),
+                user("2026-01-01T00:00:11Z", "<local-command-stdout>ok</local-command-stdout>"),
+                user("2026-01-01T00:00:12Z", "<bash-input>ls</bash-input>"),
+                user("2026-01-01T00:00:13Z", "<bash-stdout>a b</bash-stdout>"),
+                user("2026-01-01T00:00:14Z", "<local-command-caveat>x</local-command-caveat>")]
+        con = build(rows)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM prompts").fetchone()[0], 1)
+
+    def test_norm_hash_is_stable_and_uses_full_text(self):
+        pre = "You are the Spec agent. " * 30          # 720-char shared preamble
+        con = build([user("2026-01-01T00:00:00Z", pre + "task A"),
+                     user("2026-01-01T00:00:10Z", pre + "task B"),
+                     user("2026-01-01T00:00:20Z", pre + "task A")])
+        hashes = [h for (h,) in con.execute("SELECT norm_hash FROM prompts ORDER BY ts")]
+        self.assertEqual(hashes[0], hashes[2])
+        self.assertNotEqual(hashes[0], hashes[1])
+        self.assertEqual(len(hashes[0]), 16)
+
+
 if __name__ == "__main__":
     unittest.main()
