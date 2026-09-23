@@ -41,6 +41,8 @@
       "frontier"
     ],
     "low_output_ratio_vs_median": 0.4,
+  "tool_loop_calls": 40,
+  "poor_cache_min_writes": 500000,
     "_low_output_note": "Sessions are flagged when their output/billable ratio falls below this fraction of YOUR median session ratio, rather than an absolute number, because a healthy ratio depends on how agentic your workload is."
   },
   "hygiene": {

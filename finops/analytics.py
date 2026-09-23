@@ -951,23 +951,22 @@ class Analytics:
                           ORDER BY cost DESC LIMIT 15""", p + [rules["long_prompt_chars"]])
         budget_chars = rules["long_prompt_chars"]
         for r in rows:
-            over_tokens = max(r["char_len"] - budget_chars, 0) / 4.0   # ~4 chars/token
-            resent = over_tokens * max(r["requests"], 1)
-            r["excess"] = (r["cost"] * resent / r["tokens"]) if r["tokens"] else 0
+            r["excess"] = 0.0
         if rows:
             add("high", "long_prompts",
                 f"{len(rows)} very long prompts (>{budget_chars:,} chars)",
                 "Long pasted prompts inflate the cached prefix re-sent on every following turn.",
                 rows, "Move large pasted context into a file and reference it, or summarize first.",
                 "prompt_id",
-                f"share of spend from prompt text beyond {budget_chars:,} characters, re-sent per request")
+                "none claimed — flagged for review only")
 
-        # 2. duplicate prompts — excess is the cost of the repeats, not the first ask.
-        dups = self.q(f"""SELECT pr.norm_hash, COUNT(*) n, substr(MIN(pr.text),1,160) preview,
+        # 2. duplicate prompts — excess is the cost of the repeats, not the first ask,
+        #    counted only within a single session so cross-session coincidences don't count.
+        dups = self.q(f"""SELECT pr.norm_hash, pr.session_id, COUNT(*) n, substr(MIN(pr.text),1,160) preview,
                           SUM(pr.est_cost_usd) cost, SUM(pr.billable_tokens) tokens,
                           MIN(pr.est_cost_usd) first_cost, GROUP_CONCAT(pr.id) prompt_ids
                           FROM prompts pr WHERE {pfilter} AND pr.char_len > 25
-                          GROUP BY pr.norm_hash HAVING n > 1
+                          GROUP BY pr.norm_hash, pr.session_id HAVING n > 1
                           ORDER BY cost DESC LIMIT 15""", p)
         for d in dups:
             d["prompt_id"] = int(d["prompt_ids"].split(",")[0])
@@ -1002,18 +1001,15 @@ class Analytics:
                          ORDER BY cost DESC LIMIT 15""",
                      p + [rules["huge_session_tokens"], cutoff])
         for r in low:
-            # at the median ratio the same output needs out/median tokens, so the
-            # baseline cost scales by (actual ratio / median ratio)
-            r["excess"] = r["cost"] * (1 - (r["output_ratio"] / median_ratio)) if median_ratio else 0
+            r["excess"] = 0.0
         if low:
-            add("high", "low_yield_sessions",
+            add("medium", "low_yield_sessions",
                 f"{len(low)} large sessions yielded under {cutoff*100:.2f}% output tokens",
                 f"Among your {baseline_n} comparably large sessions the median turns "
                 f"{median_ratio*100:.2f}% of billable tokens into output. These ran well below "
                 f"that while consuming heavy context.",
                 low, "Start a fresh session or /compact once a thread stops producing new output.",
-                "session_id", "spend above what the same output would cost at the median "
-                              "efficiency of your other comparably large sessions")
+                "session_id", "none claimed — the same output at another ratio is a counterfactual")
 
         # 4. frontier model on small tasks — excess is computed against the cheaper tier.
         frontier = [m for m, v in self.pricing.models.items()
@@ -1037,60 +1033,64 @@ class Analytics:
                                (SELECT COALESCE(SUM(rq.cache_write_1h),0) FROM requests rq
                                   WHERE rq.prompt_id = pr.id) c1
                                FROM prompts pr WHERE {pfilter}
-                                 AND pr.output_tokens < ? AND pr.est_cost_usd > 0
+                                 AND pr.output_tokens < ? AND pr.tool_calls = 0 AND pr.est_cost_usd > 0
                                  AND EXISTS (SELECT 1 FROM requests r2 WHERE r2.prompt_id=pr.id
                                              AND r2.model IN ({ph}))
                                ORDER BY cost DESC LIMIT 15""",
                            p + [rules["simple_task_output_tokens"]] + frontier)
             for r in small:
-                # the 5m/1h split has to be carried through: a 1h write is priced well
-                # above a 5m one, so folding every write into the 5m slot prices the
-                # alternative too cheaply and overstates the excess
-                alt = (self.pricing.estimate(cheaper, r["input_tokens"], r["out_tokens"],
-                                             r["cache_read_tokens"], r["c5"], r["c1"])
-                       if cheaper else r["cost"])
-                r["excess"] = max(r["cost"] - alt, 0)
+                r["excess"] = 0.0
             if small:
                 add("medium", "frontier_on_small_tasks",
                     f"{len(small)} frontier-model prompts produced under "
                     f"{rules['simple_task_output_tokens']} output tokens",
                     "Short, simple turns running on the most expensive model tier.",
                     small, "Route short lookups and confirmations to a cheaper model tier.",
-                    "prompt_id",
-                    f"difference against the same tokens priced at {self.pricing.display_name(cheaper)}"
-                    if cheaper else "n/a")
+                    "prompt_id", "none claimed")
 
         # 5. tool loops — excess is the share of the loop beyond the threshold.
+        loop_calls = rules.get("tool_loop_calls", 40)
         loops = self.q(f"""SELECT pr.id prompt_id, substr(pr.text,1,160) preview, pr.session_id,
                            pr.tool_calls tools, pr.est_cost_usd cost, pr.billable_tokens tokens
-                           FROM prompts pr WHERE {pfilter} AND pr.tool_calls > 40
-                           ORDER BY cost DESC LIMIT 15""", p)
+                           FROM prompts pr WHERE {pfilter} AND pr.tool_calls > ?
+                           ORDER BY cost DESC LIMIT 15""", p + [loop_calls])
         for r in loops:
-            r["excess"] = r["cost"] * max(r["tools"] - 40, 0) / max(r["tools"], 1)
+            r["excess"] = 0.0
         if loops:
-            add("medium", "tool_loops", f"{len(loops)} prompts triggered 40+ tool calls",
+            add("medium", "tool_loops", f"{len(loops)} prompts triggered {loop_calls}+ tool calls",
                 "Long agentic loops re-send the whole conversation each step, so cost grows super-linearly.",
                 loops, "Split the task, or give more precise instructions up front.", "prompt_id",
-                "share of the loop beyond the first 40 tool calls")
+                "none claimed")
 
-        # 6. poor cache reuse — excess is the write premium over plain input pricing.
+        # 6. poor cache reuse — excess is the break-even: the cache-write premium over
+        #    plain input pricing, minus the discount actually earned on the reads.
         poor = self.q(f"""SELECT s.id session_id, s.title, proj.name project,
                           s.cache_read_tokens reads, s.cache_write_tokens writes,
+                          (SELECT COALESCE(SUM(r.cache_write_5m),0) FROM requests r WHERE r.session_id=s.id) w5,
+                          (SELECT COALESCE(SUM(r.cache_write_1h),0) FROM requests r WHERE r.session_id=s.id) w1,
                           s.est_cost_usd cost, s.request_count requests, s.models
                           FROM sessions s JOIN projects proj ON proj.id=s.project_id
-                          WHERE {sfilter} AND s.cache_write_tokens > 500000
-                            AND s.cache_read_tokens < s.cache_write_tokens * 3
-                          ORDER BY cost DESC LIMIT 15""", p)
+                          WHERE {sfilter} AND s.cache_write_tokens > ?
+                          ORDER BY cost DESC""", p + [rules.get("poor_cache_min_writes", 500_000)])
+        flagged = []
         for r in poor:
             m = (r["models"] or "").split(",")[0]
             rt = self.pricing.rates(m)
-            premium = float(rt.get("cache_write_5m", 0)) - float(rt.get("input", 0))
-            r["excess"] = max(r["writes"] * premium / 1_000_000.0, 0)
+            g = lambda k: float(rt.get(k, 0.0))
+            # break-even: premium paid on writes minus discount earned on reads
+            net = (r["w5"] * (g("cache_write_5m") - g("input"))
+                   + r["w1"] * (g("cache_write_1h") - g("input"))
+                   - r["reads"] * (g("input") - g("cache_read"))) / 1_000_000.0
+            if net > 0:
+                r["excess"] = net
+                flagged.append(r)
+        poor = flagged[:15]
         if poor:
             add("medium", "poor_cache_reuse", f"{len(poor)} sessions wrote cache they barely reused",
                 "Cache writes cost more than plain input; they only pay off when read back repeatedly.",
                 poor, "Keep related work in one continuous session so the cached prefix is reused.",
-                "session_id", "the cache-write premium over plain input pricing on those writes")
+                "session_id", "cache-write premium minus the read discount actually earned, "
+                              "at this model's rates")
 
         # 7. long-lived sparse sessions — informational, no excess claimed.
         idle = self.q(f"""SELECT s.id session_id, s.title, proj.name project, s.duration_s,
@@ -1168,6 +1168,10 @@ class Analytics:
                         "touched — money worth reviewing. Estimated excess is how much more that "
                         "work cost than a reasonable baseline, and is the actual waste figure. "
                         "Both are estimates.",
+                "excess_note": "Estimated excess is claimed only where the baseline is measured: the cost of "
+                               "repeating an identical prompt in the same session, and cache writes that were "
+                               "never read back enough to pay for themselves. Everything else is exposed spend "
+                               "to review, not waste.",
                 "basis": "estimated"}
 
     # ---------------- recommendations ----------------
