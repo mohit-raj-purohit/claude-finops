@@ -9,7 +9,6 @@ import os
 import sqlite3
 import sys
 import threading
-import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -54,10 +53,14 @@ def filters_from(qs):
         for item in v:
             out += [x for x in item.split(",") if x]
         return out
+    try:
+        projects = [int(x) for x in lst("projects")]
+    except ValueError:
+        raise BadRequest("projects must be integers")
     f = {
         "start": qs.get("start", [None])[0] or None,
         "end": qs.get("end", [None])[0] or None,
-        "agents": lst("agents"), "models": lst("models"), "projects": lst("projects"),
+        "agents": lst("agents"), "models": lst("models"), "projects": projects,
         "sessions": lst("sessions"), "categories": lst("categories"),
         "include_sandbox": qs.get("include_sandbox", ["1"])[0] != "0",
         "min_cost": qs.get("min_cost", [None])[0] or None,
@@ -304,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
                                no_store=True)
         except BrokenPipeError:
             pass
-        except (BadRequest, ValueError) as e:
+        except BadRequest as e:
             self.send_json({"error": str(e) or "bad request"}, 400)
         except Exception:
             log.exception("GET %s failed", path)

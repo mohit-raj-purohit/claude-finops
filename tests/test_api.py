@@ -97,3 +97,16 @@ class TestHardening(ServerFixture):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/overview")
         with urllib.request.urlopen(req) as r:
             self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+
+    def test_bad_projects_filter_is_400(self):
+        self.assertEqual(self.get("/api/overview?projects=x")[0], 400)
+
+    def test_unexpected_internal_error_is_500_not_400(self):
+        orig = finops_api.A.overview
+        finops_api.A.overview = lambda *a, **k: (_ for _ in ()).throw(ValueError("boom"))
+        try:
+            code, body = self.get("/api/overview")
+            self.assertEqual(code, 500)
+            self.assertNotIn("boom", json.dumps(body))
+        finally:
+            finops_api.A.overview = orig
