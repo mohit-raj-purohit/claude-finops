@@ -74,6 +74,23 @@ class TestRequestDedup(unittest.TestCase):
                      assistant("2026-01-01T00:00:09Z", "req-2", "msg-2", {"type": "text", "text": "b"})])
         self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 2)
 
+    def test_tool_results_between_lines_do_not_split_the_request(self):
+        rows = [user("2026-01-01T00:00:00Z", "run both"),
+                assistant("2026-01-01T00:00:05Z", "req-1", "msg-1",
+                          {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/a"}}),
+                {"type": "user", "uuid": "tr1", "timestamp": "2026-01-01T00:00:06Z", "sessionId": "s1",
+                 "toolUseResult": {"ok": True},
+                 "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "x"}]}},
+                assistant("2026-01-01T00:00:07Z", "req-1", "msg-1",
+                          {"type": "tool_use", "id": "t2", "name": "Grep", "input": {"pattern": "y"}}),
+                {"type": "user", "uuid": "tr2", "timestamp": "2026-01-01T00:00:08Z", "sessionId": "s1",
+                 "toolUseResult": {"ok": True},
+                 "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "z"}]}}]
+        con = build(rows)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 1)
+        self.assertEqual(con.execute("SELECT tool_call_count FROM requests").fetchone()[0], 2)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0], 2)
+
     def test_latency_measured_to_first_line_of_group(self):
         con = build([user("2026-01-01T00:00:00Z", "hello"),
                      assistant("2026-01-01T00:00:05Z", "req-1", "msg-1", {"type": "thinking", "thinking": ""}),

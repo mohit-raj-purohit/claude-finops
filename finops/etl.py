@@ -318,10 +318,10 @@ class Loader:
             t = _ts(ts)
 
             if typ == "user":
-                flush()
                 msg = r.get("message") or {}
                 self.record_results(r, msg)
-                # tool results and meta lines are not human prompts
+                # tool results and meta lines are not human prompts, and must not
+                # split a request that is still waiting on its tool results
                 if r.get("toolUseResult") is not None or r.get("isMeta"):
                     prev_time = t or prev_time
                     continue
@@ -332,6 +332,7 @@ class Loader:
                 if not text.strip():
                     prev_time = t or prev_time
                     continue
+                flush()
                 cur_prompt = self.insert_prompt(r, text, session_id, pid)
                 prev_time = t or prev_time
 
