@@ -173,8 +173,9 @@ Two files, both editable without touching code. The server picks up changes to
 ### `config/pricing.json`
 
 Model prices per million tokens, kept strictly separate from usage data so the table
-can be updated as prices change. A model with no entry falls back to
-`default_model_pricing` and is flagged as such in the Model analysis view.
+can be updated as prices change. A `claude-*` model with no entry is priced as
+`unpriced` ($0, flagged as such in the Model analysis view) rather than silently
+billed at another model's rate.
 
 ### `config/settings.json`
 

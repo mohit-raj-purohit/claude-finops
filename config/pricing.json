@@ -2,69 +2,63 @@
   "_comment": "Model pricing in USD per 1,000,000 tokens. Kept SEPARATE from usage data so it can be updated without touching the dashboard. Any cost derived from these numbers is ESTIMATED, never actual billed cost.",
   "currency": "USD",
   "unit": "per_million_tokens",
-  "updated": "2026-09-18",
-  "source": "user-configurable list price table",
-  "default_model_pricing": {
-    "input": 3.0,
-    "output": 15.0,
-    "cache_write_5m": 3.75,
-    "cache_write_1h": 6.0,
-    "cache_read": 0.3
-  },
+  "updated": "2026-09-23",
+  "source": "Anthropic list prices (Claude API reference, cached 2026-06-24)",
   "models": {
     "claude-opus-5": {
       "display_name": "Claude Opus 5",
       "tier": "frontier",
-      "input": 15.0,
-      "output": 75.0,
-      "cache_write_5m": 18.75,
-      "cache_write_1h": 30.0,
-      "cache_read": 1.5,
-      "context_window": 200000,
-      "provider": "anthropic"
-    },
-    "claude-opus-5[1m]": {
-      "display_name": "Claude Opus 5 (1M context)",
-      "tier": "frontier",
-      "input": 22.5,
-      "output": 112.5,
-      "cache_write_5m": 28.125,
-      "cache_write_1h": 45.0,
-      "cache_read": 2.25,
+      "input": 5.0,
+      "output": 25.0,
+      "cache_write_5m": 6.25,
+      "cache_write_1h": 10.0,
+      "cache_read": 0.5,
       "context_window": 1000000,
       "provider": "anthropic"
+    },
+    "claude-opus-5[fast]": {
+      "display_name": "Claude Opus 5 (fast mode)",
+      "tier": "frontier",
+      "input": 10.0,
+      "output": 50.0,
+      "cache_write_5m": 12.5,
+      "cache_write_1h": 20.0,
+      "cache_read": 1.0,
+      "context_window": 1000000,
+      "provider": "anthropic",
+      "_note": "Research-preview fast mode, 2x standard. Selected when usage.speed == 'fast'."
     },
     "claude-sonnet-5": {
       "display_name": "Claude Sonnet 5",
       "tier": "balanced",
-      "input": 3.0,
-      "output": 15.0,
-      "cache_write_5m": 3.75,
-      "cache_write_1h": 6.0,
-      "cache_read": 0.3,
-      "context_window": 200000,
+      "input": 2.0,
+      "output": 10.0,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 4.0,
+      "cache_read": 0.2,
+      "context_window": 1000000,
       "provider": "anthropic"
     },
     "claude-fable-5": {
       "display_name": "Claude Fable 5",
-      "tier": "balanced",
-      "input": 3.0,
-      "output": 15.0,
-      "cache_write_5m": 3.75,
-      "cache_write_1h": 6.0,
-      "cache_read": 0.3,
-      "context_window": 200000,
+      "tier": "frontier",
+      "input": 10.0,
+      "output": 50.0,
+      "cache_write_5m": 12.5,
+      "cache_write_1h": 20.0,
+      "cache_read": 1.0,
+      "context_window": 1000000,
       "provider": "anthropic"
     },
     "claude-fable-5-1": {
       "display_name": "Claude Fable 5.1",
-      "tier": "balanced",
-      "input": 3.0,
-      "output": 15.0,
-      "cache_write_5m": 3.75,
-      "cache_write_1h": 6.0,
-      "cache_read": 0.3,
-      "context_window": 200000,
+      "tier": "frontier",
+      "input": 10.0,
+      "output": 50.0,
+      "cache_write_5m": 12.5,
+      "cache_write_1h": 20.0,
+      "cache_read": 0.25,
+      "context_window": 1000000,
       "provider": "anthropic"
     },
     "claude-haiku-4-5-20251001": {
@@ -224,6 +218,9 @@
       "cache_write_1h": 0,
       "_note": "Cursor bills by subscription and doesn't record the model locally: no cost is estimated"
     }
+  },
+  "aliases": {
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001"
   },
   "_sources": {
     "openai": "https://developers.openai.com/api/docs/pricing (standard tier, 2026-09-18)",
