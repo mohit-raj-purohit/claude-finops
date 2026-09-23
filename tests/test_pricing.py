@@ -24,6 +24,16 @@ class TestListPrices(unittest.TestCase):
         r = self.p.rates("claude-fable-5-1")
         self.assertEqual((r["input"], r["output"], r["cache_read"]), (10.0, 50.0, 0.25))
 
+    def test_opus_5_5_list_price(self):
+        r = self.p.rates("claude-opus-5-5")
+        self.assertEqual((r["input"], r["output"], r["cache_read"]), (4.0, 20.0, 0.20))
+        self.assertEqual(r["context_window"], 1_000_000)
+        self.assertEqual(r["tier"], "frontier")
+
+    def test_opus_5_5_fast_list_price(self):
+        r = self.p.rates("claude-opus-5-5[fast]")
+        self.assertEqual((r["input"], r["output"], r["cache_read"]), (8.0, 40.0, 0.40))
+
     def test_no_1m_premium_entry(self):
         self.assertNotIn("claude-opus-5[1m]", self.p.models)
         self.assertEqual(self.p.effective_model("claude-opus-5", 400_000), ("claude-opus-5", False))

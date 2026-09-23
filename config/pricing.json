@@ -28,6 +28,29 @@
       "provider": "anthropic",
       "_note": "Research-preview fast mode, 2x standard. Selected when usage.speed == 'fast'."
     },
+    "claude-opus-5-5": {
+      "display_name": "Claude Opus 5.5",
+      "tier": "frontier",
+      "input": 4.0,
+      "output": 20.0,
+      "cache_write_5m": 5.0,
+      "cache_write_1h": 8.0,
+      "cache_read": 0.20,
+      "context_window": 1000000,
+      "provider": "anthropic"
+    },
+    "claude-opus-5-5[fast]": {
+      "display_name": "Claude Opus 5.5 (fast mode)",
+      "tier": "frontier",
+      "input": 8.0,
+      "output": 40.0,
+      "cache_write_5m": 10.0,
+      "cache_write_1h": 16.0,
+      "cache_read": 0.40,
+      "context_window": 1000000,
+      "provider": "anthropic",
+      "_note": "Research-preview fast mode, 2x standard. Selected when usage.speed == 'fast'."
+    },
     "claude-sonnet-5": {
       "display_name": "Claude Sonnet 5",
       "tier": "balanced",
