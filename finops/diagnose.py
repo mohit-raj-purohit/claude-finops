@@ -154,7 +154,7 @@ class Diagnoser:
         a = self.a
         if not a.last_day:
             return None
-        end = _d(f.get("end") or a.last_day)
+        end = _d(f.get("end")) if f.get("end") else (a.today() - timedelta(days=1))
         ranges = {"current": (end - timedelta(days=6), end),
                   "previous": (end - timedelta(days=13), end - timedelta(days=7))}
         res = {}
@@ -199,15 +199,14 @@ class Diagnoser:
                        "one per day.",
                 # No dollar figure: the old one assumed 30% fewer cache-read tokens, a
                 # number that came from nowhere in the data.
-                "est_savings_usd": None,
-                "savings_basis": None})
+            })
         if d.get("long_sessions", {}).get("share_pct", 0) > 30:
             recs.append({
                 "priority": 1, "title": "Break up marathon sessions",
                 "why": d["long_sessions"]["detail"],
                 "how": f"Finish a unit of work, write the state to a file or memory, then {v['clear']}. "
                        "Use the Sessions view sorted by cost to find the worst ones.",
-                "est_savings_usd": None, "savings_basis": None})
+            })
         fm = d.get("frontier_model")
         if fm and fm["share_pct"] > 70:
             # No dollar figure: the repriced model-switch estimate was removed because it
@@ -218,8 +217,7 @@ class Diagnoser:
                 "priority": 2, "title": v["cheaper"],
                 "why": fm["detail"],
                 "how": v["model_how"],
-                "est_savings_usd": None,
-                "savings_basis": None})
+            })
         th = d.get("tool_heavy")
         if th and th.get("evidence"):
             bash = next((x for x in th["evidence"] if x["name"] in v["shell"]), None)
@@ -231,7 +229,7 @@ class Diagnoser:
                     "how": "Ask for `| head`/`| tail`, quiet flags (`-q`, `--silent`), and run "
                            "test suites with a reporter that prints failures only. Add these "
                            "habits to " + v["md"] + " so the agent does it unprompted.",
-                    "est_savings_usd": None, "savings_basis": None})
+                })
             mcp = [x for x in th["evidence"] if x["name"].startswith("mcp__")]
             if mcp:
                 recs.append({
@@ -241,7 +239,7 @@ class Diagnoser:
                     "how": "Prefer targeted reads (find / get_page_text) over screenshots, and "
                            "do browser checks in a subagent so the payload doesn't stay in the "
                            "main session.",
-                    "est_savings_usd": None, "savings_basis": None})
+                })
         sub = d.get("subagents")
         if sub and sub["share_pct"] > 25:
             recs.append({
@@ -249,7 +247,7 @@ class Diagnoser:
                 "why": sub["detail"],
                 "how": "Use subagents for wide searches only; for known files, read them "
                        "directly. Set `model: sonnet` or `haiku` in custom agent frontmatter.",
-                "est_savings_usd": None, "savings_basis": None})
+            })
         n_fix = sum(1 for pj in projects if pj["issues"])
         if n_fix:
             recs.append({
@@ -257,8 +255,8 @@ class Diagnoser:
                 "why": "Missing or oversized CLAUDE.md, oversized memory, repeated file "
                        "re-reads or reads of generated files — see the project table below.",
                 "how": "Apply the per-project fixes listed below.",
-                "est_savings_usd": None, "savings_basis": None})
-        recs.sort(key=lambda r: (r["priority"], -(r["est_savings_usd"] or 0)))
+            })
+        recs.sort(key=lambda r: r["priority"])
         return recs
 
     def _main_model(self, f):
@@ -539,7 +537,7 @@ class Diagnoser:
         a = self.a
         f = f or {}
         w, p = a.where(f)
-        rate = a.pricing.rates(self._main_model(f)).get("cache_read", 0.3) / 1e6
+        rate = (a.pricing.rates(self._main_model(f)).get("cache_read") or 0) / 1e6
         tcw = f"tc.request_pk IN (SELECT r.id FROM requests r WHERE {w})"
 
         sessions = a.q(f"""SELECT r.session_id, s.title, pj.name project,
