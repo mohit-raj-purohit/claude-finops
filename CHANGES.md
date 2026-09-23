@@ -2,7 +2,7 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
-## Cost figures corrected: one row per request, list prices fixed
+## 0.8.0 — Cost figures corrected: one row per request, list prices fixed
 
 **Requests were counted more than once.** A streamed response arrives as several
 content blocks, and each block was written as its own row in the warehouse. A
