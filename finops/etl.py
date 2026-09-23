@@ -193,6 +193,7 @@ class Loader:
         self.projects = {}
         self.agent = None
         self.pending_skill = None
+        self.pending_results = {}
 
     # ---------- infrastructure ----------
     def build(self, verbose=True):
@@ -289,6 +290,7 @@ class Loader:
         session_id = agent["parent"] if agent else os.path.splitext(os.path.basename(path))[0]
         self.agent = agent
         self.pending_skill = None
+        self.pending_results = {}     # tool_use_id -> result chars, applied once the row exists
         cwd = next((r.get("cwd") for r in rows if r.get("cwd")), None)
         pid = self.project_id(slug, cwd)
         title = next((r.get("aiTitle") for r in rows if r.get("type") == "ai-title"), None)
@@ -312,45 +314,52 @@ class Loader:
                                     group["prev_time"])
                 group = None
 
-        for r in rows:
-            typ = r.get("type")
-            ts = r.get("timestamp")
-            t = _ts(ts)
+        try:
+            for r in rows:
+                typ = r.get("type")
+                ts = r.get("timestamp")
+                t = _ts(ts)
 
-            if typ == "user":
-                msg = r.get("message") or {}
-                self.record_results(r, msg)
-                # tool results and meta lines are not human prompts, and must not
-                # split a request that is still waiting on its tool results
-                if r.get("toolUseResult") is not None or r.get("isMeta"):
-                    prev_time = t or prev_time
-                    continue
-                text = _text_of(msg.get("content"))
-                if agent:
-                    prev_time = t or prev_time
-                    continue
-                if not text.strip():
-                    prev_time = t or prev_time
-                    continue
-                flush()
-                cur_prompt = self.insert_prompt(r, text, session_id, pid)
-                prev_time = t or prev_time
-
-            elif typ == "assistant":
-                if agent and cur_prompt is None:
-                    cur_prompt = self.parent_prompt(session_id, r.get("timestamp"))
-                key = (r.get("requestId") or (r.get("message") or {}).get("id") or r.get("uuid"))
-                if group and group["key"] == key:
-                    group["lines"].append(r)
-                else:
+                if typ == "user":
+                    msg = r.get("message") or {}
+                    self.record_results(r, msg)
+                    # tool results and meta lines are not human prompts, and must not
+                    # split a request that is still waiting on its tool results
+                    if r.get("toolUseResult") is not None or r.get("isMeta"):
+                        prev_time = t or prev_time
+                        continue
+                    text = _text_of(msg.get("content"))
+                    if agent:
+                        prev_time = t or prev_time
+                        continue
+                    if not text.strip():
+                        prev_time = t or prev_time
+                        continue
                     flush()
-                    group = {"key": key, "lines": [r], "prev_time": prev_time,
-                             "prompt_id": cur_prompt}
-                prev_time = t or prev_time
+                    cur_prompt = self.insert_prompt(r, text, session_id, pid)
+                    prev_time = t or prev_time
 
-            elif typ in ("attachment", "system"):
-                prev_time = t or prev_time
-        flush()
+                elif typ == "assistant":
+                    if agent and cur_prompt is None:
+                        cur_prompt = self.parent_prompt(session_id, r.get("timestamp"))
+                    key = (r.get("requestId") or (r.get("message") or {}).get("id") or r.get("uuid"))
+                    if group and group["key"] == key:
+                        group["lines"].append(r)
+                    else:
+                        flush()
+                        group = {"key": key, "lines": [r], "prev_time": prev_time,
+                                 "prompt_id": cur_prompt}
+                    prev_time = t or prev_time
+
+                elif typ in ("attachment", "system"):
+                    prev_time = t or prev_time
+        finally:
+            flush()
+            # any result whose tool_calls row was inserted by an earlier flush
+            for tool_use_id, n in self.pending_results.items():
+                self.db.execute("UPDATE tool_calls SET result_chars=? WHERE tool_use_id=?",
+                                (n, tool_use_id))
+            self.pending_results = {}
 
     def parent_prompt(self, session_id, ts):
         row = self.db.execute("SELECT id FROM prompts WHERE session_id=? AND ts<=? "
@@ -371,8 +380,9 @@ class Loader:
             if isinstance(c, dict) and c.get("type") == "tool_result":
                 body = c.get("content")
                 n = len(body) if isinstance(body, str) else _result_chars(body)
-                self.db.execute("UPDATE tool_calls SET result_chars=? WHERE tool_use_id=?",
-                                (n, c.get("tool_use_id")))
+                # the tool_calls row for this id may not exist yet: its request is
+                # still an open group and is only inserted when it flushes
+                self.pending_results[c.get("tool_use_id")] = n
 
     def insert_prompt(self, r, text, session_id, pid):
         cat, conf, ev = classify(text)
@@ -484,6 +494,10 @@ class Loader:
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (rpk, session_id, pid, prompt_id, ts, day, name, target, c.get("id"),
                  kind, server))
+            tool_use_id = c.get("id")
+            if tool_use_id in self.pending_results:
+                self.db.execute("UPDATE tool_calls SET result_chars=? WHERE tool_use_id=?",
+                                (self.pending_results.pop(tool_use_id), tool_use_id))
             if kind == "skill":
                 self.pending_skill = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
             if name in FILE_TOOLS and isinstance(args, dict) and args.get("file_path"):

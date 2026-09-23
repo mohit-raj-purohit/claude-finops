@@ -105,6 +105,19 @@ class TestRequestDedup(unittest.TestCase):
         self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 1)
         self.assertEqual(con.execute("SELECT tool_call_count FROM requests").fetchone()[0], 2)
 
+    def test_tool_result_sizes_are_recorded_for_deferred_rows(self):
+        tr = lambda ts, tid, body: {"type": "user", "uuid": "tr" + tid, "timestamp": ts, "sessionId": "s1",
+                                    "toolUseResult": {"ok": True},
+                                    "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": body}]}}
+        rows = [user("2026-01-01T00:00:00Z", "go"),
+                assistant("2026-01-01T00:00:05Z", "req-1", "msg-1", {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}),
+                tr("2026-01-01T00:00:06Z", "t1", "x" * 120),
+                assistant("2026-01-01T00:00:07Z", "req-1", "msg-1", {"type": "tool_use", "id": "t2", "name": "Read", "input": {}}),
+                tr("2026-01-01T00:00:08Z", "t2", "y" * 30)]
+        con = build(rows)
+        sizes = dict(con.execute("SELECT tool_use_id, result_chars FROM tool_calls"))
+        self.assertEqual(sizes, {"t1": 120, "t2": 30})
+
     def test_latency_measured_to_first_line_of_group(self):
         con = build([user("2026-01-01T00:00:00Z", "hello"),
                      assistant("2026-01-01T00:00:05Z", "req-1", "msg-1", {"type": "thinking", "thinking": ""}),
