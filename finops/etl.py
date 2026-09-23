@@ -303,6 +303,14 @@ class Loader:
 
         cur_prompt = None
         prev_time = None
+        group = None          # {"key", "lines": [...], "prev_time", "prompt_id"}
+
+        def flush():
+            nonlocal group
+            if group:
+                self.insert_request(group["lines"], session_id, pid, group["prompt_id"],
+                                    group["prev_time"])
+                group = None
 
         for r in rows:
             typ = r.get("type")
@@ -310,6 +318,7 @@ class Loader:
             t = _ts(ts)
 
             if typ == "user":
+                flush()
                 msg = r.get("message") or {}
                 self.record_results(r, msg)
                 # tool results and meta lines are not human prompts
@@ -329,11 +338,19 @@ class Loader:
             elif typ == "assistant":
                 if agent and cur_prompt is None:
                     cur_prompt = self.parent_prompt(session_id, r.get("timestamp"))
-                self.insert_request(r, session_id, pid, cur_prompt, prev_time)
+                key = (r.get("requestId") or (r.get("message") or {}).get("id") or r.get("uuid"))
+                if group and group["key"] == key:
+                    group["lines"].append(r)
+                else:
+                    flush()
+                    group = {"key": key, "lines": [r], "prev_time": prev_time,
+                             "prompt_id": cur_prompt}
                 prev_time = t or prev_time
 
             elif typ in ("attachment", "system"):
+                flush()
                 prev_time = t or prev_time
+        flush()
 
     def parent_prompt(self, session_id, ts):
         row = self.db.execute("SELECT id FROM prompts WHERE session_id=? AND ts<=? "
@@ -374,10 +391,13 @@ class Loader:
              len(text.split()), cat, conf, json.dumps(ev), src, str(hash(norm))))
         return cur.lastrowid
 
-    def insert_request(self, r, session_id, pid, prompt_id, prev_time):
+    def insert_request(self, lines, session_id, pid, prompt_id, prev_time):
+        first, last = lines[0], lines[-1]
+        r = last                                  # stop_reason / usage from the final line
         msg = r.get("message") or {}
         u = msg.get("usage") or {}
         model = msg.get("model") or "unknown"
+        speed = u.get("speed")
         inp = int(u.get("input_tokens") or 0)
         out = int(u.get("output_tokens") or 0)
         think = int((u.get("output_tokens_details") or {}).get("thinking_tokens") or 0)
@@ -394,21 +414,28 @@ class Loader:
         # Price against the variant the context proves was used, not just the name in
         # the transcript: anything above the standard window was the long-context
         # variant and is billed at a premium.
-        priced_as, unpriced_long = self.pricing.effective_model(model, context)
+        priced_as, unpriced_long = self.pricing.effective_model(model, context, speed=speed)
         cost = self.pricing.estimate(priced_as, inp, out, cr, c5, c1)
         no_cache_part, cache_part = self.pricing.uncached_baseline(priced_as, cr, c5, c1)
         cost_no_cache = cost - cache_part + no_cache_part
 
-        ts = r.get("timestamp")
+        tools, seen = [], set()
+        for ln in lines:
+            for c in ((ln.get("message") or {}).get("content") or []):
+                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") not in seen:
+                    seen.add(c.get("id"))
+                    tools.append(c)
+
+        if billable == 0 and not tools:
+            return
+
+        ts = first.get("timestamp")               # the request started at its first line
         t = _ts(ts)
         latency = None
         if t and prev_time:
             d = (t - prev_time).total_seconds() * 1000.0
             if 0 <= d <= 900_000:    # ignore idle gaps > 15 min, they are not latency
                 latency = d
-
-        tools = [c for c in (msg.get("content") or [])
-                 if isinstance(c, dict) and c.get("type") == "tool_use"]
 
         cur = self.db.execute(
             "INSERT INTO requests (uuid, request_id, session_id, project_id, prompt_id,"
@@ -419,15 +446,15 @@ class Loader:
             " priced_as, unpriced_long_context, latency_ms,"
             " tool_call_count, is_sidechain, agent_id, agent_type, agent_desc)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (r.get("uuid"), r.get("requestId"), session_id, pid, prompt_id, ts,
-             (ts or "")[:10], (t.hour if t else None), model,
-             1 if self.pricing.is_known(model) else 0, r.get("effort"),
+            (first.get("uuid"), first.get("requestId") or msg.get("id"), session_id, pid,
+             prompt_id, ts, (ts or "")[:10], (t.hour if t else None), model,
+             1 if self.pricing.is_known(model) else 0, first.get("effort"),
              u.get("service_tier"), msg.get("stop_reason"), inp, out, think, cr,
              c5, c1, cw, billable, context, cost, cost_no_cache,
              priced_as, 1 if unpriced_long else 0, latency,
-             len(tools), 1 if (r.get("isSidechain") or self.agent) else 0,
+             len(tools), 1 if (first.get("isSidechain") or self.agent) else 0,
              *((self.agent["id"], self.agent["type"], self.agent["desc"]) if self.agent
-               else (None, "inline" if r.get("isSidechain") else None, None))))
+               else (None, "inline" if first.get("isSidechain") else None, None))))
         rpk = cur.lastrowid
 
         day = (ts or "")[:10]
