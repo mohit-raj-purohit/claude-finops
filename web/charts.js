@@ -344,7 +344,7 @@ export function legend(host, items, onToggle) {
   items.forEach(it => {
     const s = document.createElement('span');
     s.className = 'it' + (it.off ? ' off' : '');
-    s.innerHTML = `<span class="swatch" style="background:${it.color}"></span>${it.label}`;
+    s.innerHTML = `<span class="swatch" style="background:${it.color}"></span>${esc(it.label)}`;
     if (onToggle) { s.style.cursor = 'pointer'; s.onclick = () => onToggle(it.key); }
     host.appendChild(s);
   });
