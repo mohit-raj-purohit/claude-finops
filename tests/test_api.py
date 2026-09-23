@@ -2,6 +2,7 @@
 import json, os, sqlite3, sys, tempfile, threading, unittest, urllib.request, urllib.error
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from finops import api as finops_api
+from finops import analytics as finops_analytics
 from finops.analytics import Analytics
 from finops.etl import SCHEMA
 
@@ -31,6 +32,14 @@ class ServerFixture(unittest.TestCase):
     def setUpClass(cls):
         cls.db_path = make_db()
         finops_api.A = Analytics(cls.db_path)
+        # Never let settings POST tests touch the developer's real
+        # ~/.claude-finops/settings.local.json — point both modules' copies of
+        # the path at a throwaway file for the duration of this fixture.
+        cls._orig_api_local = finops_api.LOCAL_SETTINGS_PATH
+        cls._orig_analytics_local = finops_analytics.LOCAL_SETTINGS_PATH
+        cls.local_settings_path = tempfile.mktemp(suffix=".json", prefix="finops-test-local-")
+        finops_api.LOCAL_SETTINGS_PATH = cls.local_settings_path
+        finops_analytics.LOCAL_SETTINGS_PATH = cls.local_settings_path
         cls.srv = finops_api.Server(("127.0.0.1", 0), finops_api.Handler)
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
@@ -39,6 +48,9 @@ class ServerFixture(unittest.TestCase):
     def tearDownClass(cls):
         cls.srv.shutdown()
         os.path.exists(cls.db_path) and os.remove(cls.db_path)
+        os.path.exists(cls.local_settings_path) and os.remove(cls.local_settings_path)
+        finops_api.LOCAL_SETTINGS_PATH = cls._orig_api_local
+        finops_analytics.LOCAL_SETTINGS_PATH = cls._orig_analytics_local
 
     def get(self, path, headers=None):
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", headers=headers or {})
@@ -121,6 +133,10 @@ class TestHardening(ServerFixture):
                                headers={"X-FinOps-Action": "1"})
         self.assertEqual(code, 200)
         self.assertEqual(body["settings"]["budgets"]["monthly_usd"], 500)
+        # written to the isolated temp settings file, never the user's real one
+        with open(self.local_settings_path) as fh:
+            on_disk = json.load(fh)
+        self.assertEqual(on_disk["budgets"]["monthly_usd"], 500)
 
     def test_malformed_start_date_is_400(self):
         self.assertEqual(self.get("/api/overview?start=not-a-date")[0], 400)
