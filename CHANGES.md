@@ -2,6 +2,26 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## New first page: Context hygiene
+
+**What you'll notice.** The dashboard now opens on **Context hygiene** instead of the
+executive overview. It shows, from your own transcripts: the share of spend in
+requests above 100K and 150K context (both configurable in `config/settings.json`
+under `hygiene.context_thresholds`); the share of spend that came *after* a session
+first crossed each line; every session ranked by what it spent after crossing; and,
+for any session you click, the context size of each request in order.
+
+**Why it comes first.** Almost all of the bill is re-reading context. On the data this
+was built against, 87% of spend sat in requests above 150K context, and 98% of
+billable tokens were cache reads. That is the dominant cost, and it is directly
+observable — unlike a model-switch estimate, nothing here has to be assumed.
+
+**What it deliberately does not show.** No "what compaction would have saved" figure.
+Whether a fresh session would have cost less depends on what the work still needed
+from the old context, and the transcript does not say. Subagent turns are left out
+because they run against their own prefix. `/clear` and `/compact` are not recorded
+by Claude Code, so a compaction appears only as the context dropping.
+
 ## Four numbers that could not be defended are gone, and a crash is fixed
 
 **Pages no longer fail at random.** Views that load several figures at once — the

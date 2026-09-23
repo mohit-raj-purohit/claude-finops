@@ -105,6 +105,13 @@ def _d(s):
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def _cumsum(values):
+    total = 0.0
+    for v in values:
+        total += v or 0.0
+        yield total
+
+
 class Analytics:
     def __init__(self, db_path=DB_PATH):
         # One connection per thread. The HTTP server is threaded, and a single sqlite
@@ -618,6 +625,105 @@ class Analytics:
         }
 
     # ---------------- efficiency ----------------
+    def hygiene(self, f=None, top=12, trajectory_points=80):
+        """Context and session hygiene: what it cost to keep re-sending a large prefix.
+
+        Everything here is observed. For each session: the context size of every
+        request in order, the request at which it first crossed each configured
+        threshold, and what was spent from that point on. Across the range: the share
+        of spend in requests above each threshold. No compaction is simulated and no
+        saving is estimated — how much a fresh session would have saved depends on what
+        the work still needed, which the transcript does not say.
+
+        Subagent (sidechain) turns are excluded: they run against their own prefix, so
+        mixing them into the parent session's trajectory would misstate both.
+        """
+        cfg = self.settings.get("hygiene", {})
+        thresholds = sorted(int(x) for x in cfg.get("context_thresholds", [100000, 150000]))
+        w, p = self.where(f)
+        rows = self.q(f"""SELECT r.session_id, r.ts, r.context_tokens ctx, r.est_cost_usd cost
+                          FROM requests r WHERE {w} AND r.is_sidechain = 0 AND r.ts <> ''
+                          ORDER BY r.session_id, r.ts""", p)
+        total = sum(r["cost"] or 0 for r in rows)
+        above = {t: {"requests": 0, "cost_usd": 0.0, "sessions": 0, "cost_after_first_cross_usd": 0.0}
+                 for t in thresholds}
+        sessions = {}
+        for r in rows:
+            cost, ctx = (r["cost"] or 0.0), (r["ctx"] or 0)
+            s = sessions.setdefault(r["session_id"], {
+                "session_id": r["session_id"], "requests": 0, "cost_usd": 0.0,
+                "max_context": 0, "first_cross": {t: None for t in thresholds},
+                "cost_after": {t: 0.0 for t in thresholds}, "traj": []})
+            idx = s["requests"]
+            s["requests"] += 1
+            s["cost_usd"] += cost
+            s["max_context"] = max(s["max_context"], ctx)
+            s["traj"].append((ctx, cost))
+            for t in thresholds:
+                if ctx >= t:
+                    above[t]["requests"] += 1
+                    above[t]["cost_usd"] += cost
+                    if s["first_cross"][t] is None:
+                        s["first_cross"][t] = idx
+                if s["first_cross"][t] is not None:
+                    s["cost_after"][t] += cost
+        for s in sessions.values():
+            for t in thresholds:
+                if s["first_cross"][t] is not None:
+                    above[t]["sessions"] += 1
+                    above[t]["cost_after_first_cross_usd"] += s["cost_after"][t]
+
+        rank_t = thresholds[-1]
+        ranked = sorted(sessions.values(), key=lambda s: -s["cost_after"][rank_t])[:top]
+        ids = [s["session_id"] for s in ranked]
+        meta = {}
+        if ids:
+            ph = ",".join("?" * len(ids))
+            meta = {m["id"]: m for m in self.q(f"""SELECT s.id, s.title, pj.name project
+                                                FROM sessions s JOIN projects pj ON pj.id=s.project_id
+                                                WHERE s.id IN ({ph})""", ids)}
+
+        def downsample(traj):
+            n = len(traj)
+            if n <= trajectory_points:
+                return traj
+            step = n / trajectory_points
+            return [traj[int(i * step)] for i in range(trajectory_points)]
+
+        out_sessions = []
+        for s in ranked:
+            m = meta.get(s["session_id"], {})
+            traj = downsample(s["traj"])
+            out_sessions.append({
+                "session_id": s["session_id"], "title": m.get("title"), "project": m.get("project"),
+                "requests": s["requests"], "cost_usd": s["cost_usd"], "max_context": s["max_context"],
+                "first_cross": {str(t): s["first_cross"][t] for t in thresholds},
+                "cost_after": {str(t): s["cost_after"][t] for t in thresholds},
+                "cost_after_pct": {str(t): (round(100.0 * s["cost_after"][t] / s["cost_usd"], 1)
+                                            if s["cost_usd"] else 0.0) for t in thresholds},
+                "context_trajectory": [c for c, _ in traj],
+                "cumulative_cost": [round(x, 4) for x in _cumsum(cost for _, cost in traj)],
+                "basis": "actual",
+            })
+        return {
+            "thresholds": thresholds,
+            "rank_threshold": rank_t,
+            "requests": len(rows), "sessions": len(sessions), "cost_usd": total,
+            "above": {str(t): {
+                **v,
+                "share_pct": round(100.0 * v["cost_usd"] / total, 1) if total else 0.0,
+                "share_after_first_cross_pct": (round(100.0 * v["cost_after_first_cross_usd"] / total, 1)
+                                                if total else 0.0),
+            } for t, v in above.items()},
+            "sessions_ranked": out_sessions,
+            "excluded": "subagent turns (own prefix)",
+            "undetectable": ["/clear", "/compact"],
+            "note": ("Observed shares of spend. Nothing here estimates what compaction or a "
+                     "fresh session would have saved. /clear and /compact are not recorded in "
+                     "transcripts, so a compaction shows up only as the context dropping."),
+            "basis": "actual",
+        }
+
     def ttl_replay(self, f=None):
         """5m vs 1h cache TTL over real segments — arithmetic, no behavioural assumption.
 

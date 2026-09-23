@@ -43,6 +43,10 @@
     "low_output_ratio_vs_median": 0.4,
     "_low_output_note": "Sessions are flagged when their output/billable ratio falls below this fraction of YOUR median session ratio, rather than an absolute number, because a healthy ratio depends on how agentic your workload is."
   },
+  "hygiene": {
+    "_comment": "Context sizes (prompt-side tokens) the hygiene view reports spend above. Observed shares only; no saving is estimated from them.",
+    "context_thresholds": [100000, 150000]
+  },
   "anomaly": {
     "_comment": "session_ratio is measured against the MEDIAN session, not the mean: session sizes are right-skewed enough that a mean lets the outliers inflate their own baseline. Session token counts are heavy-tailed, so max_session_outliers, not the ratio, is what keeps the list short and leaves room for the other anomaly types.",
     "daily_zscore": 2.0,

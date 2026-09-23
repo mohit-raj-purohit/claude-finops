@@ -3,7 +3,7 @@ const {fmtUSD, fmtNum, fmtInt, fmtPct, seriesVar} = C;
 
 /* ============================ state ============================ */
 const S = {
-  view: 'overview',
+  view: 'hygiene',
   opts: null,
   filter: {start: null, end: null, agents: [], models: [], projects: [], categories: [],
            include_sandbox: true, min_cost: null, min_tokens: null},
@@ -104,6 +104,7 @@ function wireTable(host, rows, onRow) {
 /* ============================ chrome ============================ */
 const NAV = [
   ['Command center', [
+    ['hygiene', '◫', 'Context hygiene'],
     ['overview', '◧', 'Executive overview'],
     ['advisor', '✦', 'What should I do?'],
     ['agents', '◎', 'Agents'],
@@ -1266,6 +1267,65 @@ VIEWS.categories = async (page) => {
 };
 
 /* ---------- context & cache ---------- */
+/* ---------- context & session hygiene: observed shares, no savings ---------- */
+VIEWS.hygiene = async (page) => {
+  const [hy, fit] = await Promise.all([api('hygiene'), api('context_window_fit')]);
+  const T = hy.thresholds.map(String), kT = String(hy.rank_threshold);
+  const K = t => `${Math.round(+t / 1000)}K`;
+  const ab = t => hy.above[t];
+  page.innerHTML = `
+    <div class="note" style="margin:0 0 10px">Everything on this page is observed from your transcripts.
+      It shows where spend sat while a large prefix was being re-sent on every turn. It does
+      <b>not</b> estimate what /compact or a fresh session would have saved — that depends on
+      what the work still needed, which the transcript does not say.</div>
+    <div class="grid g4">
+      ${T.map(t => kpi(`Spend in requests ≥ ${K(t)} context`, fmtPct(ab(t).share_pct),
+        `${fmtUSD(ab(t).cost_usd)} · ${fmtInt(ab(t).requests)} requests`, {badge: BADGE.actual})).join('')}
+      ${T.map(t => kpi(`Spend after a session first crossed ${K(t)}`, fmtPct(ab(t).share_after_first_cross_pct),
+        `${fmtInt(ab(t).sessions)} of ${fmtInt(hy.sessions)} sessions crossed it`, {badge: BADGE.actual})).join('')}
+    </div>
+    <div class="grid g3">
+      ${kpi('Spend near or over the context window', fmtPct(fit.near_or_over_cost_pct),
+        `≥ ${fit.threshold_pct}% of the window in use · ${fmtInt(fit.near_requests + fit.over_requests)} requests`,
+        {badge: BADGE.actual})}
+      ${kpi('Sessions in range', fmtInt(hy.sessions), `${fmtInt(hy.requests)} main-thread requests`, {badge: BADGE.actual})}
+      ${kpi('Spend in range', fmtUSD(hy.cost_usd), 'subagent turns excluded (own prefix)', {badge: BADGE.estimated})}
+    </div>
+    ${card('Context per request, most expensive session after ' + K(kT), '<div class="chart" id="hy-traj"></div>',
+      {badge: BADGE.actual, hint: 'prompt-side tokens on each request, in order · click a row below to change session'})}
+    ${card('Sessions ranked by spend after crossing ' + K(kT), '<div id="hy-sess"></div>',
+      {badge: BADGE.actual, flush: 1,
+       footer: hy.note + ' Subagent turns are excluded because they run against their own prefix.'})}`;
+
+  const drawTraj = s => {
+    const rows = s.context_trajectory.map((c, i) => ({i: i + 1, ctx: c, cum: s.cumulative_cost[i]}));
+    C.timeSeries($('#hy-traj', page), {rows, x: 'i', type: 'area', height: 210, fmt: fmtNum,
+      series: [{key: 'ctx', label: 'Context tokens', color: seriesVar(0)}],
+      xLabel: v => `#${v}`});
+    $('#hy-traj', page).insertAdjacentHTML('beforeend',
+      `<div class="note" style="margin-top:6px">${esc(s.title || shortId(s.session_id))} — ${fmtInt(s.requests)} requests,
+       ${fmtUSD(s.cost_usd)}. Crossed ${K(kT)} at request #${s.first_cross[kT] == null ? '—' : s.first_cross[kT] + 1};
+       ${fmtPct(s.cost_after_pct[kT])} of its spend came after that.</div>`);
+  };
+  const rows = hy.sessions_ranked;
+  $('#hy-sess', page).innerHTML = table([
+    {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+    {h: 'Project', trunc: 1, f: r => esc(r.project || '')},
+    {h: 'Context', f: r => `<span class="spk" data-i="${rows.indexOf(r)}" style="display:inline-block;width:110px"></span>`},
+    {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
+    {h: 'Peak ctx', num: 1, f: r => fmtNum(r.max_context)},
+    ...T.map(t => ({h: `After ${K(t)}`, num: 1, f: r => r.first_cross[t] == null ? '<span class="na">never</span>'
+      : `<b>${fmtUSD(r.cost_after[t])}</b> <span class="note">(${fmtPct(r.cost_after_pct[t])})</span>`})),
+    {h: 'Session cost', num: 1, f: r => fmtUSD(r.cost_usd)},
+  ], rows);
+  page.querySelectorAll('#hy-sess .spk').forEach(el => C.spark(el, rows[+el.dataset.i].context_trajectory, seriesVar(0), 22));
+  page.querySelectorAll('#hy-sess table.tbl tbody tr').forEach(tr => {
+    tr.classList.add('clickable');
+    tr.onclick = e => { if (e.altKey) openSession(rows[+tr.dataset.i].session_id); else drawTraj(rows[+tr.dataset.i]); };
+  });
+  if (rows.length) drawTraj(rows[0]);
+};
+
 VIEWS.context = async (page) => {
   const [ctx, eff, ttl] = await Promise.all([api('context'), api('efficiency'), api('ttl_replay')]);
   const ca = eff.cache;
@@ -3029,6 +3089,9 @@ const TOURS = {
     {el: 'card:Slash commands', t: 'Slash commands', see: 'The commands and user-invoked skills you actually use.', get: 'Which shortcuts earn their keep.', act: 'Delete the ones you never call.'},
     {el: 'card:MCP servers', t: 'MCP servers', see: 'Each configured server, whether it was ever called, and its context cost.', get: 'Tool definitions loaded on every request for nothing.', act: 'Remove servers that are configured but never called.'},
     {el: 'card:Connectors', t: 'Connectors', see: 'claude.ai connectors and their share of context.', get: 'The same check for connectors as for MCP servers.', act: 'Disconnect what you don\'t use from this machine.'}],
+  hygiene: [
+    {el: 'kpis', t: 'Where spend sat', see: 'The share of spend in requests above each context size, and the share that came after a session first crossed it.', get: 'How much of the bill was re-sending a large prefix.', act: 'A high "after crossing" share means the expensive part of a session was its tail.'},
+    {el: 'card:Sessions ranked', t: 'Sessions', see: 'Each session\'s context trajectory and what it spent after crossing the threshold.', get: 'The sessions where a fresh start would have mattered most.', act: 'Click a row for its trajectory; alt-click to open the session.'}],
   waste: [
     {el: 'kpis', t: 'Waste headlines', see: 'Estimated excess, exposed spend, and how many prompts, sessions and rules are involved.', get: 'An honest estimate of avoidable spend.', act: '<b>Exposed</b> is what flagged work cost in total; <b>excess</b> is how much more than a fair baseline.'},
     {el: 'card:🔴 High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},

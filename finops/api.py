@@ -307,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.long_context_pricing(f))
         if route == "ttl_replay":
             return self.send_json(a.ttl_replay(f))
+        if route == "hygiene":
+            return self.send_json(a.hygiene(f, top=int(g("top", 12))))
         if route == "context":
             return self.send_json(a.context_analysis(f))
         if route == "waste":
