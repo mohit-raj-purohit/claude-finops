@@ -4,7 +4,6 @@
   python3 run.py              build the warehouse if missing, then serve
   python3 run.py --rebuild    re-read transcripts first
   python3 run.py --stop       stop a running dashboard
-  python3 run.py --share      write ../claude-finops.zip (code + defaults, never your data)
   python3 run.py --set-key    store a provider API key
   python3 run.py --where      print where your data and keys live
   python3 run.py --help       all commands
@@ -18,7 +17,6 @@ import signal
 import subprocess
 import sys
 import time
-import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -91,7 +89,9 @@ def _is_ours(pid):
     try:
         if IS_WIN:
             out = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+                ["powershell", "-NoProfile", "-Command",
+                 f'Get-CimInstance Win32_Process -Filter "ProcessId={pid}" | '
+                 "Select-Object -ExpandProperty CommandLine"],
                 capture_output=True, text=True, timeout=10).stdout
         else:
             out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
@@ -142,25 +142,6 @@ def stop_pidfile():
     return False
 
 
-def share(out=None):
-    out = out or os.path.join(os.path.dirname(ROOT), "claude-finops.zip")
-    skip_dirs = {"data", "__pycache__", ".git"}
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for base, dirs, files in os.walk(ROOT):
-            dirs[:] = [d for d in dirs if d not in skip_dirs]
-            for f in files:
-                if f.endswith((".pyc", ".zip", ".tgz")) or f in ("settings.local.json", "secrets.local.json"):
-                    continue
-                full = os.path.join(base, f)
-                arc = os.path.join("claude-finops", os.path.relpath(full, ROOT)).replace(os.sep, "/")
-                info = zipfile.ZipInfo.from_file(full, arc)
-                info.external_attr = (0o755 if f.endswith((".sh", ".py")) else 0o644) << 16
-                info.compress_type = zipfile.ZIP_DEFLATED
-                with open(full, "rb") as fh:
-                    z.writestr(info, fh.read())
-    print(f"Wrote {out} (code + default config only; your data/ and local settings are excluded)")
-
-
 HELP = """Claude FinOps Command Center
 
   claude-finops                 start the dashboard (builds the warehouse first run)
@@ -169,8 +150,8 @@ HELP = """Claude FinOps Command Center
   claude-finops --where         print where your data, settings and keys live
   claude-finops --set-key       store a provider API key (prompts, never echoes)
   claude-finops --keys          list which provider keys are configured
-  claude-finops --share         write ../claude-finops.zip (code only, never your data)
   claude-finops --version       print the installed version, and whether a newer one is out
+  claude-finops --no-update-check   skip the once-a-day npm version check
   claude-finops --install-hook  suggest a cheaper model in Claude Code, as you send each prompt
   claude-finops --install-statusline   show model, context and advice in your statusline
   claude-finops --help          this message
@@ -181,6 +162,7 @@ Environment:
   CLAUDE_PROJECTS=/path         where to read transcripts from
   CLAUDE_FINOPS_PYTHON=/path    which Python the npm wrapper should use
   NO_UPDATE_NOTIFIER=1          never check npm for a newer release
+  CLAUDE_FINOPS_NO_UPDATE_CHECK=1   same as --no-update-check
 """
 
 
@@ -196,16 +178,20 @@ def version():
     a repo checkout side by side, and the usual confusion is not "what version
     am I on" but "why does the one I am looking at not have the feature".
     """
-    from finops.update import check, disabled, _key
+    from finops.update import check, disabled, _key, _installed
+    # Print what we know locally first: the network check can be slow, disabled,
+    # or simply fail, and none of that should delay the one line people actually
+    # came here for.
+    print(f"  claude-finops {_installed() or 'unknown'}")
+    print(f"  installed at  {ROOT}")
+    if disabled():
+        print("  update        check is off (NO_UPDATE_NOTIFIER)")
+        return
     # Asking outright is worth a fresh request: a day-old cached answer is the
     # one thing this command must not give you.
     u = check(force=True)
-    print(f"  claude-finops {u['current'] or 'unknown'}")
-    print(f"  installed at  {ROOT}")
     if u.get("update_available"):
         print(f"  update        {u['latest']} is out - {u['command']}")
-    elif disabled():
-        print("  update        check is off (NO_UPDATE_NOTIFIER)")
     elif u.get("latest") and _key(u["current"]) > _key(u["latest"]):
         # A checkout mid-release is ahead of what is published. Saying "up to
         # date" there would hide exactly the gap you are looking for.
@@ -290,6 +276,8 @@ def main():
     os.chdir(ROOT)
     ensure_dirs()
     migrate()
+    if "--no-update-check" in args:
+        os.environ["CLAUDE_FINOPS_NO_UPDATE_CHECK"] = "1"
     if "--help" in args or "-h" in args:
         return print(HELP)
     if "--version" in args or "-v" in args or "-V" in args:
@@ -319,12 +307,10 @@ def main():
     if "--stop" in args:
         print("Stopped." if stop() else "Not running.")
         return
-    if "--share" in args:
-        return share()
     # A flag we do not know used to fall straight through and start the
     # dashboard, so a typo (or a flag from a newer release than the one you
     # have installed) looked like the command silently doing nothing.
-    known = {"--rebuild", "--detach", "--foreground"}
+    known = {"--rebuild", "--detach", "--foreground", "--no-update-check"}
     unknown = [a for a in args if a.startswith("-") and a not in known]
     if unknown:
         print(f"Unknown option: {unknown[0]}")

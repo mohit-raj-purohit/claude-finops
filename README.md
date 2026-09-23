@@ -8,8 +8,10 @@ It answers, in a few clicks:
 > **What I used → what it cost → why it cost that much → whether it was efficient →
 > what is likely to happen next → and what I should change.**
 
-Everything runs on `127.0.0.1` with the Python standard library. No dependencies, no
-network calls, no data leaves the machine.
+Everything runs on `127.0.0.1` with the Python standard library. No dependencies, and
+no data leaves the machine. No outbound calls except a once-a-day version check
+against the npm registry (disable with `--no-update-check`), and provider APIs only
+if you add a key.
 
 ```bash
 npx claude-finops
@@ -97,9 +99,10 @@ set.
 - **Nothing to learn.** Every screen states its own conclusion in plain English before
   it shows you a chart, and every number carries a badge saying whether it is measured
   or estimated.
-- **Your data stays put.** It binds to `127.0.0.1` and makes no outbound calls. The
-  warehouse lives in `~/.claude-finops`, so upgrading or deleting the package never
-  touches it.
+- **Your data stays put.** It binds to `127.0.0.1`. No outbound calls except a
+  once-a-day version check against the npm registry (disable with
+  `--no-update-check`), and provider APIs only if you add a key. The warehouse lives
+  in `~/.claude-finops`, so upgrading or deleting the package never touches it.
 - **It tells you what to change**, not just what happened — usually with a prompt you
   can paste into Claude Code.
 

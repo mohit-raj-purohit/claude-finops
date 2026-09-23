@@ -1,4 +1,5 @@
 @echo off
-rem Claude FinOps Command Center (Windows). Same as: python run.py [--rebuild|--stop|--share]
+rem Claude FinOps Command Center (Windows). Same as: python run.py [--rebuild|--stop]
 cd /d "%~dp0"
-where py >nul 2>nul && (py -3 run.py %*) || (python run.py %*)
+where py >nul 2>nul
+if %errorlevel%==0 (py -3 "%~dp0run.py" %*) else (python "%~dp0run.py" %*)

@@ -12,6 +12,8 @@ const S = {
   grain: 'day',
   cache: new Map(),
   drawerStack: [],
+  sessPage: {offset: 0, limit: 200},
+  promptPage: {offset: 0, limit: 200},
 };
 const $ = (s, r = document) => r.querySelector(s);
 const h = (html) => { const t = document.createElement('template');
@@ -642,7 +644,7 @@ VIEWS.overview = async (page) => {
   ], lp, {onRow: 1});
   wireTable($('#topprompts', page), lp, r => openPrompt(r.prompt_id));
 
-  const ls = await api('sessions', '&limit=10&order=cost');
+  const ls = (await api('sessions', '&limit=10&order=cost')).rows;
   $('#topsessions', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
      f: r => esc(r.title || shortId(r.session_id))},
@@ -1029,12 +1031,14 @@ VIEWS.projects = async (page) => {
 /* ---------- sessions ---------- */
 VIEWS.sessions = async (page) => {
   const order = S.sessOrder || 'cost';
-  const rows = await api('sessions', `&limit=400&order=${order}`);
+  const sp = S.sessPage;
+  const res = await api('sessions', `&limit=${sp.offset + sp.limit}&order=${order}`);
+  const rows = res.rows, total = res.total;
   const eff = await api('efficiency');
   const avgTok = rows.length ? rows.reduce((a, r) => a + r.tokens, 0) / rows.length : 0;
   page.innerHTML = `
     <div class="grid g4">
-      ${kpi('Sessions in range', fmtInt(rows.length), null, {badge: BADGE.actual})}
+      ${kpi('Sessions in range', fmtInt(total), null, {badge: BADGE.actual})}
       ${kpi('Avg cost / session', fmtUSD(rows.reduce((a, r) => a + r.cost, 0) / (rows.length || 1)),
         null, {badge: BADGE.estimated})}
       ${kpi('Avg tokens / session', fmtNum(avgTok))}
@@ -1047,7 +1051,12 @@ VIEWS.sessions = async (page) => {
           `<button class="chip ${order === k ? 'on' : ''}" data-so="${k}">${l}</button>`).join('')}
         <span class="spacer"></span>
         <span class="note">rows above ${fmtNum(avgTok * 3)} tokens are unusually expensive</span>
-      </div><div id="st"></div>`, {badge: BADGE.estimated, hint: 'click a row to open the session'})}
+      </div><div id="st"></div>
+      <div class="filters" style="margin-top:8px">
+        <span class="note">Showing ${fmtInt(Math.min(rows.length, total))} of ${fmtInt(total)}</span>
+        <span class="spacer"></span>
+        ${rows.length < total ? '<button class="btn pb-copy" id="sess-more">Load more</button>' : ''}
+      </div>`, {badge: BADGE.estimated, hint: 'click a row to open the session'})}
     <div class="grid g2">
       ${card('Lowest output yield', table([
         {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
@@ -1063,7 +1072,9 @@ VIEWS.sessions = async (page) => {
       ], eff.high_efficiency_sessions, {onRow: 1}), {badge: BADGE.estimated, hint: 'high efficiency'})}
     </div>`;
   page.querySelectorAll('[data-so]').forEach(b => b.onclick = () => {
-    S.sessOrder = b.dataset.so; bust(); render(); });
+    S.sessOrder = b.dataset.so; S.sessPage.offset = 0; bust(); render(); });
+  const sessMore = $('#sess-more', page);
+  if (sessMore) sessMore.onclick = () => { sp.offset += sp.limit; bust(); render(); };
   $('#st', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
      f: r => `${r.tokens > avgTok * 3 ? '🔴 ' : ''}${esc(r.title || shortId(r.session_id))}
@@ -1105,8 +1116,10 @@ VIEWS.sessions = async (page) => {
 VIEWS.prompts = async (page) => {
   const order = S.promptOrder || 'cost';
   const q = S.promptQ || '';
-  const rows = await api('prompts',
-    `&limit=400&order=${order}${q ? '&q=' + encodeURIComponent(q) : ''}`);
+  const pp = S.promptPage;
+  const res = await api('prompts',
+    `&limit=${pp.offset + pp.limit}&order=${order}${q ? '&q=' + encodeURIComponent(q) : ''}`);
+  const rows = res.rows, total = res.total;
   page.innerHTML = `
     ${card('Prompt explorer', `
       <div class="filters" style="margin:0 0 8px">
@@ -1117,16 +1130,19 @@ VIEWS.prompts = async (page) => {
            ['efficiency', 'Most efficient'], ['cheapest', 'Cheapest'], ['recent', 'Most recent']]
           .map(([k, l]) => `<button class="chip ${order === k ? 'on' : ''}" data-po="${k}">${l}</button>`).join('')}
         <span class="spacer"></span>
-        <span class="note">${fmtInt(rows.length)} prompts · global filters apply</span>
+        <span class="note">Showing ${fmtInt(Math.min(rows.length, total))} of ${fmtInt(total)} prompts · global filters apply</span>
+        ${rows.length < total ? '<button class="btn pb-copy" id="prompt-more">Load more</button>' : ''}
       </div><div id="pt"></div>`,
       {badge: BADGE.estimated, hint: 'click any row for the full prompt, usage and advice',
        footer: 'Prompt text is read from your local transcripts and never leaves this machine.'})}`;
   const inp = $('#pq', page);
   let t; inp.oninput = e => { clearTimeout(t); const v = e.target.value;
-    t = setTimeout(() => { S.promptQ = v; bust(); render().then(() => {
+    t = setTimeout(() => { S.promptQ = v; S.promptPage.offset = 0; bust(); render().then(() => {
       const i = $('#pq'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } }); }, 300); };
   page.querySelectorAll('[data-po]').forEach(b => b.onclick = () => {
-    S.promptOrder = b.dataset.po; bust(); render(); });
+    S.promptOrder = b.dataset.po; S.promptPage.offset = 0; bust(); render(); });
+  const promptMore = $('#prompt-more', page);
+  if (promptMore) promptMore.onclick = () => { pp.offset += pp.limit; bust(); render(); };
   $('#pt', page).innerHTML = table([
     {h: 'When', f: r => `<span class="mono">${esc((r.ts || '').slice(0, 16).replace('T', ' '))}</span>`},
     {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
@@ -1631,6 +1647,8 @@ VIEWS.live = async (page) => {
     fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
     fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message}))]);
   const list = res.sessions || [];
+  const liveActions = res.actions || ['interrupt', 'close', 'kill'];
+  const canInterrupt = liveActions.includes('interrupt');
   const agentName = id => ((S.opts?.agents || []).find(a => a.id === id) || {}).name || id;
   const busy = list.filter(x => x.status === 'busy');
   const sevOf = x => x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low';
@@ -1668,7 +1686,7 @@ VIEWS.live = async (page) => {
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}
         <div class="live-actions">
-          ${x.signalable ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>⏸ Interrupt</button>
+          ${x.signalable ? `${canInterrupt ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>⏸ Interrupt</button>` : ''}
           ${x.agent === 'claude' ? '<button class="act" data-a="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>' : ''}
           <button class="act warn" data-a="close">⏹ Close session</button>
           <button class="act danger" data-a="kill">✖ Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}

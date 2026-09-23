@@ -2,6 +2,52 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## Cost figures corrected: one row per request, list prices fixed
+
+**Requests were counted more than once.** A streamed response arrives as several
+content blocks, and each block was written as its own row in the warehouse. A
+single request could land as two or three rows, so request counts — and every cost
+figure built on top of them — were roughly doubled across the dashboard.
+
+**The price table had two models wrong.** Opus 5 was priced at three times its
+published list price, and Fable was priced at a third of its list price. Both are
+now taken directly from the published rate cards.
+
+**The 1M-context surcharge no longer applies.** The long-context pricing tier that
+some providers charge above 200K tokens was being applied everywhere, including to
+usage that never qualified for it. It is now applied only where it actually holds.
+
+**Totals fall sharply as a result.** On the author's own data, correcting the double
+counting, the two mispriced models, and the surcharge together took total estimated
+spend from about $17,000 to about $3,400. If your numbers used to look implausibly
+high, this is why.
+
+**The warehouse rebuilds itself.** Existing installs carry the old, inflated numbers
+in their local database. The dashboard detects the schema change on first launch
+after upgrading and rebuilds the warehouse from your transcripts automatically, so
+you do not need to run `--rebuild` by hand.
+
+**Several features were removed because they could not be trusted or defended:**
+
+- **Model-switch back-test** (the "what if you'd used a cheaper model" comparison)
+  assumed a smaller model would have produced the same conversation, which is not
+  something a transcript can tell you. It is gone rather than left to mislead.
+- **Trial mode** hid the accuracy gaps above behind a shortened, cherry-picked demo
+  view; once the underlying numbers are honest, there is no reason to keep a
+  separate, less honest one around.
+- **Live model advice** suggested switching models mid-session using the same
+  unverifiable assumption as the back-test above, so it goes for the same reason.
+- **Waste "excess" on four rules** claimed a specific dollar amount was avoidable
+  under rules whose counterfactual (what would have happened instead) cannot be
+  computed from the data on hand; those four rules now report what happened, not
+  what a different choice would have cost.
+- **End-of-day forecast** projected a full day's spend from a partial day using a
+  method that broke down badly on short or unusual days, and cost more confidence
+  than it delivered.
+- **Scorecard grade** collapsed several independent metrics into a single letter
+  grade that implied a precision none of the underlying numbers actually have; the
+  individual metrics remain, without the invented letter on top.
+
 ## New first page: Context hygiene
 
 **What you'll notice.** The dashboard now opens on **Context hygiene** instead of the

@@ -344,10 +344,16 @@ class Handler(BaseHTTPRequestHandler):
         if route == "projects":
             return self.send_json(a.projects(f))
         if route == "sessions":
-            return self.send_json(a.sessions(f, _int(qs, "limit", 200), g("order", "cost")))
+            limit = _int(qs, "limit", 200, 1, 2000)
+            offset = _int(qs, "offset", 0, 0)
+            return self.send_json({"rows": a.sessions(f, limit, g("order", "cost"), offset),
+                                    "total": a.sessions_total(f)})
         if route == "prompts":
-            return self.send_json(a.prompts(f, _int(qs, "limit", 200), _int(qs, "offset", 0),
-                                            g("order", "cost"), g("q")))
+            limit = _int(qs, "limit", 200, 1, 2000)
+            offset = _int(qs, "offset", 0, 0)
+            search = g("q")
+            return self.send_json({"rows": a.prompts(f, limit, offset, g("order", "cost"), search),
+                                    "total": a.prompts_total(f, search)})
         if route == "leaderboards":
             return self.send_json(a.leaderboards(f, _int(qs, "n", 20)))
         if route == "categories":
@@ -385,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
             from .diagnose import Diagnoser
             return self.send_json(Diagnoser(a).breakdown(f))
         if route == "live":
-            from .procs import list_sessions, list_agent_sessions
+            from .procs import list_sessions, list_agent_sessions, ACTIONS
             want = [x for x in (g("agents", "") or "").split(",") if x]
             claude = [dict(s, agent="claude", signalable=True,
                            resume=f"claude --resume {s.get('session_id')}")
@@ -393,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
             others = list_agent_sessions(a.pricing, [x for x in want if x != "claude"] or None) \
                 if not want or any(x != "claude" for x in want) else []
             rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
-            return self.send_json({"sessions": rows})
+            return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
         if route == "cloud":
             from .cloud import report
             return self.send_json(report(a, _int(qs, "days", 30)))
@@ -536,11 +542,20 @@ def serve(port=8787, db=DB_PATH, background=None):
     print(f"  data      : {A.first_day} .. {A.last_day}")
     print("  Ctrl-C to stop.")
     # Off the main thread: a slow registry must never delay the dashboard.
-    threading.Thread(target=_notify_update, daemon=True).start()
+    from .update import disabled
+    if not disabled():
+        threading.Thread(target=_notify_update, daemon=True).start()
+    with open(PIDFILE, "w") as fh:
+        fh.write(str(os.getpid()))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nbye")
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":

@@ -18,11 +18,13 @@ HOME = os.path.expanduser("~")
 REG = os.path.join(HOME, ".claude", "sessions")
 PROJECTS = os.path.join(HOME, ".claude", "projects")
 
-ACTIONS = {
-    "interrupt": (getattr(signal, "CTRL_C_EVENT", signal.SIGINT) if os.name == "nt" else signal.SIGINT, "Interrupted the current turn (like pressing Esc/Ctrl-C)."),
-    "close": (signal.SIGTERM, "Asked the session to exit. Resume it later with `claude --resume`."),
-    "kill": (getattr(signal, "SIGKILL", signal.SIGTERM), "Force-killed the process."),
-}
+ACTIONS = {}
+if os.name != "nt":
+    # On Windows, CTRL_C_EVENT signals the whole console process group, not just
+    # the target process, so there is no safe way to interrupt just one session.
+    ACTIONS["interrupt"] = (signal.SIGINT, "Interrupted the current turn (like pressing Esc/Ctrl-C).")
+ACTIONS["close"] = (signal.SIGTERM, "Asked the session to exit. Resume it later with `claude --resume`.")
+ACTIONS["kill"] = (getattr(signal, "SIGKILL", signal.SIGTERM), "Force-killed the process.")
 
 
 def _ps():

@@ -474,7 +474,7 @@ class Analytics:
             r["budget_used_pct"] = round(100.0 * r["cost"] / b, 1) if b else None
         return rows
 
-    def sessions(self, f=None, limit=500, order="cost"):
+    def sessions(self, f=None, limit=500, order="cost", offset=0):
         w, p = self.where(f)
         ob = {"cost": "cost DESC", "tokens": "tokens DESC", "duration": "s.duration_s DESC",
               "recent": "s.started_at DESC", "prompts": "prompts DESC"}.get(order, "cost DESC")
@@ -491,7 +491,7 @@ class Analytics:
                  GROUP_CONCAT(DISTINCT r.model) models
           FROM requests r JOIN sessions s ON s.id = r.session_id
           JOIN projects pr ON pr.id = s.project_id
-          WHERE {w} GROUP BY s.id ORDER BY {ob} LIMIT ?""", p + [limit])
+          WHERE {w} GROUP BY s.id ORDER BY {ob} LIMIT ? OFFSET ?""", p + [limit, offset])
         for r in rows:
             r["cost_per_prompt"] = r["cost"] / r["prompts"] if r["prompts"] else None
             r["tokens_per_prompt"] = r["tokens"] / r["prompts"] if r["prompts"] else None
@@ -500,6 +500,22 @@ class Analytics:
             cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
             r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
         return rows
+
+    def sessions_total(self, f=None):
+        w, p = self.where(f)
+        return self.one(f"SELECT COUNT(DISTINCT s.id) n FROM requests r "
+                         f"JOIN sessions s ON s.id = r.session_id "
+                         f"JOIN projects pr ON pr.id = s.project_id WHERE {w}", p)["n"]
+
+    def prompts_total(self, f=None, search=None):
+        w, p = self.where(f)
+        extra, ep = "", []
+        if search:
+            extra = (" AND r.prompt_id IN (SELECT id FROM prompts pr WHERE pr.text LIKE ? "
+                     "OR pr.session_id LIKE ? OR pr.category LIKE ?)")
+            ep = [f"%{search}%"] * 3
+        return self.one(f"SELECT COUNT(DISTINCT r.prompt_id) n FROM requests r "
+                         f"WHERE {w}{extra} AND r.prompt_id IS NOT NULL", p + ep)["n"]
 
     def prompts(self, f=None, limit=300, offset=0, order="cost", search=None):
         w, p = self.where(f)

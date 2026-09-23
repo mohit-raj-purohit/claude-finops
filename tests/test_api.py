@@ -110,3 +110,17 @@ class TestHardening(ServerFixture):
             self.assertNotIn("boom", json.dumps(body))
         finally:
             finops_api.A.overview = orig
+
+
+class TestPagination(ServerFixture):
+    def test_sessions_reports_total_and_honours_offset(self):
+        code, body = self.get("/api/sessions?limit=1&offset=0")
+        self.assertEqual(code, 200)
+        self.assertIn("total", body)
+        self.assertLessEqual(len(body["rows"]), 1)
+
+    def test_prompts_reports_total_and_honours_offset(self):
+        code, body = self.get("/api/prompts?limit=1&offset=0")
+        self.assertEqual(code, 200)
+        self.assertIn("total", body)
+        self.assertLessEqual(len(body["rows"]), 1)
