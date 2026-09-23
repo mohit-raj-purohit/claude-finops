@@ -179,7 +179,10 @@ class Analytics:
             cl.append("r.model IN (%s)" % ",".join("?" * len(f["models"]))); p += f["models"]
         if f.get("projects"):
             cl.append("r.project_id IN (%s)" % ",".join("?" * len(f["projects"])))
-            p += [int(x) for x in f["projects"]]
+            try:
+                p += [int(x) for x in f["projects"]]
+            except (TypeError, ValueError):
+                raise ValueError("projects must be integers")
         if f.get("sessions"):
             cl.append("r.session_id IN (%s)" % ",".join("?" * len(f["sessions"]))); p += f["sessions"]
         if f.get("categories"):

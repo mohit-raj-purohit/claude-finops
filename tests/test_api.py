@@ -66,3 +66,34 @@ class TestRemovedRoutes(ServerFixture):
     def test_trial_gone(self):
         self.assertEqual(self.get("/api/trial")[0], 404)
         self.assertEqual(self.post("/api/trial/run", {})[0], 404)
+
+
+class TestHardening(ServerFixture):
+    def test_settings_rejects_cross_origin(self):
+        code, _ = self.post("/api/settings", {"budgets": {"monthly_usd": 5}},
+                            headers={"Origin": "http://evil.example"})
+        self.assertEqual(code, 403)
+
+    def test_settings_rejects_wrong_type(self):
+        code, body = self.post("/api/settings", {"budgets": "notadict"}, headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 400)
+
+    def test_bad_json_is_400(self):
+        code, _ = self.post("/api/settings", b"{bad", headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 400)
+
+    def test_bad_int_param_is_400(self):
+        self.assertEqual(self.get("/api/sessions?limit=abc")[0], 400)
+
+    def test_traceback_not_leaked(self):
+        code, body = self.get("/api/prompt/abc")
+        self.assertEqual(code, 400)
+        self.assertNotIn("Traceback", json.dumps(body))
+
+    def test_host_header_checked(self):
+        self.assertEqual(self.get("/api/overview", headers={"Host": "evil.example"})[0], 403)
+
+    def test_nosniff_header(self):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/overview")
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")

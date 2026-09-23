@@ -4,6 +4,7 @@ the warehouse contains your full prompt text.
 import json
 import io
 import csv
+import logging
 import os
 import sqlite3
 import sys
@@ -18,6 +19,28 @@ from .paths import DB_PATH, LOCAL_SETTINGS_PATH, LOGFILE, PIDFILE, WEB_DIR, ensu
 WEB = WEB_DIR
 _lock = threading.Lock()
 A = None
+log = logging.getLogger("finops")
+
+
+class BadRequest(Exception):
+    pass
+
+
+def _int(qs, key, default, lo=0, hi=1_000_000):
+    raw = qs.get(key, [None])[0]
+    if raw in (None, ""):
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        raise BadRequest(f"{key} must be an integer")
+    return max(lo, min(hi, v))
+
+
+SETTINGS_SHAPE = {
+    "budgets": dict, "limits": dict, "alert_thresholds_pct": list, "waste_rules": dict,
+    "anomaly": dict, "scorecard": dict, "account": dict, "billing_period": dict,
+}
 
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json",
@@ -92,6 +115,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -105,14 +130,27 @@ class Handler(BaseHTTPRequestHandler):
         if filename:
             self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
+    def _host_ok(self):
+        host = (self.headers.get("Host") or "").split(":")[0]
+        return host in ("127.0.0.1", "localhost", "[::1]", "::1")
+
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        payload = json.loads(self.rfile.read(n) or b"{}")
+        if not self._host_ok():
+            return self.send_json({"error": "forbidden host"}, 403)
         path = urlparse(self.path).path
         try:
+            try:
+                n = max(0, min(int(self.headers.get("Content-Length") or 0), 5_000_000))
+                payload = json.loads(self.rfile.read(n) or b"{}")
+                if not isinstance(payload, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json({"error": "body must be a JSON object"}, 400)
             if path.startswith("/api/live/"):
                 self._payload = payload
                 return self.session_action(path)
@@ -121,6 +159,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"ok": False, "error": "forbidden"}, 403)
                 return self.do_action(path[len("/api/do/"):].strip("/").split("/"), payload)
             if path == "/api/settings":
+                if not self._same_origin():
+                    return self.send_json({"ok": False, "error": "forbidden"}, 403)
+                for k, v in payload.items():
+                    if k not in SETTINGS_SHAPE:
+                        return self.send_json({"error": f"unknown key {k}"}, 400)
+                    if not isinstance(v, SETTINGS_SHAPE[k]):
+                        return self.send_json({"error": f"{k} must be a {SETTINGS_SHAPE[k].__name__}"}, 400)
+                bp = payload.get("billing_period") or {}
+                if "anchor_day" in bp and not (isinstance(bp["anchor_day"], int) and 1 <= bp["anchor_day"] <= 28):
+                    return self.send_json({"error": "anchor_day must be 1..28"}, 400)
                 # UI edits go to the gitignored per-machine file, never the shared defaults
                 local = {}
                 if os.path.exists(LOCAL_SETTINGS_PATH):
@@ -140,8 +188,11 @@ class Handler(BaseHTTPRequestHandler):
                     A.settings = cur
                 return self.send_json({"ok": True, "settings": cur})
             self.send_json({"error": "unknown endpoint"}, 404)
+        except BadRequest as e:
+            self.send_json({"error": str(e)}, 400)
         except Exception:
-            self.send_json({"error": traceback.format_exc()}, 500)
+            log.exception("POST %s failed", path)
+            self.send_json({"error": "internal error; see data/server.log"}, 500)
 
     def _same_origin(self):
         origin = self.headers.get("Origin")
@@ -233,6 +284,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(act(int(parts[2]), parts[3]))
 
     def do_GET(self):
+        if not self._host_ok():
+            return self.send_json({"error": "forbidden host"}, 403)
         u = urlparse(self.path)
         path, qs = u.path, parse_qs(u.query)
         try:
@@ -240,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api(path[5:], qs)
             rel = "index.html" if path in ("/", "") else path.lstrip("/")
             fp = os.path.normpath(os.path.join(WEB, rel))
-            if not fp.startswith(WEB) or not os.path.isfile(fp):
+            if os.path.commonpath([fp, WEB]) != WEB or not os.path.isfile(fp):
                 return self.send_text("not found", "text/plain", code=404)
             ext = os.path.splitext(fp)[1]
             with open(fp, "rb") as fh:
@@ -251,8 +304,11 @@ class Handler(BaseHTTPRequestHandler):
                                no_store=True)
         except BrokenPipeError:
             pass
+        except (BadRequest, ValueError) as e:
+            self.send_json({"error": str(e) or "bad request"}, 400)
         except Exception:
-            self.send_json({"error": traceback.format_exc()}, 500)
+            log.exception("GET %s failed", path)
+            self.send_json({"error": "internal error; see data/server.log"}, 500)
 
     def api(self, route, qs):
         if route == "update":
@@ -285,12 +341,12 @@ class Handler(BaseHTTPRequestHandler):
         if route == "projects":
             return self.send_json(a.projects(f))
         if route == "sessions":
-            return self.send_json(a.sessions(f, int(g("limit", 200)), g("order", "cost")))
+            return self.send_json(a.sessions(f, _int(qs, "limit", 200), g("order", "cost")))
         if route == "prompts":
-            return self.send_json(a.prompts(f, int(g("limit", 200)), int(g("offset", 0)),
+            return self.send_json(a.prompts(f, _int(qs, "limit", 200), _int(qs, "offset", 0),
                                             g("order", "cost"), g("q")))
         if route == "leaderboards":
-            return self.send_json(a.leaderboards(f, int(g("n", 20))))
+            return self.send_json(a.leaderboards(f, _int(qs, "n", 20)))
         if route == "categories":
             return self.send_json(a.categories(f))
         if route == "efficiency":
@@ -300,7 +356,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "ttl_replay":
             return self.send_json(a.ttl_replay(f))
         if route == "hygiene":
-            return self.send_json(a.hygiene(f, top=int(g("top", 12))))
+            return self.send_json(a.hygiene(f, top=_int(qs, "top", 12)))
         if route == "context":
             return self.send_json(a.context_analysis(f))
         if route == "waste":
@@ -337,13 +393,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"sessions": rows})
         if route == "cloud":
             from .cloud import report
-            return self.send_json(report(a, int(g("days", 30))))
+            return self.send_json(report(a, _int(qs, "days", 30)))
         if route == "developer":
             return self.send_json(a.developer(f))
         if route == "search":
-            return self.send_json(a.search(g("q", ""), int(g("limit", 40))))
+            return self.send_json(a.search(g("q", ""), _int(qs, "limit", 40)))
         if route.startswith("prompt/"):
-            return self.send_json(a.prompt_detail(int(route.split("/")[1])))
+            try:
+                pid = int(route.split("/")[1])
+            except ValueError:
+                raise BadRequest("id must be an integer")
+            return self.send_json(a.prompt_detail(pid))
         if route.startswith("session/"):
             return self.send_json(a.session_detail(route.split("/", 1)[1]))
         if route == "bundle":
@@ -451,6 +511,12 @@ def _notify_update():
 
 def serve(port=8787, db=DB_PATH, background=None):
     global A
+    ensure_dirs()
+    if not log.handlers:
+        fh = logging.FileHandler(LOGFILE)
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(fh)
+        log.setLevel(logging.ERROR)
     if not os.path.exists(db):
         raise SystemExit(f"No warehouse at {db}. Run:  python3 -m finops.etl")
     if background is None:

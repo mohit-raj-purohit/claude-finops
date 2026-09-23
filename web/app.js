@@ -2024,7 +2024,7 @@ VIEWS.budgets = async (page) => {
       </div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
   $('#savecfg', page).onclick = async () => {
     const v = id => { const x = $('#' + id, page).value.trim(); return x === '' ? null : +x; };
-    await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-FinOps-Action': '1'},
       body: JSON.stringify({
         budgets: {monthly_usd: v('b-monthly'), daily_usd: v('b-daily'), monthly_tokens: v('b-tokens')},
         limits: {monthly_cost_allowance_usd: v('l-cost'), monthly_token_allowance: v('l-tok'),
