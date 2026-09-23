@@ -115,7 +115,7 @@ carries one of four badges, and nothing is invented.
 | **Actual** | Read straight out of your transcripts: token counts, timestamps, models, effort, tool calls, file paths, session and project identity. |
 | **Estimated** | Derived. **Every dollar figure is estimated**, because Claude Code transcripts contain token counts but no billed amount. Cost = tokens × the price table in `config/pricing.json`. |
 | **Forecast** | Projected from your history. Assumes the recent pattern continues. |
-| **Recommendation** | A modelled opportunity. Savings estimates hold token usage constant on the alternative and do **not** model output quality. |
+| **Recommendation** | A recommendation grounded in an observed share of spend. No saving is estimated. |
 
 ### Deliberately not fabricated
 

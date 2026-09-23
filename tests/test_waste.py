@@ -34,10 +34,10 @@ def make_db(sessions):
                         billable, output, s["cost"], s["tool_calls"], f"hash{s['id']}"))
         db.execute("""INSERT INTO requests (uuid, session_id, project_id, prompt_id, ts, day, model, priced_as,
                       cache_read_tokens, cache_write_5m, cache_write_1h, cache_write_tokens,
-                      billable_tokens, est_cost_usd, is_sidechain)
-                      VALUES (?,?,1,?,'2026-01-01T00:00:00Z','2026-01-01',?,?,?,?,?,?,?,?,0)""",
+                      billable_tokens, est_cost_usd, is_sidechain, context_tokens)
+                      VALUES (?,?,1,?,'2026-01-01T00:00:00Z','2026-01-01',?,?,?,?,?,?,?,?,0,?)""",
                    (f"u{s['id']}", s["id"], pid, s["model"], s["model"], s["reads"], s["writes5"], s["writes1"], w,
-                    billable, s["cost"]))
+                    billable, s["cost"], s.get("ctx", 0)))
     db.commit(); db.close()
     return path
 
@@ -79,6 +79,19 @@ class TestNoCounterfactualExcess(unittest.TestCase):
         for kind, f in present.items():
             self.assertEqual(f["est_excess_usd"], 0.0, kind)
             self.assertIn("none claimed", f["excess_basis"], kind)
+
+
+class TestSessionHealthClaimsNoSaving(unittest.TestCase):
+    def test_no_avoidable_cost_field(self):
+        from finops.diagnose import Diagnoser
+        a = Analytics(make_db([{"id": "s", "reads": 300_000, "writes5": 0, "writes1": 0,
+                                "cost": 5.0, "model": "claude-opus-5", "ctx": 300_000}]))
+        rows = Diagnoser(a).session_health({})
+        self.assertGreaterEqual(len(rows), 1)
+        for r in rows:
+            self.assertNotIn("avoidable_cost", r)
+            self.assertNotIn("avoidable_tokens", r)
+            self.assertIn("tokens_above_100k", r)
 
 
 if __name__ == "__main__":

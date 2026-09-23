@@ -558,12 +558,8 @@ VIEWS.overview = async (page) => {
       ${card('Optimization opportunities', `<div class="stack">${
         b.recommendations.recommendations.length
         ? b.recommendations.recommendations.slice(0, 5).map(r => `<div class="item">
-            <div class="hd">${esc(r.title)}<span class="spacer"></span>
-              <span class="badge rec">${r.confidence} confidence</span></div>
-            <div class="mt"><span>Actual ${fmtUSD(r.actual_cost_usd)}</span>
-              <span>Est. alternative ${fmtUSD(r.estimated_alternative_cost_usd)}</span>
-              <span style="color:var(--good-ink);font-weight:600">
-                Est. saving ${fmtUSD(r.estimated_savings_usd)} (${r.estimated_savings_pct}%)</span></div>
+            <div class="hd">${esc(r.title)}</div>
+            <div class="mt"><span>Actual ${fmtUSD(r.actual_cost_usd)}</span></div>
             <div class="note">${esc(r.caveat)}</div></div>`).join('')
         : '<div class="empty">No recommendation met the evidence threshold</div>'}</div>`,
         {badge: BADGE.recommendation})}
@@ -719,8 +715,6 @@ VIEWS.advisor = async (page) => {
         ${r.detail ? `<div class="dt">${esc(r.detail)}</div>` : ''}
         <div class="grid g3" style="gap:8px;margin:4px 0">
           ${kpi('Spend involved', fmtUSD(r.actual_cost_usd), null, {small: 1, badge: BADGE.estimated})}
-          ${r.estimated_savings_usd != null ? kpi('Est. alternative', fmtUSD(r.estimated_alternative_cost_usd), null, {small: 1})
-            + kpi('Est. potential saving', fmtUSD(r.estimated_savings_usd), `${r.estimated_savings_pct}%`, {small: 1, badge: BADGE.recommendation}) : ''}
         </div>
         ${r.alternatives && r.alternatives.length ? `<div class="dt" style="margin-top:6px">
           <b>Your options${r.agent ? ` within ${esc(r.agent)}` : ''}</b> — pick the trade-off you want:</div>
@@ -729,8 +723,6 @@ VIEWS.advisor = async (page) => {
               ? ' <span class="badge rec">suggested</span>' : '')},
             {h: 'Tier', f: a => esc(a.tier)},
             {h: 'Est. cost', num: 1, f: a => fmtUSD(a.estimated_cost_usd)},
-            {h: 'Est. saving', num: 1, f: a =>
-              `${fmtUSD(a.estimated_savings_usd)} <span class="note">(${a.estimated_savings_pct}%)</span>`},
           ], r.alternatives)}` : ''}
         <div class="note">${esc(r.caveat)}</div></div>`).join('')}</div>`
       : '<div class="empty">No recommendation met the evidence threshold for this range</div>',
@@ -1805,10 +1797,10 @@ VIEWS.diagnose = async (page) => {
         <div class="hd"><a href="#" class="sess-link" data-sess="${esc(x.session_id)}">${esc(x.title || shortId(x.session_id))}</a>
           <span class="note">· ${esc(x.project)}</span><span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">peak ${fmtNum(x.peak)} · ${fmtUSD(x.cost)} ·
-            ~${fmtUSD(x.avoidable_cost)} above a 100K baseline</span></div>
+            ~${fmtNum(x.tokens_above_100k)} tokens re-read above 100K (not a saving)</span></div>
         ${x.fixes.map(t => `<div class="dt">• ${esc(t)}</div>`).join('')}${pb(x.playbook)}</div>`).join('')
       || '<div class="empty">No session passed 150K context</div>'}</div>`,
-      {badge: BADGE.recommendation, hint: '"Above baseline" = context re-read beyond 100K, at cache-read price (est.)'})}
+      {badge: BADGE.recommendation, hint: '"Above baseline" = context re-read beyond 100K'})}
     <div id="dx-mem"></div>${card(`Add to ${md}${isCl ? ' / memory' : ''} (from your past prompts)`, `<div class="stack">${d.memory_suggestions.map(x => `
       <div class="item sev-${x.kind === 'security' ? 'high' : x.already_saved ? 'low' : 'medium'}">
         <div class="hd">${x.kind === 'security' ? '🔐' : x.kind === 'template' ? '⚙' : x.kind === 'reference' ? '🔗' : '📝'}
@@ -2220,8 +2212,8 @@ VIEWS.exports = async (page) => {
           <div class="dt">Projected from history. Assumes recent patterns continue; it is not a
           commitment or a quote.</div></div>
         <div class="item"><div class="hd">${BADGE.recommendation} Recommendation</div>
-          <div class="dt">Modelled opportunity. Savings estimates hold token usage constant on the
-          alternative and do not model output quality.</div></div>
+          <div class="dt">A recommendation grounded in an observed share of spend. No saving is
+          estimated.</div></div>
       </div>
       <h3 style="font-size:12.5px;margin:14px 0 6px">Deliberately not fabricated</h3>
       <dl class="kv">
@@ -2830,13 +2822,13 @@ const TOURS = {
     {el: 'card:Top 10 most expensive prompts', t: 'Most expensive prompts', see: 'The ten single prompts that cost the most.', get: 'The requests worth rewriting or splitting.', act: 'Click a prompt to see every step it triggered.'},
     {el: 'card:Most expensive sessions', t: 'Most expensive sessions', see: 'The longest-running, highest-cost sessions.', get: 'The marathon sessions where context kept being re-read.', act: 'Click one to see where it grew.'},
     {el: 'card:Waste detection', t: 'Waste at a glance', see: 'A summary of the patterns that burn tokens for nothing.', get: 'An estimate of what you could avoid.', act: 'Open <b>Waste detection</b> for the full findings and evidence.'},
-    {el: 'card:Optimization opportunities', t: 'Opportunities', see: 'The top ranked changes with estimated savings.', get: 'What to fix first.', act: 'Open <b>What should I do?</b> for the full list with ready-made prompts.'},
+    {el: 'card:Optimization opportunities', t: 'Opportunities', see: 'The top ranked changes, ranked by spend involved.', get: 'What to fix first.', act: 'Open <b>What should I do?</b> for the full list with ready-made prompts.'},
     {el: 'card:Forecast', t: 'Forecast', see: 'Projected spend to the end of the billing period.', get: 'An early read on whether you\'ll go over.', act: 'Open <b>Forecast</b> for the optimistic and pessimistic scenarios.'},
     {el: 'card:FinOps score', t: 'FinOps score', see: 'Your overall score for cache use, model mix, waste and budget.', get: 'One number for how efficiently you work.', act: 'Open <b>FinOps scorecard</b> to see what each component grades.'}],
   advisor: [
-    {el: 'card:Biggest optimization opportunity', t: 'Start here', see: 'The single change with the largest estimated saving, with the evidence behind it.', get: 'The best use of your next ten minutes.', act: 'Read the estimate, then apply the change.'},
+    {el: 'card:Biggest optimization opportunity', t: 'Start here', see: 'The change involving the most spend, with the evidence behind it.', get: 'The best use of your next ten minutes.', act: 'Read the estimate, then apply the change.'},
     {el: 'card:What is going well', t: 'Strengths & gaps', see: 'What your habits already do well, and the items that need attention.', get: 'Confirmation of what to keep doing, and where you lose money.', act: 'Work down the <b>Needs attention</b> list.'},
-    {el: 'card:All recommendations', t: 'All recommendations', see: 'Every recommendation, ranked by estimated saving, each with its reasoning.', get: 'A prioritised to-do list built from your own usage.', act: 'Copy a recommendation\'s prompt straight into your agent.'},
+    {el: 'card:All recommendations', t: 'All recommendations', see: 'Every recommendation, ranked by spend involved, each with its reasoning.', get: 'A prioritised to-do list built from your own usage.', act: 'Copy a recommendation\'s prompt straight into your agent.'},
     {el: 'card:Anomalies to inspect', t: 'Anomalies', see: 'Days and sessions that spent far more than your normal.', get: 'Surprises caught before they repeat.', act: 'Click one to see what happened that day.'}],
   agents: [
     {el: 'kpis', t: 'Agent totals', see: 'One tile per agent with its usage for the current filters.', get: 'How spend splits across Claude Code, Codex, Gemini CLI and Cursor.', act: 'Use the agent chips in the header to focus on one.'},
@@ -2851,7 +2843,7 @@ const TOURS = {
     {el: 'card:AI FinOps Score', t: 'Your score', see: 'The overall score with a component breakdown: cache use, model mix, waste and budget.', get: 'Where your habits are strong and where they cost money.', act: 'Hover a component to see how it is calculated.'},
     {el: 'card:✅ What is good', t: 'What is good', see: 'The components you already score well on.', get: 'The habits worth keeping.', act: 'Keep these when you change your setup.'},
     {el: 'card:⚠️ Needs attention', t: 'Needs attention', see: 'The components dragging the score down.', get: 'A short list of what to fix.', act: 'Start at the top: it carries the most weight.'},
-    {el: 'card:🎯 Biggest opportunity', t: 'Biggest opportunity', see: 'The single change that would move the score most.', get: 'One concrete action with an estimated saving.', act: 'Apply it, then Sync and re-check the score.'}],
+    {el: 'card:🎯 Biggest opportunity', t: 'Biggest opportunity', see: 'The single change that would move the score most.', get: 'One concrete action grounded in observed spend.', act: 'Apply it, then Sync and re-check the score.'}],
   usage: [
     {el: 'kpis', t: 'Token breakdown', see: 'Total, input, output, thinking, cache read and cache write tokens, plus requests, sessions, prompts and active days.', get: 'Exactly which kind of token you spend on. Cache read is cheap; uncached input is not.', act: 'Compare cache read against input: a low ratio means context is being re-sent, not reused.'},
     {el: 'card0', t: 'Usage over time', see: 'Tokens or cost per day (or per hour on short ranges).', get: 'Spikes and quiet periods at a glance.', act: 'Hover a bar for the day\'s numbers; narrow the range to zoom in.'},
@@ -2893,7 +2885,7 @@ const TOURS = {
   categories: [
     {el: 'card:Cost by activity', t: 'Cost by activity', see: 'Spend per kind of work: coding, debugging, docs, review and so on.', get: 'Which kinds of work cost most.', act: 'Cheap, repetitive categories are the ones to move to a smaller model.'},
     {el: 'card:Prompts by activity', t: 'Prompts by activity', see: 'How many prompts fall into each category.', get: 'Volume next to cost: a category can be frequent but cheap.', act: 'Compare this with the cost chart to find the expensive outliers.'},
-    {el: 'card:Activity breakdown', t: 'Activity breakdown', see: 'Per category: prompts, tokens, cost and the model used.', get: 'Concrete evidence for routing work to a cheaper model.', act: 'Then open <b>Model switch</b> to see the saving.'}],
+    {el: 'card:Activity breakdown', t: 'Activity breakdown', see: 'Per category: prompts, tokens, cost and the model used.', get: 'Concrete evidence for routing work to a cheaper model.', act: 'Then open <b>Model switch</b> to see the options.'}],
   developer: [
     {el: 'card:Cost per repository', t: 'Cost per repository', see: 'Spend per repo checked out on this machine.', get: 'Which codebase is expensive to work in.', act: 'Click a repo to filter the dashboards.'},
     {el: 'card:Tool usage', t: 'Tool usage', see: 'Each tool the agent called and how often.', get: 'Tools with huge call counts: they fill context and cost money.', act: 'Big Read or Grep counts? Add project memory so the agent re-reads less.'},
@@ -2926,7 +2918,7 @@ const TOURS = {
   waste: [
     {el: 'kpis', t: 'Waste headlines', see: 'Estimated excess, exposed spend, and how many prompts, sessions and rules are involved.', get: 'An honest estimate of avoidable spend.', act: '<b>Exposed</b> is what flagged work cost in total; <b>excess</b> is how much more than a fair baseline.'},
     {el: 'card:🔴 High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},
-    {el: 'card:🟡 Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of savings.', act: 'Batch these into one config change.'},
+    {el: 'card:🟡 Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of opportunities.', act: 'Batch these into one config change.'},
     {el: 'card:⚪ Low-priority observations', t: 'Low-priority observations', see: 'Small findings, kept for completeness.', get: 'Context for the numbers above.', act: 'Skim them; act only if one matches a habit you want to change.'}],
   freemodels: [
     {el: 'card:How to use and test a free model', t: 'How it works', see: 'How to plug a local or free cloud model into Claude Code, and how to test it.', get: 'Zero-cost options for simple or private work.', act: 'Read the RAM guidance before you pick a model.'},
@@ -2940,9 +2932,9 @@ const TOURS = {
     {el: 'card:MCP servers for work you repeat', t: 'MCP suggestions', see: 'Servers suggested from the work your prompts repeat.', get: 'Fewer manual steps and smaller prompts.', act: 'Add one, then check its context cost in <b>Who used the tokens</b>.'},
     {el: 'card:Skills from what you repeat', t: 'Skill suggestions', see: 'Skills drafted from the instructions you keep retyping.', get: 'Repetition moved out of your prompts.', act: 'Create a suggested skill in one click.'}],
   recommendations: [
-    {el: 'card:Biggest optimization opportunity', t: 'Start here', see: 'The change with the largest estimated saving.', get: 'The best single thing to do next.', act: 'Apply it, then Sync and re-check.'},
+    {el: 'card:Biggest optimization opportunity', t: 'Start here', see: 'The change involving the most spend, with the evidence behind it.', get: 'The best single thing to do next.', act: 'Apply it, then Sync and re-check.'},
     {el: 'card:What is going well', t: 'Strengths & gaps', see: 'What already works, and what needs attention.', get: 'What to keep and what to change.', act: 'Work down the <b>Needs attention</b> list.'},
-    {el: 'card:All recommendations', t: 'All recommendations', see: 'Every recommendation with its estimated saving and reasoning.', get: 'A prioritised list of what to change.', act: 'Start with the highest saving.'},
+    {el: 'card:All recommendations', t: 'All recommendations', see: 'Every recommendation with its spend involved and reasoning.', get: 'A prioritised list of what to change.', act: 'Start with the highest spend involved.'},
     {el: 'card:Anomalies to inspect', t: 'Anomalies', see: 'Unusual days and sessions worth a look.', get: 'Problems caught before they become habits.', act: 'Click one to see what happened.'}],
   anomalies: [
     {el: 'card:Daily spend with anomalies highlighted', t: 'Spend with anomalies', see: 'Daily spend with the outlier days marked against your normal band.', get: 'How far outside normal each day was.', act: 'Hover a highlighted day for its numbers.'},

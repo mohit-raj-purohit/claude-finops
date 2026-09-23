@@ -29,7 +29,7 @@ def build_report(a, f):
     md = a.models(f); pj = a.projects(f); wt = a.waste(f)
     rc = a.recommendations(f); ad = a.advisor(f); ef = a.efficiency(f)
     cat = a.categories(f); bp = ov["billing_period"]
-    lb = a.leaderboards(f, 10)
+    lb = a.leaderboards(f, 10); hy = a.hygiene(f)
 
     def table(headers, rows):
         h = "".join(f"<th>{html.escape(x)}</th>" for x in headers)
@@ -82,33 +82,40 @@ transcripts contain no billed amounts, so no figure here is an actual invoice va
   <div class="kpi"><div class="l">Avg / active day</div><div class="v">{_f(ov['avg_cost_per_active_day'])}</div></div>
 </div>
 
-<h2>2. FinOps scorecard</h2>
+<h2>2. Context hygiene</h2>
+{table(["Threshold", "Requests", "Cost", "Sessions", "Cost after first cross"],
+  [(f"{int(thr):,}", _f(v['requests'],'int'), _f(v['cost_usd']), _f(v['sessions'],'int'),
+    _f(v['cost_after_first_cross_usd'])) for thr, v in hy['above'].items()])}
+<div class="note">"Cost after first cross" is the spend on requests made once a session first passed the
+threshold in that column &mdash; not a saving, an observation of where spend concentrates.</div>
+
+<h2>3. FinOps scorecard</h2>
 <p><span class="score">{sc['score']}</span> / 100 &nbsp; grade <b>{sc['grade']}</b></p>
 {table(["Dimension","Score","Detail"], [(d['name'], d['score'], html.escape(d['detail'])) for d in sc['dimensions']])}
 <b>What is good</b><ul>{''.join(f'<li>{html.escape(x)}</li>' for x in sc['what_is_good']) or '<li>&mdash;</li>'}</ul>
 <b>Needs attention</b><ul>{''.join(f'<li>{html.escape(x)}</li>' for x in sc['needs_attention']) or '<li>&mdash;</li>'}</ul>
 
-<h2>3. What should I do? <span class="badge">Advisor</span></h2>
+<h2>4. What should I do? <span class="badge">Advisor</span></h2>
 <ol>{''.join(f"<li><b>{html.escape(x['text'])}</b><br><span style='color:#5b6570'>{html.escape(x['detail'])}</span></li>" for x in ad['actions']) or '<li>No actions.</li>'}</ol>
 
-<h2>4. Model breakdown <span class="badge est">Estimated cost</span></h2>
+<h2>5. Model breakdown <span class="badge est">Estimated cost</span></h2>
 {table(["Model","Requests","Input","Output","Cache read","Cache write","Billable tokens","Est. cost","% cost"],
   [(html.escape(r['display_name']), _f(r['requests'],'int'), _f(r['input_tokens'],'int'),
     _f(r['output_tokens'],'int'), _f(r['cache_read_tokens'],'int'), _f(r['cache_write_tokens'],'int'),
     _f(r['tokens'],'int'), _f(r['cost']), _f(r['cost_pct'],'pct')) for r in md['rows']])}
 
-<h2>5. Project breakdown</h2>
+<h2>6. Project breakdown</h2>
 {table(["Project","Sessions","Prompts","Requests","Tokens","Est. cost","Avg / session"],
   [(html.escape(r['name']), _f(r['sessions'],'int'), _f(r['prompts'],'int'), _f(r['requests'],'int'),
     _f(r['tokens'],'int'), _f(r['cost']), _f(r['avg_cost_per_session'])) for r in pj[:20]])}
 
-<h2>6. Spend by activity</h2>
+<h2>7. Spend by activity</h2>
 {table(["Category","Prompts","Tokens","Est. cost","% of spend"],
   [(html.escape(r['category']), _f(r['prompts'],'int'), _f(r['tokens'],'int'), _f(r['cost']),
     _f(r['cost_pct'],'pct')) for r in cat['rows']])}
 <div class="note">{html.escape(cat['note'])}</div>
 
-<h2>7. Efficiency &amp; caching</h2>
+<h2>8. Efficiency &amp; caching</h2>
 {table(["Metric","Value"], [
   ("Output share of billable tokens", f"{ef['output_ratio']*100:.2f}%"),
   ("Output per prompt-side token", f"{ef['output_per_input']*100:.2f}%"),
@@ -123,13 +130,13 @@ transcripts contain no billed amounts, so no figure here is an actual invoice va
   ("Uncached counterfactual — not a saving", f"{_f(ef['cache']['uncached_counterfactual_delta_usd'])} ({ef['cache']['uncached_counterfactual_pct']}%)"),
 ])}
 
-<h2>8. Top 10 most expensive prompts <span class="badge est">Estimated</span></h2>
+<h2>9. Top 10 most expensive prompts <span class="badge est">Estimated</span></h2>
 {table(["#","Prompt","Model","Tokens","Est. cost","Date"],
   [(i, html.escape((r['preview'] or '')[:120]), html.escape((r['models'] or '')[:40]),
     _f(r['ptokens'],'int'), _f(r['pcost']), r['day'])
    for i, r in enumerate(lb['most_expensive'], 1)])}
 
-<h2>9. Waste detection <span class="badge est">Estimated exposure</span></h2>
+<h2>10. Waste detection <span class="badge est">Estimated exposure</span></h2>
 <p><b>Estimated excess: {_f(wt['estimated_excess_usd'])} ({wt['excess_pct']}%)</b> of
 {_f(wt['total_cost_usd'])} — how much more the flagged work cost than a reasonable baseline.
 It sits inside {_f(wt['exposed_cost_usd'])} ({wt['exposed_pct']}%) of exposed spend across
@@ -140,15 +147,13 @@ It sits inside {_f(wt['exposed_cost_usd'])} ({wt['exposed_pct']}%) of exposed sp
    for x in wt['findings']])}
 <div class="note">{html.escape(wt['note'])}</div>
 
-<h2>10. Optimization recommendations <span class="badge rec">Recommendation</span></h2>
-{table(["Recommendation","Actual cost","Est. alternative","Est. saving","Confidence"],
-  [(html.escape(r['title']), _f(r.get('actual_cost_usd')), _f(r.get('estimated_alternative_cost_usd')),
-    f"{_f(r.get('estimated_savings_usd'))} ({r.get('estimated_savings_pct')}%)",
-    r.get('confidence','')) for r in rc['recommendations']]) if rc['recommendations'] else '<p>No recommendation met the evidence threshold.</p>'}
-<div class="note">Estimated savings assume identical token usage on the alternative and do not model
-output quality. They are opportunities to evaluate, not booked savings.</div>
+<h2>11. Optimization recommendations <span class="badge rec">Recommendation</span></h2>
+{table(["Recommendation","Spend involved","Basis"],
+  [(html.escape(r['title']), _f(r.get('actual_cost_usd')), html.escape(r.get('basis','')))
+   for r in rc['recommendations']]) if rc['recommendations'] else '<p>No recommendation met the evidence threshold.</p>'}
+<div class="note">Observations only. No saving is estimated: what an alternative would have cost is a counterfactual.</div>
 
-<h2>11. Forecast <span class="badge fc">Forecast</span></h2>"""]
+<h2>12. Forecast <span class="badge fc">Forecast</span></h2>"""]
 
     if fc.get("available"):
         parts.append(f"""<p>Method: {html.escape(fc['method'])} over {fc['sample_days']} days.
@@ -165,7 +170,7 @@ Period to date {_f(fc['period_used'])} with {fc['remaining_days']} days remainin
         parts.append("<p>Not enough data in range to forecast.</p>")
 
     parts.append(f"""
-<h2>12. Data provenance</h2>
+<h2>13. Data provenance</h2>
 {table(["Field","Value"], [
   ("Source", html.escape(str(a.meta.get('source_dir')))),
   ("Transcript files parsed", html.escape(str(a.meta.get('transcript_files')))),

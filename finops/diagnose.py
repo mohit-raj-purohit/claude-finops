@@ -189,7 +189,6 @@ class Diagnoser:
         t = drv["total"]
         if not t.get("n"):
             return recs
-        cr_rate_cost = a.pricing.estimate(self._main_model(f), cache_read=t["cr"] or 0)
 
         if d.get("context_reread", {}).get("share_pct", 0) > 60:
             recs.append({
@@ -694,7 +693,6 @@ class Diagnoser:
             FROM requests r JOIN sessions s ON s.id=r.session_id JOIN projects pj ON pj.id=r.project_id
             WHERE {w} GROUP BY r.session_id HAVING peak >= ? ORDER BY over_base DESC LIMIT ?""",
                    p + [self.CTX_WARN, limit])
-        rate = a.pricing.rates(self._main_model(f)).get("cache_read", 0.3) / 1e6
         compacts = {r["session_id"]: r["n"] for r in a.q(
             "SELECT session_id, COUNT(*) n FROM prompts WHERE source='slash:/compact' GROUP BY 1")}
         for r in rows:
@@ -704,8 +702,7 @@ class Diagnoser:
             # NULL used to take the whole diagnose page down with a 500.
             over = r["over_base"] or 0
             r["over_base"] = over
-            r["avoidable_tokens"] = over
-            r["avoidable_cost"] = over * rate
+            r["tokens_above_100k"] = over     # re-read above a 100K baseline; not a saving
             if not compacts.get(sid):
                 fixes.append(f"Never compacted. {r['heavy_steps']:,} steps ran above "
                              f"{self.CTX_WARN // 1000}K context; /compact (or /clear between the "
