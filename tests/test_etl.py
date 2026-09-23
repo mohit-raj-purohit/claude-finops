@@ -148,6 +148,55 @@ class TestPromptFiltering(unittest.TestCase):
         self.assertEqual(len(hashes[0]), 16)
 
 
+class TestSkillMetaBeforeFlush(unittest.TestCase):
+    def test_skill_body_arriving_before_group_flush_is_captured(self):
+        body = "x" * 3500
+        rows = [
+            user("2026-01-01T00:00:00Z", "run the skill"),
+            assistant("2026-01-01T00:00:05Z", "req-1", "msg-1",
+                      {"type": "tool_use", "id": "sk1", "name": "Skill", "input": {"skill": "grill-me"}}),
+            {"type": "user", "uuid": "u-meta", "timestamp": "2026-01-01T00:00:06Z",
+             "sessionId": "s1", "cwd": "/repo", "isMeta": True,
+             "message": {"role": "user", "content": body}},
+            assistant("2026-01-01T00:00:07Z", "req-1", "msg-1", {"type": "text", "text": "done"},
+                      stop_reason="end_turn"),
+            user("2026-01-01T00:00:10Z", "next prompt"),
+        ]
+        con = build(rows)
+        n = con.execute("SELECT result_chars FROM tool_calls WHERE tool_use_id='sk1'").fetchone()[0]
+        self.assertEqual(n, 3500)
+
+
+class TestCrossSessionDedup(unittest.TestCase):
+    def test_shared_request_id_across_two_sessions_makes_one_request_row(self):
+        src = tempfile.mkdtemp(prefix="finops-src-")
+        proj = os.path.join(src, "-repo")
+        os.makedirs(proj)
+        rows1 = [
+            user("2026-01-01T00:00:00Z", "fix the bug"),
+            assistant("2026-01-01T00:00:05Z", "req-shared", "msg-1", {"type": "text", "text": "a"},
+                      stop_reason="end_turn"),
+        ]
+        rows2 = [
+            user("2026-01-01T00:00:00Z", "fix the bug"),
+            assistant("2026-01-01T00:00:05Z", "req-shared", "msg-1", {"type": "text", "text": "a"},
+                      stop_reason="end_turn"),
+        ]
+        with open(os.path.join(proj, "s1.jsonl"), "w") as fh:
+            for r in rows1:
+                r = dict(r); r["sessionId"] = "s1"
+                fh.write(json.dumps(r) + "\n")
+        with open(os.path.join(proj, "s2.jsonl"), "w") as fh:
+            for r in rows2:
+                r = dict(r); r["sessionId"] = "s2"
+                fh.write(json.dumps(r) + "\n")
+        db = tempfile.mktemp(suffix=".db", prefix="finops-test-")
+        Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+        con = sqlite3.connect(db)
+        n = con.execute("SELECT COUNT(*) FROM requests WHERE request_id='req-shared'").fetchone()[0]
+        self.assertEqual(n, 1)
+
+
 class TestSchemaVersion(unittest.TestCase):
     def test_fresh_build_records_version_and_needs_no_rebuild(self):
         from finops.etl import SCHEMA_VERSION, needs_rebuild

@@ -19,7 +19,7 @@ from .pricing import Pricing
 from .paths import ROOT, DB_PATH
 DEFAULT_SOURCE = os.path.expanduser("~/.claude/projects")
 
-SCHEMA_VERSION = 2   # 2: one row per request, list prices corrected, injected lines skipped
+SCHEMA_VERSION = 3   # 3: cross-session request_id dedup (resumed sessions copy history)
 
 
 def needs_rebuild(db_path):
@@ -212,6 +212,8 @@ class Loader:
         self.agent = None
         self.pending_skill = None
         self.pending_results = {}
+        self.group = None
+        self.seen_request_ids = set()   # dedup request_id across sessions (resumed sessions)
 
     # ---------- infrastructure ----------
     def build(self, verbose=True):
@@ -310,6 +312,7 @@ class Loader:
         self.agent = agent
         self.pending_skill = None
         self.pending_results = {}     # tool_use_id -> result chars, applied once the row exists
+        self.group = None
         cwd = next((r.get("cwd") for r in rows if r.get("cwd")), None)
         pid = self.project_id(slug, cwd)
         title = next((r.get("aiTitle") for r in rows if r.get("type") == "ai-title"), None)
@@ -324,14 +327,13 @@ class Loader:
 
         cur_prompt = None
         prev_time = None
-        group = None          # {"key", "lines": [...], "prev_time", "prompt_id"}
+        self.group = None          # {"key", "lines": [...], "prev_time", "prompt_id"}
 
         def flush():
-            nonlocal group
-            if group:
-                self.insert_request(group["lines"], session_id, pid, group["prompt_id"],
-                                    group["prev_time"])
-                group = None
+            if self.group:
+                self.insert_request(self.group["lines"], session_id, pid, self.group["prompt_id"],
+                                    self.group["prev_time"])
+                self.group = None
 
         try:
             for r in rows:
@@ -365,12 +367,13 @@ class Loader:
                     if agent and cur_prompt is None:
                         cur_prompt = self.parent_prompt(session_id, r.get("timestamp"))
                     key = (r.get("requestId") or (r.get("message") or {}).get("id") or r.get("uuid"))
-                    if group and group["key"] == key:
-                        group["lines"].append(r)
+                    if self.group and self.group["key"] == key:
+                        self.group["lines"].append(r)
                     else:
                         flush()
-                        group = {"key": key, "lines": [r], "prev_time": prev_time,
-                                 "prompt_id": cur_prompt}
+                        self.pending_skill = None   # never apply a stale skill id to a new group
+                        self.group = {"key": key, "lines": [r], "prev_time": prev_time,
+                                      "prompt_id": cur_prompt}
                     prev_time = t or prev_time
 
                 elif typ in ("attachment", "system"):
@@ -391,11 +394,25 @@ class Loader:
     def record_results(self, r, msg):
         """Size of tool results, and of skill bodies injected as meta messages."""
         content = msg.get("content")
-        if r.get("isMeta") and getattr(self, "pending_skill", None):
-            self.db.execute("UPDATE tool_calls SET result_chars=result_chars+? WHERE id=?",
-                            (len(_text_of(content)), self.pending_skill))
-            self.pending_skill = None
-            return
+        if r.get("isMeta"):
+            if self.group:
+                # the Skill's body can arrive before the group holding its tool_use
+                # flushes; stash it under that block's tool_use_id so insert_request
+                # applies it once the tool_calls row exists.
+                tool_use_id = None
+                for ln in self.group["lines"]:
+                    for c in ((ln.get("message") or {}).get("content") or []):
+                        if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Skill":
+                            tool_use_id = c.get("id")
+                if tool_use_id:
+                    n = len(_text_of(content))
+                    self.pending_results[tool_use_id] = self.pending_results.get(tool_use_id, 0) + n
+                return
+            if getattr(self, "pending_skill", None):
+                self.db.execute("UPDATE tool_calls SET result_chars=result_chars+? WHERE id=?",
+                                (len(_text_of(content)), self.pending_skill))
+                self.pending_skill = None
+                return
         if not isinstance(content, list):
             return
         for c in content:
@@ -462,6 +479,14 @@ class Loader:
         if billable == 0 and not tools:
             return
 
+        request_id = first.get("requestId") or msg.get("id")
+        if request_id and request_id in self.seen_request_ids:
+            # resumed sessions copy earlier history verbatim, including request_ids
+            # already inserted from another session; keep only the first occurrence.
+            return
+        if request_id:
+            self.seen_request_ids.add(request_id)
+
         ts = first.get("timestamp")               # the request started at its first line
         t = _ts(ts)
         latency = None
@@ -479,7 +504,7 @@ class Loader:
             " priced_as, unpriced_long_context, latency_ms,"
             " tool_call_count, is_sidechain, agent_id, agent_type, agent_desc)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (first.get("uuid"), first.get("requestId") or msg.get("id"), session_id, pid,
+            (first.get("uuid"), request_id, session_id, pid,
              prompt_id, ts, (ts or "")[:10], (t.hour if t else None), model,
              1 if self.pricing.is_known(model) else 0, first.get("effort"),
              u.get("service_tier"), msg.get("stop_reason"), inp, out, think, cr,
