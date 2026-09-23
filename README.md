@@ -288,45 +288,6 @@ place for you to delete once you are happy.
 
 ---
 
-## Running the trial, not just recommending one
-
-The evidence table ends by admitting its own limit: your prompts were never
-randomly assigned to models, so a category can simply have been easier on one of
-them. **Try it →** on any row closes that gap. It pulls prompts you actually
-typed in that category, re-runs them headlessly on the candidate model, and
-prices the result against what they cost the first time.
-
-Nothing runs on its own: a trial spends real money and drives a real agent, so
-it takes two clicks and shows the first-time bill before you commit. Runs happen
-in a scratch directory, and headless Claude cannot ask for permission — so tools
-that need it are denied and counted, and a task that needs your repo will look
-smaller than it is. The verdict says which way it went: *confirmed*, *smaller
-than advertised*, or *history overstated it*.
-
----
-
-## Live model advice
-
-The back-test tells you what to use next time. These tell you mid-session, while
-you can still act on it:
-
-```
-claude-finops --advise               what every running session should switch to
-claude-finops --install-hook         suggest a cheaper model as you send each prompt
-claude-finops --install-statusline   model, context pressure and advice in your statusline
-```
-
-The hook and statusline read the same evidence as the dashboard, cached for an
-hour, and stay quiet unless your own history shows a cheaper model doing that
-category of work without taking more turns. Neither can block or slow a prompt:
-they fail silent and always exit 0. Undo with `--uninstall-hook` /
-`--uninstall-statusline`; your `~/.claude/settings.json` is backed up first.
-
-The Running sessions view shows the same line per live session, with the
-`/model` command ready to copy.
-
----
-
 ## Privacy
 
 `~/.claude-finops/data/finops.db` and the prompt/CSV exports contain **your full prompt text**. The

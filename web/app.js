@@ -363,7 +363,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(
 async function openPrompt(id) {
   const d = drawer('Prompt detail', '<div class="loading">Loading…</div>');
   const p = await fetch(`/api/prompt/${id}`).then(r => r.json());
-  const adv = p.advisor || {};
   d.querySelector('.content').innerHTML = `
     <div class="grid g4">
       ${kpi('Estimated cost', fmtUSD(p.est_cost_usd), null, {badge: BADGE.estimated})}
@@ -379,22 +378,6 @@ async function openPrompt(id) {
         <span>${fmtInt(p.char_len)} chars · ${fmtInt(p.word_len)} words</span>
         ${p.source ? `<span class="pill">${esc(p.source)}</span>` : ''}
       </div>`, {badge: BADGE.actual})}
-    ${card('Cost drivers & optimization advice', adv.available ? `
-      <div class="stack">
-        <div><b style="font-size:12px">Why this was expensive</b>
-          <ul style="margin:5px 0 0 18px;font-size:12px;color:var(--text-2)">
-            ${adv.why_expensive.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
-        <div><b style="font-size:12px">Suggested changes</b>
-          <ul style="margin:5px 0 0 18px;font-size:12px;color:var(--text-2)">
-            ${adv.suggestions.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
-        <div class="grid g3">
-          ${kpi('Est. token reduction', '~' + adv.estimated_token_reduction_pct + '%', null, {badge: BADGE.recommendation})}
-          ${kpi('Est. cost reduction', '~' + adv.estimated_cost_reduction_pct + '%')}
-          ${kpi('Est. cost avoided', '~' + fmtUSD(adv.estimated_cost_reduction_usd))}
-        </div></div>`
-      : `<div class="na">${esc(adv.message || 'No analysis available')}</div>`,
-      {badge: BADGE.recommendation,
-       footer: adv.available ? esc(adv.disclaimer) : null})}
     ${card('Requests in this turn', table([
       {h: 'Time', f: r => `<span class="mono">${esc((r.ts||'').slice(11,19))}</span>`},
       {h: 'Model', f: r => `<span class="swatch" style="background:${modelColor(r.model)}"></span>${esc(modelName(r.model))}`},
@@ -1464,154 +1447,6 @@ VIEWS.context = async (page) => {
   wireTable($('#hs', page), ctx.heavy_sessions, r => openSession(r.session_id));
 };
 
-/* ---------- model switch ---------- */
-// Verdicts from the back-test. Wording matters here: "supported" means your own
-// history backs the switch, not that we modelled it.
-const VERDICT = {
-  supported: ['🟢', 'Backed by your data', 'healthy'],
-  caution:   ['🟠', 'Trial first', 'approaching'],
-  risky:     ['🔴', 'Cost more work', 'critical'],
-  marginal:  ['⚪', 'Too close to call', 'high'],
-};
-
-function evidenceBody(ev) {
-  if (!ev || !ev.categories?.length) {
-    return `<div class="empty">No category yet has ${ev?.min_prompts || 8}+ prompts on two
-      different models of the same agent, so there is nothing to compare. Run a cheaper model on
-      a handful of real tasks and this fills in.</div>`;
-  }
-  const rows = [];
-  ev.categories.forEach(c => c.candidates.forEach((x, i) => rows.push({c, x, first: i === 0})));
-  return table([
-    {h: 'Work', f: r => r.first ? `<b>${esc(r.c.category.replace('_', ' '))}</b>` : ''},
-    {h: 'You use now', f: r => r.first
-      ? `${esc(r.c.current.name)} <span class="note">${fmtUSD(r.c.current.cost_per_prompt)}/prompt ·
-         ${Math.round(r.c.current.turns)} turns</span>` : ''},
-    {h: 'Instead of', f: r => `<b>${esc(r.x.name)}</b>`},
-    {h: '$ / prompt', num: 1, f: r => fmtUSD(r.x.cost_per_prompt)},
-    {h: 'Turns', num: 1, f: r => `${Math.round(r.x.turns)} <span class="note">(${r.x.turn_ratio}×)</span>`},
-    {h: 'Re-asked', num: 1, f: r => `${fmtPct(r.x.repeat_pct)}<span class="note">${
-      r.x.repeat_delta > 0 ? ' +' + r.x.repeat_delta : ''}</span>`},
-    {h: 'On', num: 1, f: r => `${fmtInt(r.x.prompts)} prompts`},
-    {h: 'Verdict', f: r => `<span title="${esc(r.x.why)}">${
-      statusChip(VERDICT[r.x.verdict][2], VERDICT[r.x.verdict][1])}</span>`},
-    {h: 'Would save', num: 1, f: r => r.x.verdict === 'supported'
-      ? `<b>${fmtUSD(r.x.estimated_savings_usd)}</b>` : `<span class="note">${fmtUSD(r.x.estimated_savings_usd)}</span>`},
-    {h: '', f: r => `<button class="act ghost trial-btn" data-cat="${esc(r.c.category)}"
-       data-model="${esc(r.x.model)}" data-name="${esc(r.x.name)}">Try it →</button>`},
-  ], rows) + `<div class="note" style="padding:10px 14px">${esc(ev.method)}</div>`;
-}
-
-/* ---------- trial: stop recommending, start measuring ----------
-   The evidence ends at "strong evidence for a trial, not proof". This runs the
-   trial: real prompts out of your own history, re-run headlessly on the
-   candidate model, priced against what they cost the first time. It spends real
-   money, so nothing happens without two clicks. */
-function trialPanelHTML(cat, model, name, s) {
-  if (!s.available) {
-    return `<div class="empty">The <code>claude</code> CLI is not on PATH, so a trial cannot be
-      run from here.</div>`;
-  }
-  if (!s.samples.length) {
-    return `<div class="empty">No prompt you actually typed in this category is short enough to
-      re-run safely.</div>`;
-  }
-  const base = s.samples.reduce((a, x) => a + (x.baseline_cost_usd || 0), 0);
-  return `
-    <div class="dt">These are ${s.samples.length} prompts you really sent in
-      <b>${esc(cat.replace('_', ' '))}</b>. Running them again on <b>${esc(name)}</b> costs money —
-      they cost ${fmtUSD(base)} the first time, and the cheaper model should come in under that.</div>
-    <div class="stack trial-samples">${s.samples.map((x, i) => `
-      <div class="dt trial-s" data-i="${i}">
-        <span class="note">${esc(x.day)} · ${esc(x.baseline_name)} · ${fmtUSD(x.baseline_cost_usd)} ·
-          ${fmtInt(x.baseline_turns)} turns</span>
-        <div class="trial-text">${esc(x.text.slice(0, 400))}${x.text.length > 400 ? '…' : ''}</div>
-      </div>`).join('')}</div>
-    <div class="dt note">Runs headlessly in a scratch directory. Tools that need permission are
-      denied, because a headless agent cannot ask — so a task that needs your repo will look
-      smaller here than it really is.</div>
-    <div class="live-actions">
-      <button class="act trial-run">▶ Run ${s.samples.length} prompts on ${esc(name)}</button>
-      <button class="act ghost trial-copy">Copy the first prompt instead</button>
-      <span class="trial-msg note"></span>
-    </div>
-    <div class="trial-out"></div>`;
-}
-
-const TRIAL_VERDICT = {
-  confirmed:    ['healthy', 'Confirmed by running it'],
-  marginal:     ['high', 'Smaller than advertised'],
-  contradicted: ['critical', 'History overstated it'],
-  failed:       ['critical', 'Runs failed'],
-  unclear:      ['high', 'Inconclusive'],
-};
-
-function trialResultHTML(r) {
-  const v = TRIAL_VERDICT[r.verdict] || TRIAL_VERDICT.unclear;
-  return `<div class="dt"><b>${statusChip(v[0], v[1])}</b> ${esc(r.why)}</div>` + table([
-    {h: 'Prompt', trunc: 1, f: x => esc(x.prompt)},
-    {h: 'First time', num: 1, f: x => fmtUSD(x.baseline_cost_usd)},
-    {h: 'On ' + esc(r.alias), num: 1, f: x => x.ok ? fmtUSD(x.cost_usd) : '—'},
-    {h: 'Turns', num: 1, f: x => x.ok ? fmtInt(x.turns) : '—'},
-    {h: 'Took', num: 1, f: x => x.ok ? x.elapsed_s + 's' : '—'},
-    {h: 'Denied', num: 1, f: x => x.denials ? fmtInt(x.denials) : ''},
-    {h: 'Result', f: x => x.ok ? `<span class="note">${esc((x.result || '').slice(0, 120))}</span>`
-      : `<span class="status critical">${esc((x.error || 'failed').slice(0, 120))}</span>`},
-  ], r.runs) + `<div class="note" style="padding:8px 14px">${esc(r.note)}</div>`;
-}
-
-function wireTrials(page) {
-  page.querySelectorAll('.trial-btn').forEach(b => b.onclick = async () => {
-    const row = b.closest('tr');
-    if (row.nextElementSibling?.classList.contains('trial-row')) {
-      row.nextElementSibling.remove(); return;
-    }
-    const {cat, model, name} = b.dataset;
-    const tr = h(`<tr class="trial-row"><td colspan="10"><div class="trial-panel">
-      <div class="empty">Finding prompts you sent…</div></div></td></tr>`);
-    row.after(tr);
-    const host = tr.querySelector('.trial-panel');
-    let s;
-    try {
-      s = await fetch(`/api/trial?category=${encodeURIComponent(cat)}&limit=3`).then(r => r.json());
-    } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    host.innerHTML = trialPanelHTML(cat, model, name, s);
-    const msg = host.querySelector('.trial-msg');
-    host.querySelector('.trial-copy')?.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(s.samples[0].text); msg.textContent = 'Copied.'; }
-      catch { msg.textContent = 'Could not copy.'; }
-    });
-    host.querySelector('.trial-run')?.addEventListener('click', async ev => {
-      const btn = ev.currentTarget;
-      if (btn.dataset.armed !== '1') {
-        btn.dataset.armed = '1';
-        btn.textContent = 'Click again to spend real money';
-        btn.classList.add('warn');
-        return;
-      }
-      btn.disabled = true;
-      btn.textContent = 'Running…';
-      msg.textContent = 'Each prompt runs to completion; this can take a few minutes.';
-      try {
-        const r = await fetch('/api/trial/run', {
-          method: 'POST',
-          headers: {'X-FinOps-Action': '1', 'Content-Type': 'application/json'},
-          body: JSON.stringify({category: cat, model, prompts: s.samples}),
-        }).then(x => x.json());
-        host.querySelector('.trial-out').innerHTML = r.ok
-          ? trialResultHTML(r) : `<div class="empty">${esc(r.error || 'failed')}</div>`;
-        msg.textContent = '';
-      } catch (e) {
-        msg.textContent = e.message;
-      }
-      btn.disabled = false;
-      btn.classList.remove('warn');
-      btn.textContent = '▶ Run again';
-      btn.dataset.armed = '';
-    });
-  });
-}
-
 /* ---------- waste ---------- */
 VIEWS.waste = async (page) => {
   const w = await api('waste');
@@ -1830,10 +1665,6 @@ VIEWS.live = async (page) => {
         <div class="dt">${x.status === 'busy' ? '<b>Working now</b>' : 'Idle'}${x.uptime ? ` · up ${esc(x.uptime)}` : ''} ·
           last activity ${x.last_write_s == null ? '—' : dur(x.last_write_s)} ago${x.memory_mb == null ? '' : ` · ${fmtInt(x.memory_mb)} MB`} ·
           <span class="note">${esc(x.cwd)}</span></div>
-        ${x.advice ? `<div class="dt switch-tip"><b>${x.advice.trial ? 'Worth trying' : 'Cheaper model'}:</b>
-          ${esc(x.advice.line)}
-          <button class="act ghost" data-copy="${esc(x.advice.command)}"
-            title="${esc(x.advice.why)}">Copy ${esc(x.advice.command)}</button></div>` : ''}
         ${x.severity !== 'ok' ? `<div class="dt"><b>Advice:</b> ${x.severity === 'high'
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}

@@ -47,49 +47,28 @@ def _dig(d, *paths, default=None):
     return default
 
 
-def _payload_common(d):
-    return (_dig(d, "model", "session.model", "model.id", "model.display_name"),
-            _dig(d, "transcript_path", "session.transcript_path", "transcriptPath"))
-
-
 # -------------------------------------------------------------------- hook ----
 
 def hook():
-    """UserPromptSubmit: judge the prompt in hand, before it is paid for.
-
-    Advice goes to the user as `systemMessage`, not into Claude's context: it is
-    for the person deciding which model to use, and feeding it to the model
-    would just spend tokens telling it about its own price.
-    """
+    """UserPromptSubmit: kept as a no-op so existing installed hooks do not error."""
     try:
-        d = _stdin_json()
-        prompt = _dig(d, "user_prompt", "prompt", default="")
-        model, transcript = _payload_common(d)
-        from .advisor import advise
-        a = advise(model=model, transcript=transcript, prompt=prompt)
-        if a:
-            print(json.dumps({"systemMessage": f"finops: {a['line']}  →  {a['command']}"}))
+        _stdin_json()
     except Exception:
-        pass          # never let advice interfere with the prompt
+        pass
     return 0
 
 
 # -------------------------------------------------------------- statusline ----
 
 def statusline():
-    """One line, refreshed constantly, so: what you are on, and what to try."""
+    """One line, refreshed constantly: model and context usage."""
     try:
         d = _stdin_json()
-        model, transcript = _payload_common(d)
         pct = _dig(d, "context.percentUsed", "context.percent_used")
         name = _dig(d, "model.display_name", "session.model", "model") or "claude"
         bits = [str(name)]
         if isinstance(pct, (int, float)):
             bits.append(f"{pct:.0f}% ctx")
-        from .advisor import advise
-        a = advise(model=model, transcript=transcript)
-        if a:
-            bits.append(a["short"])
         print(" · ".join(bits))
     except Exception:
         print("")     # an empty statusline beats a stack trace under the prompt
