@@ -148,5 +148,22 @@ class TestPromptFiltering(unittest.TestCase):
         self.assertEqual(len(hashes[0]), 16)
 
 
+class TestSchemaVersion(unittest.TestCase):
+    def test_fresh_build_records_version_and_needs_no_rebuild(self):
+        from finops.etl import SCHEMA_VERSION, needs_rebuild
+        con = build([user("2026-01-01T00:00:00Z", "hi")])
+        path = con.execute("PRAGMA database_list").fetchone()[2]
+        self.assertEqual(con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
+                         str(SCHEMA_VERSION))
+        self.assertFalse(needs_rebuild(path))
+
+    def test_old_db_needs_rebuild(self):
+        from finops.etl import needs_rebuild
+        con = build([user("2026-01-01T00:00:00Z", "hi")])
+        path = con.execute("PRAGMA database_list").fetchone()[2]
+        con.execute("DELETE FROM meta WHERE key='schema_version'"); con.commit(); con.close()
+        self.assertTrue(needs_rebuild(path))
+
+
 if __name__ == "__main__":
     unittest.main()

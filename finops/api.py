@@ -6,6 +6,7 @@ import io
 import csv
 import os
 import sqlite3
+import sys
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -483,6 +484,9 @@ def serve(port=8787, db=DB_PATH, background=None):
         background = os.environ.get("FINOPS_DETACH") == "1" or _under_claude()
     if background and hasattr(os, "fork"):
         detach(port)
+    from .etl import needs_rebuild
+    if needs_rebuild(db):
+        print("Warehouse schema is out of date. Run:  claude-finops --rebuild", file=sys.stderr)
     A = Analytics(db)
     srv = Server(("127.0.0.1", port), Handler)
     print(f"Claude FinOps Command Center -> http://127.0.0.1:{port}")

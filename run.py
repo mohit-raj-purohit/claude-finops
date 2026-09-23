@@ -381,9 +381,15 @@ def main():
                  else f"lsof -iTCP:{port} -sTCP:LISTEN"))
         sys.exit(1)
     source = os.environ.get("CLAUDE_PROJECTS", os.path.join(os.path.expanduser("~"), ".claude", "projects"))
-    if "--rebuild" in args or not os.path.exists(DB_PATH):
+    from finops.etl import needs_rebuild
+    db_existed = os.path.exists(DB_PATH)
+    rebuild_needed = needs_rebuild(DB_PATH)
+    if "--rebuild" in args or rebuild_needed:
         if not os.path.isdir(source):
             sys.exit(f"No Claude Code transcripts at {source}. Use Claude Code once, or set CLAUDE_PROJECTS.")
+        if db_existed and rebuild_needed and "--rebuild" not in args:
+            print("Warehouse schema changed (pricing and request counting were corrected); rebuilding…",
+                  flush=True)
         print(f"Building warehouse from {source} …", flush=True)
         subprocess.run(_python() + ["-m", "finops.etl", source], check=True)
     rest = [a for a in args if a != "--rebuild"]

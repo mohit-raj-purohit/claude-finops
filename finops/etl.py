@@ -19,6 +19,20 @@ from .pricing import Pricing
 from .paths import ROOT, DB_PATH
 DEFAULT_SOURCE = os.path.expanduser("~/.claude/projects")
 
+SCHEMA_VERSION = 2   # 2: one row per request, list prices corrected, injected lines skipped
+
+
+def needs_rebuild(db_path):
+    if not os.path.exists(db_path):
+        return True
+    try:
+        con = sqlite3.connect(db_path)
+        row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        con.close()
+    except sqlite3.Error:
+        return True
+    return not row or row[0] != str(SCHEMA_VERSION)
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -240,6 +254,7 @@ class Loader:
             ("pricing_updated", str(self.pricing.updated)),
             ("pricing_source", str(self.pricing.source)),
             ("cost_basis", "estimated"),
+            ("schema_version", str(SCHEMA_VERSION)),
         ):
             self.db.execute("INSERT INTO meta VALUES (?,?)", (k, v))
         self.db.commit()
