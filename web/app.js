@@ -570,7 +570,7 @@ VIEWS.overview = async (page) => {
         {badge: BADGE.forecast, hint: forecast.available ? forecast.method : ''})}
       ${card('FinOps score', `<div class="scorewrap">
         <div><div class="scorenum">${scorecard.score}</div>
-          <div class="scoregrade">out of 100 · grade ${scorecard.grade}</div></div>
+          <div class="scoregrade">out of 100</div></div>
         <div style="flex:1;min-width:230px" class="stack">${scorecard.dimensions.map(d => `
           <div><div style="display:flex;justify-content:space-between;font-size:11.5px">
             <span>${esc(d.name)}</span><span style="font-variant-numeric:tabular-nums">${d.score}</span></div>
@@ -1257,7 +1257,9 @@ VIEWS.hygiene = async (page) => {
     <div class="note" style="margin:0 0 10px">Everything on this page is observed from your transcripts.
       It shows where spend sat while a large prefix was being re-sent on every turn. It does
       <b>not</b> estimate what /compact or a fresh session would have saved — that depends on
-      what the work still needed, which the transcript does not say.</div>
+      what the work still needed, which the transcript does not say. Auto-compaction is not
+      recorded; it is detected as the context dropping by more than half. A typed /compact is
+      recorded and also counts.</div>
     <div class="grid g4">
       ${T.map(t => kpi(`Spend in requests ≥ ${K(t)} context`, fmtPct(ab(t).share_pct),
         `${fmtUSD(ab(t).cost_usd)} · ${fmtInt(ab(t).requests)} requests`, {badge: BADGE.actual})).join('')}
@@ -1461,8 +1463,8 @@ VIEWS.waste = async (page) => {
     </div>
     <div class="note"><b>Exposed spend</b> is what the flagged items cost in total — money worth
       reviewing, not money wasted. <b>Estimated excess</b> is how much more that work cost than a
-      reasonable baseline, de-duplicated across rules, and is what the FinOps score grades. Each
-      rule below states the baseline it measures against.</div>
+      reasonable baseline, de-duplicated across rules. Each rule below states the baseline it
+      measures against.</div>
     ${['high', 'medium', 'low'].map(sev => {
       const list = w.findings.filter(f => f.severity === sev);
       if (!list.length) return '';
@@ -2046,7 +2048,7 @@ VIEWS.scorecard = async (page) => {
     ${card('AI FinOps Score', `<div class="scorewrap">
       <div style="text-align:center">
         <div class="scorenum">${sc.score}</div>
-        <div class="scoregrade">out of 100 · grade <b>${sc.grade}</b></div>
+        <div class="scoregrade">out of 100</div>
         <div class="chart" id="sg" style="width:190px;margin-top:6px"></div></div>
       <div style="flex:1;min-width:280px" class="stack">${sc.dimensions.map(d => `
         <div><div style="display:flex;justify-content:space-between;font-size:12px">
@@ -2056,7 +2058,7 @@ VIEWS.scorecard = async (page) => {
           : d.score >= 30 ? 'approaching' : 'critical'}"><i style="width:${d.score}%"></i></div>
         <div class="note">${esc(d.detail)}</div></div>`).join('')}
       </div></div>`, {badge: BADGE.estimated,
-      footer: 'The score is a weighted mean of the dimensions above, each graded against a reference in config/settings.json → scorecard. It is a self-consistency measure of your own usage, not a benchmark against other users.'})}
+      footer: 'Each dimension is measured from your transcripts; budget adherence needs a budget in Settings.'})}
     <div class="grid g3">
       ${card('✅ What is good', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
         sc.what_is_good.map(x => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')
@@ -2831,7 +2833,7 @@ const TOURS = {
     {el: 'card:Waste detection', t: 'Waste at a glance', see: 'A summary of the patterns that burn tokens for nothing.', get: 'An estimate of what you could avoid.', act: 'Open <b>Waste detection</b> for the full findings and evidence.'},
     {el: 'card:Optimization opportunities', t: 'Opportunities', see: 'The top ranked changes, ranked by spend involved.', get: 'What to fix first.', act: 'Open <b>What should I do?</b> for the full list with ready-made prompts.'},
     {el: 'card:Forecast', t: 'Forecast', see: 'Projected spend to the end of the billing period.', get: 'An early read on whether you\'ll go over.', act: 'Open <b>Forecast</b> for the optimistic and pessimistic scenarios.'},
-    {el: 'card:FinOps score', t: 'FinOps score', see: 'Your overall score for cache use, model mix, waste and budget.', get: 'One number for how efficiently you work.', act: 'Open <b>FinOps scorecard</b> to see what each component grades.'}],
+    {el: 'card:FinOps score', t: 'FinOps score', see: 'Your overall score for context share, cache break-even and budget adherence.', get: 'One number for how efficiently you work.', act: 'Open <b>FinOps scorecard</b> to see what each dimension measures.'}],
   advisor: [
     {el: 'card:Biggest optimization opportunity', t: 'Start here', see: 'The change involving the most spend, with the evidence behind it.', get: 'The best use of your next ten minutes.', act: 'Read the estimate, then apply the change.'},
     {el: 'card:What is going well', t: 'Strengths & gaps', see: 'What your habits already do well, and the items that need attention.', get: 'Confirmation of what to keep doing, and where you lose money.', act: 'Work down the <b>Needs attention</b> list.'},

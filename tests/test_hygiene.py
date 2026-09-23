@@ -104,6 +104,15 @@ class TestHygiene(unittest.TestCase):
         self.assertEqual(out["thresholds"], [25_000])
         self.assertEqual(out["above"]["25000"]["requests"], 5)
 
+    def test_cost_after_cross_resets_when_context_drops(self):
+        rows = [("s", 1, 120_000, 1.0, 0), ("s", 2, 160_000, 2.0, 0),   # crosses 150K here
+                ("s", 3, 30_000, 0.5, 0), ("s", 4, 40_000, 0.5, 0)]    # compaction: drop >50%
+        a = self.analytics(rows)
+        hy = a.hygiene({})
+        self.assertAlmostEqual(hy["above"]["150000"]["cost_after_first_cross_usd"], 2.0)
+        s = next(x for x in hy["sessions_ranked"] if x["session_id"] == "s")
+        self.assertEqual(s["compactions"], 1)
+
     def test_empty_range(self):
         out = self.analytics([]).hygiene()
         self.assertEqual(out["requests"], 0)

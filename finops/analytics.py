@@ -16,6 +16,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 from .pricing import Pricing
+from .segments import is_compaction
 
 from .paths import ROOT, DB_PATH, SETTINGS_PATH, LOCAL_SETTINGS_PATH
 
@@ -649,6 +650,12 @@ class Analytics:
         rows = self.q(f"""SELECT r.session_id, r.ts, r.context_tokens ctx, r.est_cost_usd cost
                           FROM requests r WHERE {w} AND r.is_sidechain = 0 AND r.ts <> ''
                           ORDER BY r.session_id, r.ts""", p)
+        compact_rows = self.q("SELECT session_id, ts FROM prompts WHERE source='slash:/compact'"
+                              " AND ts <> '' ORDER BY session_id, ts")
+        compacts_by_session = defaultdict(list)
+        for cr in compact_rows:
+            compacts_by_session[cr["session_id"]].append(cr["ts"])
+
         total = sum(r["cost"] or 0 for r in rows)
         above = {t: {"requests": 0, "cost_usd": 0.0, "sessions": 0, "cost_after_first_cross_usd": 0.0}
                  for t in thresholds}
@@ -658,7 +665,17 @@ class Analytics:
             s = sessions.setdefault(r["session_id"], {
                 "session_id": r["session_id"], "requests": 0, "cost_usd": 0.0,
                 "max_context": 0, "first_cross": {t: None for t in thresholds},
-                "cost_after": {t: 0.0 for t in thresholds}, "traj": []})
+                "cost_after": {t: 0.0 for t in thresholds}, "traj": [], "compactions": 0,
+                "ever_crossed": {t: False for t in thresholds}, "_next_compact_idx": 0})
+            prev_ctx = s["traj"][-1][0] if s["traj"] else 0
+            compact_ts = compacts_by_session.get(r["session_id"], [])
+            crossed_compact = (s["_next_compact_idx"] < len(compact_ts)
+                               and r["ts"] > compact_ts[s["_next_compact_idx"]])
+            if crossed_compact:
+                s["_next_compact_idx"] += 1
+            if is_compaction(prev_ctx, ctx, thresholds[0]) or crossed_compact:
+                s["compactions"] += 1
+                s["first_cross"] = {t: None for t in thresholds}
             idx = s["requests"]
             s["requests"] += 1
             s["cost_usd"] += cost
@@ -670,11 +687,12 @@ class Analytics:
                     above[t]["cost_usd"] += cost
                     if s["first_cross"][t] is None:
                         s["first_cross"][t] = idx
+                        s["ever_crossed"][t] = True
                 if s["first_cross"][t] is not None:
                     s["cost_after"][t] += cost
         for s in sessions.values():
             for t in thresholds:
-                if s["first_cross"][t] is not None:
+                if s["ever_crossed"][t]:
                     above[t]["sessions"] += 1
                     above[t]["cost_after_first_cross_usd"] += s["cost_after"][t]
 
@@ -702,6 +720,7 @@ class Analytics:
             out_sessions.append({
                 "session_id": s["session_id"], "title": m.get("title"), "project": m.get("project"),
                 "requests": s["requests"], "cost_usd": s["cost_usd"], "max_context": s["max_context"],
+                "compactions": s["compactions"],
                 "first_cross": {str(t): s["first_cross"][t] for t in thresholds},
                 "cost_after": {str(t): s["cost_after"][t] for t in thresholds},
                 "cost_after_pct": {str(t): (round(100.0 * s["cost_after"][t] / s["cost_usd"], 1)
@@ -722,10 +741,11 @@ class Analytics:
             } for t, v in above.items()},
             "sessions_ranked": out_sessions,
             "excluded": "subagent turns (own prefix)",
-            "undetectable": ["/clear", "/compact"],
+            "undetectable": ["/clear"],
             "note": ("Observed shares of spend. Nothing here estimates what compaction or a "
-                     "fresh session would have saved. /clear and /compact are not recorded in "
-                     "transcripts, so a compaction shows up only as the context dropping."),
+                     "fresh session would have saved. Auto-compaction is not recorded; it is "
+                     "detected as the context dropping by more than half. A typed /compact is "
+                     "recorded and also counts."),
             "basis": "actual",
         }
 
@@ -740,16 +760,17 @@ class Analytics:
         w, p = self.where(f)
         turns = self.q(f"""SELECT r.session_id, r.ts, r.model, r.priced_as, r.is_sidechain, r.agent_id,
                              r.input_tokens, r.output_tokens, r.cache_read_tokens,
-                             r.cache_write_5m, r.cache_write_1h, r.est_cost_usd
+                             r.cache_write_5m, r.cache_write_1h, r.est_cost_usd, r.context_tokens ctx
                            FROM requests r WHERE {w} AND r.agent='claude' AND r.ts <> ''
                            ORDER BY r.session_id, r.ts""", p)
         segs = split_segments(turns)
         out = replay(segs, self.pricing)
         out["turns"] = len(turns)
-        out["undetectable_boundaries"] = ["/clear", "/compact"]
-        out["note"] = ("Segments break at session start, subagent start and model change. "
-                       "Claude Code does not record /clear or /compact, so a compaction "
-                       "sits inside a segment and is not modelled.")
+        out["undetectable_boundaries"] = ["/clear"]
+        out["note"] = ("Segments break at session start, subagent start, model change and "
+                       "compaction. Auto-compaction is not recorded; it is detected as the "
+                       "context dropping by more than half. A typed /compact is recorded and "
+                       "also counts.")
         return out
 
     def long_context_pricing(self, f=None):
@@ -845,6 +866,28 @@ class Analytics:
         prompt_side = (t["i"] or 0) + (t["cr"] or 0) + (t["cw"] or 0)
         cache_total = (t["cr"] or 0) + (t["cw"] or 0)
         cache_cost = self.cache_cost_split(f)
+
+        # Break-even margin: how much of cache spend came back as read discount, net of
+        # write premium. +1 = all discount, -1 = all premium, computed per model since
+        # rates differ.
+        bm_rows = self.q(f"""SELECT priced_as, SUM(cache_read_tokens) cr,
+                                SUM(cache_write_5m) w5, SUM(cache_write_1h) w1
+                             FROM requests r WHERE {w} GROUP BY priced_as""", p)
+        discount = premium = cache_cost_total = 0.0
+        for r in bm_rows:
+            model = r["priced_as"]
+            reads, w5, w1 = (r["cr"] or 0), (r["w5"] or 0), (r["w1"] or 0)
+            rt = self.pricing.rates(model) or {}
+            inp = float(rt.get("input") or 0)
+            read_rate = float(rt.get("cache_read") or 0)
+            w5_rate = float(rt.get("cache_write_5m") or 0)
+            w1_rate = float(rt.get("cache_write_1h") or 0)
+            discount += reads * (inp - read_rate) / 1e6
+            premium += (w5 * (w5_rate - inp) + w1 * (w1_rate - inp)) / 1e6
+            cache_cost_total += (reads * read_rate + w5 * w5_rate + w1 * w1_rate) / 1e6
+        breakeven_margin = (max(-1.0, min(1.0, (discount - premium) / cache_cost_total))
+                            if cache_cost_total else None)
+
         sess = self.sessions(f, limit=100000, order="cost")
         scored = [s for s in sess if s["tokens"] and s["prompts"]]
         for s in scored:
@@ -864,6 +907,7 @@ class Analytics:
             "cache": {
                 "reads": t["cr"], "writes": t["cw"],
                 "cost_split": cache_cost,
+                "breakeven_margin": breakeven_margin,
                 "cost_with_cache": t["cost"], "cost_without_cache": t["cost_nc"],
                 # Named for what it is. This used to be "estimated_savings_usd", and the
                 # UI called it a saving; it is the gap to a run that never happened.
@@ -1491,60 +1535,27 @@ class Analytics:
     # ---------------- scorecard ----------------
     def scorecard(self, f=None):
         eff = self.efficiency(f)
-        ctx = self.context_analysis(f)
         wst = self.waste(f)
         bud = self.budgets(f)
-        mdl = self.models(f)
         dims = []
 
         def dim(name, score, detail, weight=1.0):
             dims.append({"name": name, "score": max(0, min(100, round(score))),
                          "detail": detail, "weight": weight})
 
-        chr_ = eff["cache_hit_ratio"]
-        ccs = eff["cache_read_cost_share"]
-        if chr_ is None or ccs is None:
-            dim("Cache efficiency", 50, "No cache activity in range", 1.0)
+        hy = self.hygiene(f)
+        thr = max(int(t) for t in hy["above"])
+        share = hy["above"][str(thr)]["share_pct"]
+        dim("Context share", 100 - share,
+            f"{share:.0f}% of spend ran above {thr//1000}K context.", 1.0)
+
+        margin = eff["cache"].get("breakeven_margin")
+        if margin is None:
+            dim("Cache break-even", 50, "No cache activity in range", 1.0)
         else:
-            # Graded on cost share, not token share: writes are a couple of percent of
-            # cache tokens but a much larger share of cache spend, so the token ratio
-            # scores near 100 even when writes are material money.
-            split = eff["cache"]["cost_split"]
-            detail = (f"Reads are {ccs*100:.1f}% of cache cost "
-                      f"({chr_*100:.1f}% of cache tokens).")
-            mult = split.get("write_vs_read_multiple")
-            if mult:
-                detail += f" A write token costs {mult:.1f}x a read token."
-            h1 = split.get("write_1h_token_share")
-            if h1 is not None and h1 >= 0.5 and split.get("write_tokens"):
-                detail += (f" {h1*100:.0f}% of your writes are 1h writes; the TTL replay in"
-                           " Context & cache prices whether that is the cheaper choice for"
-                           " your real inter-turn gaps.")
-            dim("Cache efficiency", ccs * 100, detail, 1.2)
-
-        sc_cfg = self.settings.get("scorecard", {})
-        target = sc_cfg.get("target_output_ratio", 0.0088)
-        outr = eff["output_ratio"]
-        dim("Token efficiency", min(outr / target, 1.0) * 100,
-            f"Output is {outr*100:.2f}% of billable tokens against a "
-            f"{target*100:.2f}% reference.", 1.2)
-
-        big_pct = ctx["large_context_cost_pct"]
-        dim("Context efficiency", 100 - big_pct,
-            f"{big_pct}% of spend came from requests above "
-            f"{ctx['threshold']//1000}K context.", 1.0)
-
-        excess = wst["excess_pct"]
-        dim("Waste control", 100 - min(excess, 100),
-            f"{excess}% of spend is estimated excess over a reasonable baseline "
-            f"({wst['exposed_pct']}% of spend sits in items a rule touched).", 1.3)
-
-        priced = [r for r in mdl["rows"] if r["tier"] != "none" and r["cost"]]
-        frontier_pct = (100.0 * sum(r["cost"] for r in priced if r["tier"] == "frontier")
-                        / (sum(r["cost"] for r in priced) or 1))
-        allow = sc_cfg.get("frontier_cost_share_allowance_pct", 40)
-        dim("Model selection", 100 - max(frontier_pct - allow, 0) * 1.5,
-            f"{frontier_pct:.0f}% of spend is on frontier-tier models.", 1.1)
+            dim("Cache break-even", 50 + margin * 50,
+                f"Caching returned {margin*100:.0f}% of its cost as read discount net of "
+                "write premium.", 1.0)
 
         ml = next((l for l in bud["lines"] if l["name"] == "Monthly spend"), None)
         if ml and ml.get("configured"):
@@ -1553,12 +1564,7 @@ class Analytics:
                 f"Forecast is {fp:.0f}% of the configured monthly budget.", 1.3)
         else:
             dim("Budget adherence", 50,
-                "No monthly budget configured — set one in config/settings.json to be graded.", 0.4)
-
-        cpo = eff["cost_per_1k_output"]
-        cpo_target = sc_cfg.get("target_cost_per_1k_output_usd", 0.30)
-        dim("Cost efficiency", 100 - min(cpo / (cpo_target * 2) * 100, 100),
-            f"${cpo:.3f} estimated per 1K output tokens.", 1.0)
+                "No monthly budget configured — set one in config/settings.json to be measured.", 0.4)
 
         tw = sum(d["weight"] for d in dims)
         total = round(sum(d["score"] * d["weight"] for d in dims) / tw)
@@ -1566,8 +1572,7 @@ class Analytics:
         weak = sorted(dims, key=lambda d: d["score"])[:3]
         top = wst["findings"][0] if wst["findings"] else None
         return {
-            "score": total, "grade": ("A" if total >= 85 else "B" if total >= 70
-                                      else "C" if total >= 55 else "D" if total >= 40 else "F"),
+            "score": total,
             "dimensions": dims,
             "what_is_good": [f"{d['name']}: {d['detail']}" for d in strong if d["score"] >= 60],
             "needs_attention": [f"{d['name']}: {d['detail']}" for d in weak if d["score"] < 70],

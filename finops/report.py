@@ -90,7 +90,7 @@ transcripts contain no billed amounts, so no figure here is an actual invoice va
 threshold in that column &mdash; not a saving, an observation of where spend concentrates.</div>
 
 <h2>3. FinOps scorecard</h2>
-<p><span class="score">{sc['score']}</span> / 100 &nbsp; grade <b>{sc['grade']}</b></p>
+<p><span class="score">{sc['score']}</span> / 100</p>
 {table(["Dimension","Score","Detail"], [(d['name'], d['score'], html.escape(d['detail'])) for d in sc['dimensions']])}
 <b>What is good</b><ul>{''.join(f'<li>{html.escape(x)}</li>' for x in sc['what_is_good']) or '<li>&mdash;</li>'}</ul>
 <b>Needs attention</b><ul>{''.join(f'<li>{html.escape(x)}</li>' for x in sc['needs_attention']) or '<li>&mdash;</li>'}</ul>

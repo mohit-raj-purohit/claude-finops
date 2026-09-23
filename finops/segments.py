@@ -13,10 +13,8 @@ Boundaries this can see:
   * session start
   * subagent (sidechain) start
   * a model change between consecutive turns
-
-Boundaries it CANNOT see: /clear and /compact. Claude Code does not record them, so a
-compaction lands silently inside a segment and makes it look longer and cheaper per
-turn than it was. Callers should surface that limitation rather than hide it.
+  * a compaction: context dropping by more than half (auto-compaction is not
+    recorded directly, but this is its trace; a typed /compact is recorded too)
 """
 from datetime import datetime
 
@@ -45,6 +43,12 @@ def multipliers(pricing, model):
     return g(READ), g(W5M), g(W1H)
 
 
+def is_compaction(prev_ctx, ctx, threshold=100_000):
+    """A context drop of more than half from above `threshold` is a compaction or a
+    /clear. Claude Code does not record auto-compaction; this is the only trace."""
+    return bool(prev_ctx) and prev_ctx >= threshold and ctx < prev_ctx * 0.5
+
+
 def split_segments(turns):
     """Split one session's turns into cache segments.
 
@@ -61,6 +65,7 @@ def split_segments(turns):
             # or moving between two different subagents, rebuilds the cache
             or (t.get("agent_id") or None) != (prev.get("agent_id") or None)
             or bool(t.get("is_sidechain")) != bool(prev.get("is_sidechain"))
+            or is_compaction(prev.get("ctx") if prev else None, t.get("ctx"))
         )
         if boundary and current:
             segments.append(current)

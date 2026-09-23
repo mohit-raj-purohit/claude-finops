@@ -78,6 +78,17 @@ class TestSplitSegments(unittest.TestCase):
         self.assertEqual(segs[1][0]["ts"], "2026-01-01T00:01:00Z")
 
 
+class TestCompactionBoundary(unittest.TestCase):
+    def test_context_drop_starts_a_segment(self):
+        ts = [turn("2026-01-01T00:00:00Z", read=0),
+              turn("2026-01-01T00:01:00Z", read=0),
+              turn("2026-01-01T00:02:00Z", read=0)]
+        ts[0]["ctx"] = 120_000
+        ts[1]["ctx"] = 160_000
+        ts[2]["ctx"] = 30_000
+        self.assertEqual(len(split_segments(ts)), 2)
+
+
 class TestMultipliers(unittest.TestCase):
     def test_derived_from_price_table(self):
         r, w5, w1 = multipliers(FakePricing(), "m1")
