@@ -2640,6 +2640,7 @@ async function addFreeModel(id) {
 /* ---------- compare Claude vs free models ---------- */
 VIEWS.compare = async (page) => {
   const d = await fetch('/api/compare?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json());
+  if (d.error) throw new Error(d.error);
   const hasFree = d.rows.some(r => r.kind === 'free');
   const stars = n => n == null ? '<span class="na">—</span>' : '★'.repeat(Math.floor(n)) + (n % 1 ? '½' : '') +
     `<span style="opacity:.25">${'★'.repeat(5 - Math.ceil(n))}</span>`;

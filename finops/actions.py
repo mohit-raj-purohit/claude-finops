@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 from collections import defaultdict
 
-from .analytics import DB_PATH, ROOT
+from .paths import DB_PATH, ROOT
 from .etl import DEFAULT_SOURCE, Loader
 
 HOME = os.path.expanduser("~")
