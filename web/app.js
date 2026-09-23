@@ -584,9 +584,10 @@ VIEWS.overview = async (page) => {
   if (alloc.configured) {
     C.gauge(gEl, {pct: alloc.used_pct, status: alloc.status, label: 'of plan allowance'});
     $('#burnnotes', page).innerHTML = `<div class="stack">
-      <div class="item"><div class="hd">${statusGlyph(alloc.status)} You are likely to reach your
-        current limit in <b>${alloc.days_until_limit}</b> days${alloc.limit_date
-        ? ` (around ${esc(alloc.limit_date)})` : ''}.</div></div>
+      <div class="item"><div class="hd">${statusGlyph(alloc.status)} ${alloc.days_until_limit == null
+        ? `<b>Exceeded</b> your current limit.`
+        : `You are likely to reach your current limit in <b>${alloc.days_until_limit}</b> days${alloc.limit_date
+          ? ` (around ${esc(alloc.limit_date)})` : ''}.`}</div></div>
       <div class="item"><div class="hd">At the current burn rate you will
         ${alloc.projected_overage_pct > 0 ? `exceed your allowance by
           <b>${fmtPct(alloc.projected_overage_pct)}</b>` : `finish the period at
@@ -880,8 +881,9 @@ VIEWS.burn = async (page) => {
             <dt>Overage</dt><dd>${fmtPct(a.projected_overage_pct)}</dd>
           </dl></div></div>
         <div class="item" style="margin-top:9px">
-          <div class="hd">${statusGlyph(a.status)} You are likely to reach this limit in
-            <b>${a.days_until_limit}</b> days.</div>
+          <div class="hd">${statusGlyph(a.status)} ${a.days_until_limit == null
+            ? `<b>Exceeded</b> this limit.`
+            : `You are likely to reach this limit in <b>${a.days_until_limit}</b> days.`}</div>
           <div class="dt">At the current burn rate you will
             ${a.projected_overage_pct > 0
               ? `exceed the allowance by <b>${fmtPct(a.projected_overage_pct)}</b>.`
@@ -1913,9 +1915,9 @@ VIEWS.forecast = async (page) => {
   if (!f.available) { page.innerHTML = card('Forecast', `<div class="empty">${esc(f.message)}</div>`);
     return; }
   page.innerHTML = `
+    ${f.insufficient_history ? `<div class="empty">Fewer than 7 priced days in the window:
+      bands not shown.</div>` : ''}
     <div class="grid g4">
-      ${kpi('End of day', fmtUSD(f.end_of_day_cost), null, {badge: BADGE.forecast})}
-      ${kpi('End of week', fmtUSD(f.end_of_week_cost), null, {badge: BADGE.forecast})}
       ${kpi('End of billing period', fmtUSD(f.scenarios.expected.end_of_period_cost),
         `${f.remaining_days} days remaining`, {badge: BADGE.forecast})}
       ${kpi('Estimated monthly cost', fmtUSD(f.estimated_monthly_cost), null, {badge: BADGE.forecast})}

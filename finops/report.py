@@ -160,9 +160,8 @@ It sits inside {_f(wt['exposed_cost_usd'])} ({wt['exposed_pct']}%) of exposed sp
 Period to date {_f(fc['period_used'])} with {fc['remaining_days']} days remaining.</p>
 {table(["Scenario","Daily rate","Projected end of period"],
   [(k.title(), _f(v['daily_rate']), _f(v['end_of_period_cost'])) for k, v in fc['scenarios'].items()])}
+{'<p class="note">Fewer than 7 priced days in the window: bands not shown.</p>' if fc.get('insufficient_history') else ''}
 {table(["Horizon","Projection"], [
-  ("End of day", _f(fc['end_of_day_cost'])),
-  ("End of week", _f(fc['end_of_week_cost'])),
   ("End of billing period (expected)", _f(fc['scenarios']['expected']['end_of_period_cost'])),
   ("Limit exhaustion date", html.escape(str(fc['limit_exhaustion_date']))),
 ])}""")

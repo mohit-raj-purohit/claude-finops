@@ -129,6 +129,11 @@ class Analytics:
         row = self.db.execute("SELECT MIN(day) a, MAX(day) b FROM requests WHERE day<>''").fetchone()
         self.first_day, self.last_day = row["a"], row["b"]
 
+    _today = None                      # tests set this; production uses the clock
+
+    def today(self):
+        return self._today or date.today()
+
     @property
     def db(self):
         c = getattr(self._local, "conn", None)
@@ -204,7 +209,7 @@ class Analytics:
         if not rows:
             return []
         by_day = {r["day"]: r for r in rows}
-        last = _d(end or rows[-1]["day"])
+        last = _d(end) if end else max(_d(rows[-1]["day"]), self.today())
         first = _d(rows[0]["day"])
         if days:
             first = max(first, last - timedelta(days=days - 1))
@@ -218,7 +223,7 @@ class Analytics:
     # ---------------- billing period ----------------
     def billing_period(self, today=None):
         bp = self.settings["billing_period"]
-        today = today or (_d(self.last_day) if self.last_day else date.today())
+        today = today or self.today()
         anchor = int(bp.get("anchor_day", 1))
         if today.day >= anchor:
             start = today.replace(day=min(anchor, 28))
@@ -300,8 +305,9 @@ class Analytics:
         # slice inside the billing period — early in a period that slice is too short
         # to be a rate. Idle days count as zero, because these rates get multiplied by
         # calendar days remaining. This keeps burn and forecast on one methodology.
-        last7 = self.daily_series(f, days=7)
-        last14 = self.daily_series(f, days=14)
+        yesterday = (self.today() - timedelta(days=1)).isoformat()
+        last7 = self.daily_series(f, days=7, end=yesterday)
+        last14 = self.daily_series(f, days=14, end=yesterday)
         avg7 = (sum(r["cost"] for r in last7) / len(last7)) if last7 else 0.0
         tok_avg7 = (sum(r["tokens"] for r in last7) / len(last7)) if last7 else 0.0
         # the projection rate matches Analytics.forecast()'s "expected" scenario
@@ -339,7 +345,7 @@ class Analytics:
                 continue
             remaining = allowance - used_val
             pct = 100.0 * used_val / allowance
-            days_left = (remaining / rate) if rate > 0 else None
+            days_left = (remaining / rate) if rate > 0 and remaining > 0 else None
             proj = used_val + rate * bp["remaining_days"]
             out["allowances"][label] = {
                 "configured": True, "allowance": allowance, "used": used_val,
@@ -348,6 +354,7 @@ class Analytics:
                 "days_until_limit": (round(days_left, 1) if days_left is not None else None),
                 "limit_date": ((_d(bp["today"]) + timedelta(days=days_left)).isoformat()
                                if days_left is not None and days_left < 3650 else None),
+                "exceeded": remaining <= 0,
                 "projected_end_of_period": proj,
                 "projected_overage_pct": round(100.0 * (proj - allowance) / allowance, 1),
                 "status": self._status(pct),
@@ -485,10 +492,9 @@ class Analytics:
             r["cost_per_prompt"] = r["cost"] / r["prompts"] if r["prompts"] else None
             r["tokens_per_prompt"] = r["tokens"] / r["prompts"] if r["prompts"] else None
             r["tokens_per_request"] = r["tokens"] / r["requests"] if r["requests"] else 0
-            r["output_ratio"] = r["output_tokens"] / r["tokens"] if r["tokens"] else 0
-            r["cache_hit_ratio"] = (r["cache_read_tokens"] /
-                                    (r["cache_read_tokens"] + r["cache_write_tokens"])
-                                    if (r["cache_read_tokens"] + r["cache_write_tokens"]) else None)
+            r["output_ratio"] = (r["output_tokens"] or 0) / r["tokens"] if r["tokens"] else 0
+            cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
+            r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
         return rows
 
     def prompts(self, f=None, limit=300, offset=0, order="cost", search=None):
@@ -1291,45 +1297,46 @@ class Analytics:
                           FROM requests r WHERE {w} AND r.day <> '' GROUP BY 1 ORDER BY 1""", p)
         if not rows:
             return {"available": False, "message": "No usage in the selected range."}
-        # calendar days, idle days as zero — the rate below is multiplied by calendar
-        # days remaining, so a per-active-day mean would overstate every scenario
-        recent = self.daily_series(f, days=14)
-        costs = [r["cost"] for r in recent]
-        mean = statistics.fmean(costs)
-        sd = statistics.pstdev(costs) if len(costs) > 1 else 0.0
+        # calendar days, idle days as zero, excluding today (still partial) — the rate
+        # below is multiplied by calendar days remaining, so a per-active-day mean
+        # would overstate every scenario and a partial today would understate it
+        yesterday = (self.today() - timedelta(days=1)).isoformat()
+        recent = [r for r in self.daily_series(f, days=15, end=yesterday)]   # complete days only
+        priced = [r["cost"] for r in recent]
+        sample_days = sum(1 for c in priced if c > 0)
+        mean = statistics.fmean(priced) if priced else 0.0
+        sd = statistics.pstdev(priced) if len(priced) > 1 else 0.0
         in_period = [r for r in rows if bp["start"] <= r["day"] <= bp["end"]]
         used = sum(r["cost"] for r in in_period)
         used_tok = sum(r["tokens"] for r in in_period)
         left = bp["remaining_days"]
+        insufficient = sample_days < 7
 
-        def band(rate):
-            return {"daily_rate": rate, "end_of_period_cost": used + rate * left}
+        def band(rate, spread=0.0):
+            # spend on different days is treated as independent, so the spread of a
+            # sum over `left` days grows with sqrt(left), not left
+            return {"daily_rate": rate,
+                    "end_of_period_cost": used + rate * left + spread * (left ** 0.5)}
 
-        scenarios = {
-            "conservative": band(max(mean - sd, 0)),
-            "expected": band(mean),
-            "high": band(mean + sd),
-        }
-        tok_mean = statistics.fmean([r["tokens"] for r in recent])
-        today_rows = [r for r in rows if r["day"] == bp["today"]]
-        hours = max(datetime.now(timezone.utc).hour, 1)
-        eod = (today_rows[0]["cost"] / hours * 24) if today_rows else mean
+        scenarios = {"expected": band(mean)}
+        if not insufficient:
+            scenarios["conservative"] = band(mean, -sd)
+            scenarios["high"] = band(mean, sd)
+            scenarios["conservative"]["end_of_period_cost"] = max(
+                scenarios["conservative"]["end_of_period_cost"], used)
 
-        wk_start = (_d(bp["today"]) - timedelta(days=_d(bp["today"]).weekday())).isoformat()
-        wk_used = sum(r["cost"] for r in rows if r["day"] >= wk_start)
-        wk_left = 6 - _d(bp["today"]).weekday()
+        tok_mean = statistics.fmean([r["tokens"] for r in recent]) if recent else 0.0
 
         out = {
             "available": True,
-            "method": ("14-calendar-day mean daily spend (idle days counted as zero) "
-                       "with ±1 standard deviation bands"),
-            "sample_days": len(recent),
+            "method": ("mean of the last 14 complete calendar days (idle days as zero); "
+                       "bands are ±1 sd × sqrt(days remaining)"),
+            "sample_days": sample_days,
+            "insufficient_history": insufficient,
             "daily_mean": mean, "daily_stdev": sd,
             "period_used": used, "period_used_tokens": used_tok,
             "remaining_days": left,
             "scenarios": scenarios,
-            "end_of_day_cost": eod,
-            "end_of_week_cost": wk_used + mean * max(wk_left, 0),
             "end_of_period_tokens": used_tok + tok_mean * left,
             "estimated_monthly_cost": used + mean * left,
             "basis": "forecast",
@@ -1401,21 +1408,28 @@ class Analytics:
         w, p = self.where(f)
         cfg = self.settings["anomaly"]
         found = []
-        days = self.q(f"""SELECT r.day, SUM(r.est_cost_usd) cost, SUM(r.billable_tokens) tokens,
-                          COUNT(*) requests FROM requests r WHERE {w} AND r.day<>''
-                          GROUP BY 1 ORDER BY 1""", p)
-        if len(days) >= 5:
-            vals = [d["cost"] for d in days]
-            mean, sd = statistics.fmean(vals), (statistics.pstdev(vals) or 1e-9)
-            for d in days:
-                z = (d["cost"] - mean) / sd
-                ratio = d["cost"] / mean if mean else 0
-                if z >= cfg["daily_zscore"] and ratio >= cfg["daily_ratio"]:
+        yesterday = (self.today() - timedelta(days=1)).isoformat()
+        series = [d for d in self.daily_series(dict(f or {}, agents=["claude"]), end=yesterday)]
+        priced = [d for d in series if d["cost"] > 0]
+        if len(priced) >= 14:
+            # Median/MAD, not mean/stdev: unpriced $0 days from agents without pricing
+            # data (e.g. Cursor) would otherwise pollute the mean/sd baseline and
+            # either mask real spikes or manufacture fake ones. MAD is scaled by
+            # 1.4826 so it estimates the same thing a standard deviation would under
+            # a normal distribution, without a few extreme days inflating it the way
+            # a real stdev would.
+            vals = [d["cost"] for d in priced]
+            med = statistics.median(vals)
+            mad = statistics.median(abs(v - med) for v in vals) * 1.4826 or 1e-9
+            for d in priced:
+                score = (d["cost"] - med) / mad
+                ratio = d["cost"] / med if med else 0
+                if score >= cfg.get("daily_robust_z", 3.5) and ratio >= cfg["daily_ratio"]:
                     found.append({
                         "severity": "high", "type": "daily_spike", "date": d["day"],
                         "title": f"{d['day']} spend was {ratio:.1f}x your daily average",
-                        "detail": f"${d['cost']:,.2f} vs a ${mean:,.2f} daily mean (z={z:.1f}).",
-                        "metric_value": d["cost"], "baseline": mean, "ratio": round(ratio, 2),
+                        "detail": f"${d['cost']:,.2f} vs a ${med:,.2f} median priced day (robust z={score:.1f}).",
+                        "metric_value": d["cost"], "baseline": med, "ratio": round(ratio, 2),
                         "drilldown": {"filter": {"start": d["day"], "end": d["day"]}},
                         "basis": "estimated",
                     })
@@ -1441,8 +1455,8 @@ class Analytics:
                 if ratio >= cfg["session_ratio"] and outliers < cfg.get("max_session_outliers", 5):
                     outliers += 1
                     found.append({
-                        "severity": "medium", "type": "session_outlier",
-                        "title": f"Session consumed {ratio:.1f}x the median session tokens",
+                        "severity": "low", "type": "session_outlier",
+                        "title": f"Among your largest sessions: {ratio:.1f}x the median",
                         "detail": f"{s['title'] or s['session_id'][:8]} — {s['tokens']:,} tokens, "
                                   f"${s['cost']:,.2f} in {s['project']}.",
                         "metric_value": s["tokens"], "baseline": mean, "ratio": round(ratio, 2),

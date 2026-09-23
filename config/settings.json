@@ -50,9 +50,10 @@
     "context_thresholds": [100000, 150000]
   },
   "anomaly": {
-    "_comment": "session_ratio is measured against the MEDIAN session, not the mean: session sizes are right-skewed enough that a mean lets the outliers inflate their own baseline. Session token counts are heavy-tailed, so max_session_outliers, not the ratio, is what keeps the list short and leaves room for the other anomaly types.",
+    "_comment": "session_ratio is measured against the MEDIAN session, not the mean: session sizes are right-skewed enough that a mean lets the outliers inflate their own baseline. Session token counts are heavy-tailed, so max_session_outliers, not the ratio, is what keeps the list short and leaves room for the other anomaly types. daily_robust_z is a threshold on a median/MAD robust z-score (MAD scaled by 1.4826 to estimate a stdev), not the plain daily_zscore: unpriced $0 days from agents with no pricing data would otherwise pollute a mean/stdev baseline.",
     "daily_zscore": 2.0,
     "daily_ratio": 2.0,
+    "daily_robust_z": 3.5,
     "session_ratio": 20.0,
     "max_session_outliers": 5
   },
