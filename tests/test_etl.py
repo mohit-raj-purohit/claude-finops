@@ -91,6 +91,20 @@ class TestRequestDedup(unittest.TestCase):
         self.assertEqual(con.execute("SELECT tool_call_count FROM requests").fetchone()[0], 2)
         self.assertEqual(con.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0], 2)
 
+    def test_attachments_between_lines_do_not_split_the_request(self):
+        tr = lambda ts, tid: {"type": "user", "uuid": "tr" + tid, "timestamp": ts, "sessionId": "s1",
+                              "toolUseResult": {"ok": True},
+                              "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "x"}]}}
+        att = lambda ts: {"type": "attachment", "uuid": "att" + ts, "timestamp": ts, "sessionId": "s1", "attachment": {}}
+        rows = [user("2026-01-01T00:00:00Z", "go"),
+                assistant("2026-01-01T00:00:05Z", "req-1", "msg-1", {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}),
+                tr("2026-01-01T00:00:06Z", "t1"), att("2026-01-01T00:00:06Z"),
+                assistant("2026-01-01T00:00:07Z", "req-1", "msg-1", {"type": "tool_use", "id": "t2", "name": "Read", "input": {}}),
+                tr("2026-01-01T00:00:08Z", "t2"), att("2026-01-01T00:00:08Z")]
+        con = build(rows)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 1)
+        self.assertEqual(con.execute("SELECT tool_call_count FROM requests").fetchone()[0], 2)
+
     def test_latency_measured_to_first_line_of_group(self):
         con = build([user("2026-01-01T00:00:00Z", "hello"),
                      assistant("2026-01-01T00:00:05Z", "req-1", "msg-1", {"type": "thinking", "thinking": ""}),

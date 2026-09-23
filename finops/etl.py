@@ -349,7 +349,6 @@ class Loader:
                 prev_time = t or prev_time
 
             elif typ in ("attachment", "system"):
-                flush()
                 prev_time = t or prev_time
         flush()
 
