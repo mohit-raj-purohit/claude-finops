@@ -976,7 +976,9 @@ VIEWS.models = async (page) => {
   $('#mt', page).innerHTML = table([
     {h: 'Model', f: r => `<span class="swatch" style="background:${modelColor(r.model)}"></span>${esc(r.display_name)}
       ${r.pricing_known ? '' : '<span class="badge na" title="no price entry — default pricing used">default price</span>'}`},
-    {h: 'Tier', f: r => `<span class="pill">${esc(r.tier)}</span>`},
+    {h: 'Tier', f: r => r.tier === 'unknown'
+      ? `<span class="pill">unpriced</span><span class="badge na" title="no price in pricing.json">no price in pricing.json</span>`
+      : `<span class="pill">${esc(r.tier)}</span>`},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
     {h: 'Sessions', num: 1, f: r => fmtInt(r.sessions)},
     {h: 'Input', num: 1, f: r => fmtNum(r.input_tokens)},
@@ -1039,10 +1041,10 @@ VIEWS.sessions = async (page) => {
   page.innerHTML = `
     <div class="grid g4">
       ${kpi('Sessions in range', fmtInt(total), null, {badge: BADGE.actual})}
-      ${kpi('Avg cost / session', fmtUSD(rows.reduce((a, r) => a + r.cost, 0) / (rows.length || 1)),
+      ${kpi('Avg cost / loaded session', fmtUSD(rows.reduce((a, r) => a + r.cost, 0) / (rows.length || 1)),
         null, {badge: BADGE.estimated})}
-      ${kpi('Avg tokens / session', fmtNum(avgTok))}
-      ${kpi('Avg tokens / prompt', fmtNum(rows.reduce((a, r) => a + (r.tokens_per_prompt || 0), 0)
+      ${kpi('Avg tokens / loaded session', fmtNum(avgTok))}
+      ${kpi('Avg tokens / loaded prompt', fmtNum(rows.reduce((a, r) => a + (r.tokens_per_prompt || 0), 0)
         / (rows.filter(r => r.tokens_per_prompt).length || 1)))}
     </div>
     ${card('Session explorer', `<div class="filters" style="margin:0 0 8px">
@@ -1302,7 +1304,7 @@ VIEWS.hygiene = async (page) => {
       xLabel: v => `#${v}`});
     $('#hy-traj', page).insertAdjacentHTML('beforeend',
       `<div class="note" style="margin-top:6px">${esc(s.title || shortId(s.session_id))} — ${fmtInt(s.requests)} requests,
-       ${fmtUSD(s.cost_usd)}. Crossed ${K(kT)} at request #${s.first_cross[kT] == null ? '—' : s.first_cross[kT] + 1};
+       ${fmtUSD(s.cost_usd)}. Crossed ${K(kT)} at request #${s.ever_crossed[kT] ? s.first_cross_idx[kT] + 1 : '—'};
        ${fmtPct(s.cost_after_pct[kT])} of its spend came after that.</div>`);
   };
   const rows = hy.sessions_ranked;
@@ -1312,7 +1314,7 @@ VIEWS.hygiene = async (page) => {
     {h: 'Context', f: r => `<span class="spk" data-i="${rows.indexOf(r)}" style="display:inline-block;width:110px"></span>`},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
     {h: 'Peak ctx', num: 1, f: r => fmtNum(r.max_context)},
-    ...T.map(t => ({h: `After ${K(t)}`, num: 1, f: r => r.first_cross[t] == null ? '<span class="na">never</span>'
+    ...T.map(t => ({h: `After ${K(t)}`, num: 1, f: r => !r.ever_crossed[t] ? '<span class="na">never</span>'
       : `<b>${fmtUSD(r.cost_after[t])}</b> <span class="note">(${fmtPct(r.cost_after_pct[t])})</span>`})),
     {h: 'Session cost', num: 1, f: r => fmtUSD(r.cost_usd)},
   ], rows);
@@ -1844,11 +1846,10 @@ VIEWS.diagnose = async (page) => {
       {badge: BADGE.actual, hint: 'Drivers overlap, so shares do not add up to 100%'})}
     <div id="dx-recs"></div>${card('What to change', `<div class="stack">${d.recommendations.map(r => `
       <div class="item sev-${r.priority === 1 ? 'high' : r.priority === 2 ? 'medium' : 'low'}">
-        <div class="hd">${esc(r.title)}<span class="spacer"></span>
-          ${r.est_savings_usd ? `<span>~${fmtUSD(r.est_savings_usd)} est.</span>` : ''}</div>
+        <div class="hd">${esc(r.title)}</div>
         <div class="dt"><b>Why:</b> ${esc(r.why)}</div>
         <div class="dt"><b>How:</b> ${esc(r.how)}</div>
-        ${r.savings_basis ? `<div class="dt note">${esc(r.savings_basis)}</div>` : ''}${pb(r.playbook)}</div>`).join('')
+        ${pb(r.playbook)}</div>`).join('')
       || '<div class="empty">Nothing stands out</div>'}</div>`, {badge: BADGE.recommendation})}
     ${card(`Projects: ${esc(d.vocab?.name || 'Claude')} config health`, `<div id="dx-proj"></div>`,
       {badge: BADGE.recommendation, hint: isCl ? 'CLAUDE.md, memory, .claude/settings.json and MCP checked on disk now' : `${md} checked on disk now`, flush: 1})}
@@ -2263,7 +2264,7 @@ function focusItems(d) {
   for (const m of d.memory_suggestions || []) if (m.kind === 'security')
     out.push({lvl: 1, text: `Credentials pasted in prompts (${m.sessions} sessions): rotate them`, view: 'diagnose', anchor: 'dx-mem'});
   for (const r of d.recommendations || []) if (r.priority === 1)
-    out.push({lvl: 1, text: r.title + (r.est_savings_usd ? ` (~${fmtUSD(r.est_savings_usd)})` : ''), view: 'diagnose', anchor: 'dx-recs'});
+    out.push({lvl: 1, text: r.title, view: 'diagnose', anchor: 'dx-recs'});
   for (const p of d.projects || []) for (const i of p.issues) if (i.severity === 'high')
     out.push({lvl: 1, text: `${p.name}: ${i.title}`, view: 'diagnose', anchor: 'dx-issues'});
   const s0 = (d.session_health || [])[0];

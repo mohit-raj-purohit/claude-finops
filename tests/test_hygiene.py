@@ -112,6 +112,12 @@ class TestHygiene(unittest.TestCase):
         self.assertAlmostEqual(hy["above"]["150000"]["cost_after_first_cross_usd"], 2.0)
         s = next(x for x in hy["sessions_ranked"] if x["session_id"] == "s")
         self.assertEqual(s["compactions"], 1)
+        # first_cross resets to None after the compaction, but first_cross_idx keeps
+        # the ORIGINAL crossing so the UI never prints "never" next to real spend.
+        self.assertIsNone(s["first_cross"]["150000"])
+        self.assertIsNotNone(s["first_cross_idx"]["150000"])
+        self.assertEqual(s["first_cross_idx"]["150000"], 1)
+        self.assertTrue(s["ever_crossed"]["150000"])
 
     def test_empty_range(self):
         out = self.analytics([]).hygiene()

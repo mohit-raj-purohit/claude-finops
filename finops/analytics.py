@@ -7,18 +7,18 @@ Every number returned is tagged with a `basis`:
   recommendation - suggested action, never a booked saving
 """
 import json
-import math
 import os
 import sqlite3
 import statistics
+import sys
 import threading
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 from .pricing import Pricing
 from .segments import is_compaction
 
-from .paths import ROOT, DB_PATH, SETTINGS_PATH, LOCAL_SETTINGS_PATH
+from .paths import DB_PATH, SETTINGS_PATH, LOCAL_SETTINGS_PATH
 
 UNAVAILABLE = "Unavailable from connected Claude data"
 
@@ -86,20 +86,74 @@ def detect_account():
     return {k: v for k, v in out.items() if v}
 
 
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _validate_settings(cur, defaults):
+    """Defensive coercion of settings.local.json's numeric leaves.
+
+    Every value under budgets/limits must be a number, null, or (for
+    per_project_usd/per_model_usd) a dict of numbers; alert_thresholds_pct must be
+    a list of numbers 0..1000. Anything else is dropped and the shipped default
+    (from settings.json) is used instead, with a warning.
+    """
+    bad = []
+    for section in ("budgets", "limits"):
+        want = defaults.get(section, {})
+        have = cur.get(section)
+        if not isinstance(have, dict):
+            bad.append(section)
+            cur[section] = want
+            continue
+        fixed = dict(have)
+        for k, v in list(have.items()):
+            if k.startswith("_"):
+                continue
+            if k in ("per_project_usd", "per_model_usd"):
+                if not isinstance(v, dict) or not all(_is_num(x) for x in v.values()):
+                    bad.append(f"{section}.{k}")
+                    fixed[k] = want.get(k, {})
+            elif not (v is None or _is_num(v)):
+                bad.append(f"{section}.{k}")
+                fixed[k] = want.get(k)
+        cur[section] = fixed
+    pct = cur.get("alert_thresholds_pct")
+    if not (isinstance(pct, list) and all(_is_num(x) and 0 <= x <= 1000 for x in pct)):
+        if pct is not None:
+            bad.append("alert_thresholds_pct")
+        cur["alert_thresholds_pct"] = defaults.get("alert_thresholds_pct", [])
+    for path in bad:
+        print(f"finops: settings.local.json has an invalid '{path}'; using the shipped default",
+              file=sys.stderr)
+    return cur
+
+
 def load_settings():
     """Shared defaults (settings.json) + this machine's overrides (settings.local.json)."""
     with open(SETTINGS_PATH) as fh:
-        cur = json.load(fh)
+        base = json.load(fh)
     # Detected identity first, so a configured settings.json still wins below.
     detected = detect_account()
-    acct = cur.setdefault("account", {})
+    acct = base.setdefault("account", {})
     for k, v in detected.items():
         if not acct.get(k):
             acct[k] = v
+    cur = json.loads(json.dumps(base))   # deep copy: base stays the fallback default
     if os.path.exists(LOCAL_SETTINGS_PATH):
-        with open(LOCAL_SETTINGS_PATH) as fh:
-            _merge(cur, json.load(fh))
-    return cur
+        try:
+            with open(LOCAL_SETTINGS_PATH) as fh:
+                local = json.load(fh)
+        except (OSError, ValueError) as exc:
+            print(f"finops: settings.local.json unreadable ({exc}); using shipped defaults",
+                  file=sys.stderr)
+            local = {}
+        if isinstance(local, dict):
+            _merge(cur, local)
+        else:
+            print("finops: settings.local.json is not an object; using shipped defaults",
+                  file=sys.stderr)
+    return _validate_settings(cur, base)
 
 
 def _d(s):
@@ -133,7 +187,7 @@ class Analytics:
     _today = None                      # tests set this; production uses the clock
 
     def today(self):
-        return self._today or date.today()
+        return self._today or datetime.now(timezone.utc).date()
 
     @property
     def db(self):
@@ -421,7 +475,7 @@ class Analytics:
                 continue
             u["num"] += v["n"] * 100.0 * (v["avg_ctx"] or 0) / win
             u["den"] += v["n"]
-            if v["priced_as"] and v["priced_as"] != v["model"]:
+            if v["priced_as"] and v["priced_as"].endswith("[1m]"):
                 u["long"] += v["n"]
         for r in rows:
             r["display_name"] = self.pricing.display_name(r["model"])
@@ -684,6 +738,7 @@ class Analytics:
             s = sessions.setdefault(r["session_id"], {
                 "session_id": r["session_id"], "requests": 0, "cost_usd": 0.0,
                 "max_context": 0, "first_cross": {t: None for t in thresholds},
+                "first_cross_idx": {t: None for t in thresholds},
                 "cost_after": {t: 0.0 for t in thresholds}, "traj": [], "compactions": 0,
                 "ever_crossed": {t: False for t in thresholds}, "_next_compact_idx": 0})
             prev_ctx = s["traj"][-1][0] if s["traj"] else 0
@@ -707,6 +762,8 @@ class Analytics:
                     if s["first_cross"][t] is None:
                         s["first_cross"][t] = idx
                         s["ever_crossed"][t] = True
+                    if s["first_cross_idx"][t] is None:
+                        s["first_cross_idx"][t] = idx   # the ORIGINAL crossing; never reset
                 if s["first_cross"][t] is not None:
                     s["cost_after"][t] += cost
         for s in sessions.values():
@@ -741,6 +798,8 @@ class Analytics:
                 "requests": s["requests"], "cost_usd": s["cost_usd"], "max_context": s["max_context"],
                 "compactions": s["compactions"],
                 "first_cross": {str(t): s["first_cross"][t] for t in thresholds},
+                "first_cross_idx": {str(t): s["first_cross_idx"][t] for t in thresholds},
+                "ever_crossed": {str(t): s["ever_crossed"][t] for t in thresholds},
                 "cost_after": {str(t): s["cost_after"][t] for t in thresholds},
                 "cost_after_pct": {str(t): (round(100.0 * s["cost_after"][t] / s["cost_usd"], 1)
                                             if s["cost_usd"] else 0.0) for t in thresholds},
@@ -805,10 +864,20 @@ class Analytics:
         rows = self.q(f"""SELECT r.model, r.priced_as, r.unpriced_long_context u,
                             COUNT(*) n, SUM(r.est_cost_usd) cost, MAX(r.context_tokens) mx
                           FROM requests r WHERE {w} AND r.context_tokens > 0
-                            AND (r.priced_as <> r.model OR r.unpriced_long_context = 1)
+                            AND (r.priced_as LIKE '%[1m]' OR r.unpriced_long_context = 1)
                           GROUP BY r.model, r.priced_as, r.unpriced_long_context""", p)
         repriced = [r for r in rows if not r["u"]]
         unpriced = [r for r in rows if r["u"]]
+
+        # rows priced against no known model at all (model_known=0) are a distinct gap:
+        # not "over the standard window", but "no rate for this model in pricing.json".
+        unknown_rows = self.q(f"""SELECT r.model, COUNT(*) n, SUM(r.est_cost_usd) cost
+                                  FROM requests r WHERE {w} AND r.model_known = 0
+                                    AND r.model LIKE 'claude%'
+                                  GROUP BY r.model""", p)
+        unknown_requests = sum(r["n"] for r in unknown_rows)
+        unknown_models = sorted({r["model"] for r in unknown_rows})
+
         return {
             "repriced": repriced,
             "unpriced": unpriced,
@@ -816,12 +885,20 @@ class Analytics:
             "unpriced_requests": sum(r["n"] for r in unpriced),
             "unpriced_cost_usd": sum(r["cost"] or 0 for r in unpriced),
             "unpriced_models": sorted({r["model"] for r in unpriced}),
+            "unknown_model_requests": unknown_requests,
+            "unknown_model_cost_usd": sum(r["cost"] or 0 for r in unknown_rows),
+            "unknown_models": unknown_models,
             "message": (
                 "%d requests exceeded their model's standard context window with no "
                 "long-context price configured, so their cost is understated. Add a "
                 "\"<model>[1m]\" entry to config/pricing.json for: %s."
                 % (sum(r["n"] for r in unpriced), ", ".join(sorted({r["model"] for r in unpriced})))
                 if unpriced else ""),
+            "unknown_message": (
+                "%d requests used a claude-* model with no entry in pricing.json at "
+                "all, so their cost is a fallback guess. Add pricing.json entries for: %s."
+                % (unknown_requests, ", ".join(unknown_models))
+                if unknown_rows else ""),
             "basis": "estimated",
         }
 
@@ -889,9 +966,9 @@ class Analytics:
         # Break-even margin: how much of cache spend came back as read discount, net of
         # write premium. +1 = all discount, -1 = all premium, computed per model since
         # rates differ.
-        bm_rows = self.q(f"""SELECT priced_as, SUM(cache_read_tokens) cr,
+        bm_rows = self.q(f"""SELECT COALESCE(priced_as, model) priced_as, SUM(cache_read_tokens) cr,
                                 SUM(cache_write_5m) w5, SUM(cache_write_1h) w1
-                             FROM requests r WHERE {w} GROUP BY priced_as""", p)
+                             FROM requests r WHERE {w} GROUP BY COALESCE(priced_as, model)""", p)
         discount = premium = cache_cost_total = 0.0
         for r in bm_rows:
             model = r["priced_as"]
@@ -1528,7 +1605,7 @@ class Analytics:
                     })
         # week-over-week model shift
         if self.last_day:
-            end = _d(self.last_day)
+            end = self.today() - timedelta(days=1)   # anchor on yesterday, not last_day
             cur_s = (end - timedelta(days=6)).isoformat()
             prev_s, prev_e = (end - timedelta(days=13)).isoformat(), (end - timedelta(days=7)).isoformat()
             for m in self.q(f"SELECT DISTINCT r.model FROM requests r WHERE {w}", p):
