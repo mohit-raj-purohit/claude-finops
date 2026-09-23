@@ -4,6 +4,9 @@ const NS = 'http://www.w3.org/2000/svg';
 export const SERIES = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
 export const seriesVar = i => `var(${SERIES[i % SERIES.length]})`;
 
+export const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
 let tipEl = null;
 function tip() {
   if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'tip';
@@ -140,8 +143,8 @@ export function timeSeries(host, opts) {
     cross.setAttribute('x2', type === 'bar' ? cx(i) : px(i));
     const body = active.map(s => `<div class="row"><span class="k">
       <span class="swatch" style="background:${s.color || seriesVar(series.indexOf(s))}"></span>
-      ${s.label}</span><span class="v">${(s.fmt || fmt)(+r[s.key] || 0)}</span></div>`).join('');
-    showTip(`<div class="t">${xLabel(r[xk])}</div>${body}`, ev.clientX, ev.clientY);
+      ${esc(s.label)}</span><span class="v">${(s.fmt || fmt)(+r[s.key] || 0)}</span></div>`).join('');
+    showTip(`<div class="t">${esc(xLabel(r[xk]))}</div>${body}`, ev.clientX, ev.clientY);
   });
   hit.addEventListener('mouseleave', () => { hideTip(); cross.setAttribute('opacity', 0); });
   if (onClick) hit.addEventListener('click', ev => onClick(rows[idxAt(ev)]));
@@ -170,7 +173,7 @@ export function barsH(host, opts) {
     grp.appendChild(el('rect', {x: lw, y: y0 + 4, width: w, height: 11, rx: 4, fill: col}));
     grp.appendChild(el('text', {x: W - 2, y: y0 + 13, 'text-anchor': 'end', class: 'val'}, fmt(v)));
     grp.addEventListener('mousemove', ev => showTip(
-      `<div class="t">${label(r)}</div><div class="row"><span class="k">
+      `<div class="t">${esc(label(r))}</div><div class="row"><span class="k">
        <span class="swatch" style="background:${col}"></span>Value</span>
        <span class="v">${fmt(v)}</span></div>${sub ? sub(r) : ''}`, ev.clientX, ev.clientY));
     grp.addEventListener('mouseleave', hideTip);
@@ -205,7 +208,7 @@ export function donut(host, opts) {
       L${x3},${y3} A${r0},${r0} 0 ${large} 0 ${x4},${y4} Z`, fill: col,
       style: onClick ? 'cursor:pointer' : ''});
     p.addEventListener('mousemove', ev => showTip(
-      `<div class="t">${label(row)}</div><div class="row"><span class="k">
+      `<div class="t">${esc(label(row))}</div><div class="row"><span class="k">
        <span class="swatch" style="background:${col}"></span>Estimated</span>
        <span class="v">${fmt(v)}</span></div><div class="row"><span class="k">Share</span>
        <span class="v">${(100 * v / total).toFixed(1)}%</span></div>`, ev.clientX, ev.clientY));
