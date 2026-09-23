@@ -50,6 +50,13 @@ class TestForecast(unittest.TestCase):
         exp, hi = fc["scenarios"]["expected"]["end_of_period_cost"], fc["scenarios"]["high"]["end_of_period_cost"]
         self.assertAlmostEqual(hi - exp, 50.0 * left ** 0.5, places=3)
 
+    def test_window_is_14_days_not_15(self):
+        dc = days_back(30, 100.0)
+        for i in range(1, 15):
+            dc[(TODAY - timedelta(days=i)).isoformat()] = 200.0   # most recent 14 days
+        fc = self.analytics(dc).forecast({})
+        self.assertAlmostEqual(fc["scenarios"]["expected"]["daily_rate"], 200.0)
+
     def test_insufficient_history_has_no_bands(self):
         fc = self.analytics(days_back(3, 100.0)).forecast({})
         self.assertTrue(fc["insufficient_history"])

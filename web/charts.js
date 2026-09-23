@@ -255,23 +255,29 @@ export function forecastFan(host, {history, scenarios, remainingDays, height = 2
   let cum = 0;
   const hist = history.map(d => ({day: d.day, v: (cum += d.cost)}));
   const base = cum, n = hist.length, total = n + remainingDays;
+  // scenarios may only carry 'expected' (insufficient_history): iterate only the
+  // keys actually present so a caller that forgets to check that flag cannot crash.
+  const keys = ['conservative', 'expected', 'high'].filter(k => scenarios[k]);
   const paths = {};
-  for (const k of ['conservative', 'expected', 'high']) {
+  for (const k of keys) {
     const rate = scenarios[k].daily_rate;
     paths[k] = Array.from({length: remainingDays + 1}, (_, i) => base + rate * i);
   }
-  const max = nice(Math.max(base, ...paths.high) || 1);
+  const hasBand = paths.conservative && paths.high;
+  const max = nice(Math.max(base, ...(paths.high || paths.expected)) || 1);
   const X = i => m.l + (total <= 1 ? 0 : i * (iw / (total - 1)));
   const Y = v => m.t + ih - (v / max) * ih;
   const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, height: H});
   const gi = el('g', {transform: `translate(${m.l},0)`});
   axisLeft(gi, Y, max, iw, 4, fmtUSD); svg.appendChild(gi);
 
-  const band = [];
-  paths.high.forEach((v, i) => band.push(`${i ? 'L' : 'M'}${X(n - 1 + i)},${Y(v)}`));
-  for (let i = paths.conservative.length - 1; i >= 0; i--)
-    band.push(`L${X(n - 1 + i)},${Y(paths.conservative[i])}`);
-  svg.appendChild(el('path', {d: band.join(' ') + ' Z', fill: 'var(--s1)', 'fill-opacity': .13}));
+  if (hasBand) {
+    const band = [];
+    paths.high.forEach((v, i) => band.push(`${i ? 'L' : 'M'}${X(n - 1 + i)},${Y(v)}`));
+    for (let i = paths.conservative.length - 1; i >= 0; i--)
+      band.push(`L${X(n - 1 + i)},${Y(paths.conservative[i])}`);
+    svg.appendChild(el('path', {d: band.join(' ') + ' Z', fill: 'var(--s1)', 'fill-opacity': .13}));
+  }
 
   const line = (pts, color, dash) => el('path', {
     d: pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' '), fill: 'none',
@@ -286,8 +292,10 @@ export function forecastFan(host, {history, scenarios, remainingDays, height = 2
     svg.appendChild(el('circle', {cx: x, cy: y, r: 3.5, fill: c, stroke: 'var(--surface)',
       'stroke-width': 2}));
   });
-  svg.appendChild(el('text', {x: X(total - 1), y: Y(paths.high.at(-1)) - 6, 'text-anchor': 'end',
-    class: 'val'}, 'High ' + fmtUSD(paths.high.at(-1))));
+  if (paths.high) {
+    svg.appendChild(el('text', {x: X(total - 1), y: Y(paths.high.at(-1)) - 6, 'text-anchor': 'end',
+      class: 'val'}, 'High ' + fmtUSD(paths.high.at(-1))));
+  }
   svg.appendChild(el('text', {x: X(total - 1), y: Y(paths.expected.at(-1)) - 6, 'text-anchor': 'end',
     class: 'val'}, 'Expected ' + fmtUSD(paths.expected.at(-1))));
   svg.appendChild(el('text', {x: X(0), y: H - 8}, history[0].day));
@@ -304,7 +312,7 @@ export function forecastFan(host, {history, scenarios, remainingDays, height = 2
       ev.clientX, ev.clientY);
     else {
       const j = i - n + 1;
-      showTip(`<div class="t">Day +${j} · forecast</div>` + ['conservative','expected','high']
+      showTip(`<div class="t">Day +${j} · forecast</div>` + keys
         .map(k => `<div class="row"><span class="k">${k}</span>
           <span class="v">${fmtUSD(paths[k][j])}</span></div>`).join(''), ev.clientX, ev.clientY);
     }

@@ -653,13 +653,16 @@ VIEWS.overview = async (page) => {
   ], ls, {onRow: 1});
   wireTable($('#topsessions', page), ls, r => openSession(r.session_id));
 
-  if (forecast.available) {
+  if (forecast.available && !forecast.insufficient_history) {
     C.forecastFan($('#fan', page), {history: burn.series, scenarios: forecast.scenarios,
       remainingDays: forecast.remaining_days});
     $('#fanleg', page).innerHTML = `<span class="it"><span class="swatch"
       style="background:var(--s1)"></span>Cumulative actual (estimated cost)</span>
       <span class="it"><span class="swatch" style="background:var(--s1);opacity:.35"></span>
       Forecast band: conservative → high</span>`;
+  } else if (forecast.available) {
+    $('#fan', page).innerHTML = '<div class="empty">Fewer than 7 priced days in the window: '
+      + 'bands not shown.</div>';
   } else $('#fan', page).innerHTML = '<div class="empty">Not enough history to forecast</div>';
 
   renderAdvisorHero(page, advisor);
@@ -1915,8 +1918,6 @@ VIEWS.forecast = async (page) => {
   if (!f.available) { page.innerHTML = card('Forecast', `<div class="empty">${esc(f.message)}</div>`);
     return; }
   page.innerHTML = `
-    ${f.insufficient_history ? `<div class="empty">Fewer than 7 priced days in the window:
-      bands not shown.</div>` : ''}
     <div class="grid g4">
       ${kpi('End of billing period', fmtUSD(f.scenarios.expected.end_of_period_cost),
         `${f.remaining_days} days remaining`, {badge: BADGE.forecast})}
@@ -1931,8 +1932,10 @@ VIEWS.forecast = async (page) => {
         : kpi('Limit exhaustion date', esc(f.limit_exhaustion_date),
             f.will_exceed ? '🔴 forecast exceeds allowance' : '🟢 within allowance', {badge: BADGE.forecast})}
     </div>
-    ${card('Cumulative spend and forecast fan', '<div class="chart" id="fan2"></div>' +
-      '<div class="legend" id="fl2"></div>', {badge: BADGE.forecast,
+    ${card('Cumulative spend and forecast fan', f.insufficient_history
+        ? '<div class="empty">Fewer than 7 priced days in the window: bands not shown.</div>'
+        : '<div class="chart" id="fan2"></div><div class="legend" id="fl2"></div>',
+      {badge: BADGE.forecast,
       hint: f.method,
       footer: 'Scenarios are the 14-calendar-day mean daily spend minus, at, and plus one standard deviation, projected across the remaining days of the billing period. Days you did not use Claude count as zero, since the projection runs over calendar days. They assume your recent pattern continues.'})}
     ${card('Scenarios', table([
@@ -1941,12 +1944,14 @@ VIEWS.forecast = async (page) => {
       {h: 'Projected end of period', num: 1, f: r => fmtUSD(r[1].end_of_period_cost)},
       {h: 'vs today', num: 1, f: r => '+' + fmtUSD(r[1].end_of_period_cost - f.period_used)},
     ], Object.entries(f.scenarios)), {badge: BADGE.forecast})}`;
-  C.forecastFan($('#fan2', page), {history: burn.series, scenarios: f.scenarios,
-    remainingDays: f.remaining_days, height: 300});
-  $('#fl2', page).innerHTML = `<span class="it"><span class="swatch" style="background:var(--s1)"></span>
-    Cumulative actual (estimated cost)</span>
-    <span class="it"><span class="swatch" style="background:var(--s1);opacity:.35"></span>
-    Forecast band (conservative → high)</span>`;
+  if (!f.insufficient_history) {
+    C.forecastFan($('#fan2', page), {history: burn.series, scenarios: f.scenarios,
+      remainingDays: f.remaining_days, height: 300});
+    $('#fl2', page).innerHTML = `<span class="it"><span class="swatch" style="background:var(--s1)"></span>
+      Cumulative actual (estimated cost)</span>
+      <span class="it"><span class="swatch" style="background:var(--s1);opacity:.35"></span>
+      Forecast band (conservative → high)</span>`;
+  }
 };
 
 /* ---------- budgets ---------- */

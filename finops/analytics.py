@@ -1301,7 +1301,7 @@ class Analytics:
         # below is multiplied by calendar days remaining, so a per-active-day mean
         # would overstate every scenario and a partial today would understate it
         yesterday = (self.today() - timedelta(days=1)).isoformat()
-        recent = [r for r in self.daily_series(f, days=15, end=yesterday)]   # complete days only
+        recent = [r for r in self.daily_series(f, days=14, end=yesterday)]   # complete days only
         priced = [r["cost"] for r in recent]
         sample_days = sum(1 for c in priced if c > 0)
         mean = statistics.fmean(priced) if priced else 0.0
