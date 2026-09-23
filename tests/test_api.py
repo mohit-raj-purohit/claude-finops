@@ -101,6 +101,33 @@ class TestHardening(ServerFixture):
     def test_bad_projects_filter_is_400(self):
         self.assertEqual(self.get("/api/overview?projects=x")[0], 400)
 
+    def test_settings_rejects_non_numeric_budget_leaf(self):
+        code, _ = self.post("/api/settings", {"budgets": {"monthly_usd": "x"}},
+                            headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 400)
+
+    def test_settings_rejects_non_numeric_per_project_usd(self):
+        code, _ = self.post("/api/settings", {"budgets": {"per_project_usd": {"a": "x"}}},
+                            headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 400)
+
+    def test_settings_rejects_bad_alert_thresholds(self):
+        code, _ = self.post("/api/settings", {"alert_thresholds_pct": [50, "x"]},
+                            headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 400)
+
+    def test_settings_accepts_valid_budget(self):
+        code, body = self.post("/api/settings", {"budgets": {"monthly_usd": 500}},
+                               headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 200)
+        self.assertEqual(body["settings"]["budgets"]["monthly_usd"], 500)
+
+    def test_malformed_start_date_is_400(self):
+        self.assertEqual(self.get("/api/overview?start=not-a-date")[0], 400)
+
+    def test_non_numeric_min_cost_is_400(self):
+        self.assertEqual(self.get("/api/sessions?min_cost=abc")[0], 400)
+
     def test_unexpected_internal_error_is_500_not_400(self):
         orig = finops_api.A.overview
         finops_api.A.overview = lambda *a, **k: (_ for _ in ()).throw(ValueError("boom"))

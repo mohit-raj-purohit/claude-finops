@@ -6,9 +6,9 @@ import io
 import csv
 import logging
 import os
-import sqlite3
 import sys
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -41,6 +41,27 @@ SETTINGS_SHAPE = {
     "anomaly": dict, "scorecard": dict, "account": dict, "billing_period": dict,
 }
 
+
+def _is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _validate_numeric_section(name, v):
+    """budgets/limits: every leaf a number or null, per_*_usd a dict of numbers."""
+    for k, leaf in v.items():
+        if k.startswith("_"):
+            continue
+        if k in ("per_project_usd", "per_model_usd"):
+            if not isinstance(leaf, dict) or not all(_is_num(x) for x in leaf.values()):
+                raise BadRequest(f"{name}.{k} must be a dict of numbers")
+        elif not (leaf is None or _is_num(leaf)):
+            raise BadRequest(f"{name}.{k} must be a number or null")
+
+
+def _validate_thresholds(v):
+    if not all(_is_num(x) and 0 <= x <= 1000 for x in v):
+        raise BadRequest("alert_thresholds_pct must be a list of numbers 0..1000")
+
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json",
         ".svg": "image/svg+xml", ".ico": "image/x-icon"}
@@ -57,15 +78,35 @@ def filters_from(qs):
         projects = [int(x) for x in lst("projects")]
     except ValueError:
         raise BadRequest("projects must be integers")
+
+    def _date(k):
+        v = qs.get(k, [None])[0] or None
+        if v is None:
+            return None
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise BadRequest(f"{k} must be YYYY-MM-DD")
+        return v
+
+    def _num(k, cast):
+        v = qs.get(k, [None])[0] or None
+        if v is None:
+            return None
+        try:
+            return cast(v)
+        except ValueError:
+            raise BadRequest(f"{k} must be a number")
+
     f = {
-        "start": qs.get("start", [None])[0] or None,
-        "end": qs.get("end", [None])[0] or None,
+        "start": _date("start"),
+        "end": _date("end"),
         "agents": lst("agents"), "models": lst("models"), "projects": projects,
         "sessions": lst("sessions"), "categories": lst("categories"),
         "include_sandbox": qs.get("include_sandbox", ["1"])[0] != "0",
-        "min_cost": qs.get("min_cost", [None])[0] or None,
-        "max_cost": qs.get("max_cost", [None])[0] or None,
-        "min_tokens": qs.get("min_tokens", [None])[0] or None,
+        "min_cost": _num("min_cost", float),
+        "max_cost": _num("max_cost", float),
+        "min_tokens": _num("min_tokens", int),
     }
     return f
 
@@ -172,6 +213,11 @@ class Handler(BaseHTTPRequestHandler):
                 bp = payload.get("billing_period") or {}
                 if "anchor_day" in bp and not (isinstance(bp["anchor_day"], int) and 1 <= bp["anchor_day"] <= 28):
                     return self.send_json({"error": "anchor_day must be 1..28"}, 400)
+                for section in ("budgets", "limits"):
+                    if section in payload:
+                        _validate_numeric_section(section, payload[section])
+                if "alert_thresholds_pct" in payload:
+                    _validate_thresholds(payload["alert_thresholds_pct"])
                 # UI edits go to the gitignored per-machine file, never the shared defaults
                 local = {}
                 if os.path.exists(LOCAL_SETTINGS_PATH):
@@ -344,12 +390,12 @@ class Handler(BaseHTTPRequestHandler):
         if route == "projects":
             return self.send_json(a.projects(f))
         if route == "sessions":
-            limit = _int(qs, "limit", 200, 1, 2000)
+            limit = _int(qs, "limit", 200, 1, 5000)
             offset = _int(qs, "offset", 0, 0)
             return self.send_json({"rows": a.sessions(f, limit, g("order", "cost"), offset),
                                     "total": a.sessions_total(f)})
         if route == "prompts":
-            limit = _int(qs, "limit", 200, 1, 2000)
+            limit = _int(qs, "limit", 200, 1, 5000)
             offset = _int(qs, "offset", 0, 0)
             search = g("q")
             return self.send_json({"rows": a.prompts(f, limit, offset, g("order", "cost"), search),
