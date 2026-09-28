@@ -83,3 +83,14 @@ class TestResume(unittest.TestCase):
                               sessions=(("A", "/h/.claude/projects/-p/A.jsonl"), ("B", cowork))))
         self.assertEqual(a.session_detail("A")["resume"], "claude --resume A")
         self.assertIsNone(a.session_detail("B")["resume"])
+
+
+class TestLegacyPrices(unittest.TestCase):
+    def test_older_claude_ids_are_priced(self):
+        from finops.pricing import Pricing
+        p = Pricing()
+        for mid, inp, out in [("claude-sonnet-4-6", 3, 15), ("claude-sonnet-4-5-20250929", 3, 15),
+                              ("claude-opus-4-1-20250805", 15, 75), ("claude-opus-4-8", 5, 25),
+                              ("claude-3-5-haiku-20241022", 0.8, 4)]:
+            self.assertTrue(p.is_known(mid), mid)
+            self.assertEqual((p.rates(mid)["input"], p.rates(mid)["output"]), (inp, out), mid)
