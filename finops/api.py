@@ -366,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "usage":
             from .limits import usage
             return self.send_json(usage(force=qs.get("refresh", [""])[0] == "1"))
+        if route == "plan_history":
+            from .plan_history import history
+            return self.send_json(history())
         if route.startswith(("free_models", "suggestions", "job/", "sync", "compare")):
             return self.actions_get(route)
         f = filters_from(qs)

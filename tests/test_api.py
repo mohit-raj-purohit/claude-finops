@@ -174,3 +174,14 @@ class TestParityRoutes(ServerFixture):
         code, body = self.get("/api/heatmap")
         self.assertEqual(code, 200)
         self.assertEqual(len(body["cells"]), 168)
+
+    def test_plan_history_route_never_errors(self):
+        from finops import plan_history
+        orig = plan_history.PLAN_HISTORY_PATH
+        plan_history.PLAN_HISTORY_PATH = "/nonexistent/plan.json"
+        try:
+            code, body = self.get("/api/plan_history")
+        finally:
+            plan_history.PLAN_HISTORY_PATH = orig
+        self.assertEqual(code, 200)
+        self.assertFalse(body["ok"])

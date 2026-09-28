@@ -70,7 +70,7 @@ export function timeSeries(host, opts) {
   const totals = rows.map(r => stacked
     ? active.reduce((a, s) => a + (+r[s.key] || 0), 0)
     : Math.max(...active.map(s => +r[s.key] || 0), 0));
-  const max = nice(Math.max(...totals, 0) || 1);
+  const max = Math.max(opts.max || 0, nice(Math.max(...totals, 0) || 1));
   const y = v => m.t + ih - (v / max) * ih;
   const n = rows.length;
   const bw = Math.max(2, Math.min(34, iw / n * 0.72));

@@ -867,7 +867,8 @@ VIEWS.usage = async (page) => {
 
 /* ---------- burn & limits ---------- */
 VIEWS.burn = async (page) => {
-  const burn = await api('burn');
+  const [burn, plan] = await Promise.all([api('burn'), fetch('/api/plan_history')
+    .then(r => r.json()).catch(e => ({ok: false, reason: e.message}))]);
   const bp = burn.period;
   const rows = Object.entries(burn.allowances);
   page.innerHTML = `
@@ -919,10 +920,31 @@ VIEWS.burn = async (page) => {
             <span class="mono">config/settings.json → limits</span> to enable usage-vs-limit,
             days-until-limit and limit-date projections.</p></div>`,
       {badge: a.configured ? BADGE.estimated : ''})).join('')}</div>
+    ${card('Plan limits over time', plan.ok ? `
+      <div class="grid g3">
+        ${kpi('5-hour peak', fmtPct(plan.summary.five_hour_peak ?? 0, 0), null, {badge: BADGE.actual})}
+        ${kpi('Times at 90%+ (5-hour)', fmtInt(plan.summary.five_hour_ge90),
+          `${fmtInt(plan.summary.five_hour_hit100)} reached 100%`)}
+        ${kpi('Weekly peak', fmtPct(plan.summary.weekly_peak ?? 0, 0),
+          `${fmtInt(plan.summary.weekly_ge90)} times at 90%+`)}
+      </div>
+      <div class="legend" id="planleg"></div><div class="chart" id="plan"></div>`
+      : `<div class="empty">${esc(plan.reason || 'Unavailable')}</div>`,
+      {badge: BADGE.actual, hint: '5-hour and weekly plan usage, % used',
+       footer: 'Read from the Claude desktop app\'s local plan-usage-history.json. '
+             + 'Its format is undocumented, so this card may go blank after an app update.'})}
     ${card('Daily consumption within the billing period', '<div class="chart" id="bs"></div>',
       {badge: BADGE.estimated})}`;
   for (const [k, a] of rows) if (a.configured)
     C.gauge($(`#g-${k}`, page), {pct: a.used_pct, status: a.status, label: 'of allowance'});
+  if (plan.ok) {
+    const ps = [{key: 'five_hour', label: '5-hour window', color: seriesVar(0), fmt: v => fmtPct(v, 0)},
+                {key: 'weekly', label: 'Weekly window', color: seriesVar(1), fmt: v => fmtPct(v, 0)}];
+    C.legend($('#planleg', page), ps.map(s => ({label: s.label, color: s.color})));
+    C.timeSeries($('#plan', page), {rows: plan.series, x: 't', type: 'line', series: ps,
+      fmt: v => fmtPct(v, 0), max: 100, height: 220,
+      xLabel: t => new Date(t).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})});
+  }
   C.timeSeries($('#bs', page), {rows: burn.series, x: 'day', type: 'bar',
     series: [{key: 'cost', label: 'Estimated cost', color: seriesVar(0), fmt: fmtUSD}],
     fmt: fmtUSD, height: 220, xLabel: shortDay});
