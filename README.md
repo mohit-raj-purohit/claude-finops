@@ -374,7 +374,8 @@ files on Windows.
   `~/.claude/finops-handoffs/` and opens fresh session(s) in new terminals, one per sub-task if
   you list them; it can close the old session (resumable).
 - **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal.
-  Each asks you to click twice.
+  Each asks you to click twice. Interrupt is macOS/Linux only: on Windows there is no way to
+  interrupt one console process without hitting the others in its window.
 - **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
   already have.
