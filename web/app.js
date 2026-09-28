@@ -459,6 +459,8 @@ async function openSession(id) {
         : '<div class="na">None</div>')}
     </div>
     ${card('Session metadata', `<dl class="kv">
+      ${s.resume ? `<dt>Resume</dt><dd><span class="mono">${esc(s.resume)}</span>
+        <button class="btn pb-copy" id="sess-resume" data-copy="${esc(s.resume)}">Copy</button></dd>` : ''}
       <dt>Session ID</dt><dd class="mono">${esc(s.id)}</dd>
       <dt>Title</dt><dd>${s.title ? esc(s.title) : NA()}</dd>
       <dt>Project</dt><dd>${esc(s.project)}</dd>
@@ -470,6 +472,10 @@ async function openSession(id) {
       <dt>Commits / PRs</dt><dd>${NA()}</dd>
     </dl>`)}`;
   wireTable(cont, s.prompts, r => openPrompt(r.prompt_id));
+  const rb = cont.querySelector('#sess-resume');
+  if (rb) rb.onclick = async () => {
+    try { await navigator.clipboard.writeText(rb.dataset.copy); rb.textContent = 'Copied'; }
+    catch { rb.textContent = 'Copy failed'; } };
   const tl = s.timeline.map((r, i) => ({i, ...r}));
   C.timeSeries($('#sesschart', cont), {rows: tl, x: 'i', type: 'area',
     series: [{key: 'context_tokens', label: 'Context tokens', color: seriesVar(0)}],

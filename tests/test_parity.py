@@ -73,3 +73,13 @@ class TestYesterday(unittest.TestCase):
         a = Analytics(make_db([("2026-03-10T10:00:00Z", "2026-03-10", 6.0, 10, "A")]))
         a._today = date(2026, 3, 10)
         self.assertEqual(a.overview({})["cost_yesterday"]["c"], 0)
+
+
+class TestResume(unittest.TestCase):
+    def test_resume_for_cli_session_not_cowork(self):
+        cowork = "/L/Claude/local-agent-mode-sessions/o/u/local_1/.claude/projects/-x/B.jsonl"
+        a = Analytics(make_db([("2026-03-10T10:00:00Z", "2026-03-10", 1.0, 1, "A"),
+                               ("2026-03-10T11:00:00Z", "2026-03-10", 1.0, 1, "B")],
+                              sessions=(("A", "/h/.claude/projects/-p/A.jsonl"), ("B", cowork))))
+        self.assertEqual(a.session_detail("A")["resume"], "claude --resume A")
+        self.assertIsNone(a.session_detail("B")["resume"])

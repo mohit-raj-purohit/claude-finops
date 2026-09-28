@@ -699,6 +699,11 @@ class Analytics:
         s["files"] = self.q(
             "SELECT path, GROUP_CONCAT(DISTINCT op) ops, COUNT(*) n FROM files_touched"
             " WHERE session_id=? GROUP BY path ORDER BY n DESC LIMIT 100", (sid,))
+        # Cowork transcripts live under the desktop app's own config dir, where
+        # `claude --resume` would not find them.
+        cowork = "local-agent-mode-sessions" in (s.get("source_file") or "")
+        s["resume"] = (f"claude --resume {sid}"
+                       if (s.get("agent") or "claude") == "claude" and not cowork else None)
         return s
 
     # ---------------- categories ----------------
