@@ -168,6 +168,16 @@ def _cumsum(values):
         yield total
 
 
+def resume_command(sid, agent, source_file):
+    """`claude --resume <id>` for a Claude Code session; None where it would not work.
+
+    Cowork transcripts live under the desktop app's own config dir, where
+    `claude --resume` would not find them.
+    """
+    cowork = "local-agent-mode-sessions" in (source_file or "")
+    return f"claude --resume {sid}" if (agent or "claude") == "claude" and not cowork else None
+
+
 class Analytics:
     def __init__(self, db_path=DB_PATH):
         # One connection per thread. The HTTP server is threaded, and a single sqlite
@@ -561,6 +571,7 @@ class Analytics:
         rows = self.q(f"""
           SELECT s.id session_id, s.title, s.git_branch, s.cli_version, s.started_at,
                  s.ended_at, s.duration_s, s.files_touched, pr.name project, pr.id project_id,
+                 s.agent, s.source_file,
                  COUNT(DISTINCT r.prompt_id) prompts, COUNT(*) requests,
                  SUM(r.tool_call_count) tool_calls,
                  SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,
@@ -579,6 +590,7 @@ class Analytics:
             r["output_ratio"] = (r["output_tokens"] or 0) / r["tokens"] if r["tokens"] else 0
             cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
             r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
+            r["resume"] = resume_command(r["session_id"], r.pop("agent"), r.pop("source_file"))
         return rows
 
     def sessions_total(self, f=None):
@@ -699,11 +711,7 @@ class Analytics:
         s["files"] = self.q(
             "SELECT path, GROUP_CONCAT(DISTINCT op) ops, COUNT(*) n FROM files_touched"
             " WHERE session_id=? GROUP BY path ORDER BY n DESC LIMIT 100", (sid,))
-        # Cowork transcripts live under the desktop app's own config dir, where
-        # `claude --resume` would not find them.
-        cowork = "local-agent-mode-sessions" in (s.get("source_file") or "")
-        s["resume"] = (f"claude --resume {sid}"
-                       if (s.get("agent") or "claude") == "claude" and not cowork else None)
+        s["resume"] = resume_command(sid, s.get("agent"), s.get("source_file"))
         return s
 
     # ---------------- categories ----------------
@@ -725,7 +733,7 @@ class Analytics:
 
     # ---------------- leaderboards ----------------
     def leaderboards(self, f=None, n=20):
-        return {
+        out = {
             "most_expensive": self.prompts(f, limit=n, order="cost"),
             "most_token_heavy": self.prompts(f, limit=n, order="tokens"),
             "cheapest": self.prompts(f, limit=n, order="cheapest"),
@@ -733,6 +741,17 @@ class Analytics:
             "longest_sessions": self.sessions(f, limit=n, order="duration"),
             "basis": "estimated",
         }
+        prompt_rows = [r for k in ("most_expensive", "most_token_heavy", "cheapest", "most_efficient")
+                       for r in out[k]]
+        sids = sorted({r["session_id"] for r in prompt_rows if r.get("session_id")})
+        src = {r["id"]: r for r in self.q(
+            "SELECT id, agent, source_file FROM sessions WHERE id IN (%s)" % ",".join("?" * len(sids)),
+            sids)} if sids else {}
+        for r in prompt_rows:
+            s = src.get(r.get("session_id")) or {}
+            r["resume"] = (resume_command(r["session_id"], s.get("agent"), s.get("source_file"))
+                           if s else None)
+        return out
 
     # ---------------- efficiency ----------------
     def hygiene(self, f=None, top=12, trajectory_points=80):

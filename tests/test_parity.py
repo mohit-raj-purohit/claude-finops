@@ -94,3 +94,27 @@ class TestLegacyPrices(unittest.TestCase):
                               ("claude-3-5-haiku-20241022", 0.8, 4)]:
             self.assertTrue(p.is_known(mid), mid)
             self.assertEqual((p.rates(mid)["input"], p.rates(mid)["output"]), (inp, out), mid)
+
+
+class TestResumeInTables(unittest.TestCase):
+    def setUp(self):
+        cowork = "/L/Claude/local-agent-mode-sessions/o/u/local_1/.claude/projects/-x/B.jsonl"
+        path = make_db([("2026-03-10T10:00:00Z", "2026-03-10", 3.0, 1, "A"),
+                        ("2026-03-10T11:00:00Z", "2026-03-10", 1.0, 1, "B")],
+                       sessions=(("A", "/h/.claude/projects/-p/A.jsonl"), ("B", cowork)))
+        db = sqlite3.connect(path)
+        db.execute("INSERT INTO prompts (id, session_id, project_id, ts, day, text, est_cost_usd) "
+                   "VALUES (1, 'A', 1, '2026-03-10T10:00:00Z', '2026-03-10', 'hi', 3.0)")
+        db.execute("UPDATE requests SET prompt_id = 1 WHERE session_id = 'A'")
+        db.commit(); db.close()
+        self.a = Analytics(path)
+
+    def test_sessions_rows_carry_resume(self):
+        rows = {r["session_id"]: r for r in self.a.sessions({})}
+        self.assertEqual(rows["A"]["resume"], "claude --resume A")
+        self.assertIsNone(rows["B"]["resume"])
+        self.assertNotIn("source_file", rows["A"])
+
+    def test_leaderboard_prompts_carry_resume(self):
+        top = self.a.leaderboards({})["most_expensive"]
+        self.assertEqual(top[0]["resume"], "claude --resume A")
