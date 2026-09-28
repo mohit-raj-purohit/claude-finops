@@ -2,6 +2,10 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.10.1 — Maintenance release
+
+Version number only. The dashboard is the same as 0.10.0.
+
 ## 0.10.0 — Act now
 
 **Act now, on the overview.** The things only this dashboard can do used to sit a few
