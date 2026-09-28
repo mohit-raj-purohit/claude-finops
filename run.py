@@ -153,7 +153,7 @@ HELP = """Claude FinOps Command Center
   claude-finops --version       print the installed version, and whether a newer one is out
   claude-finops --no-update-check   skip the once-a-day npm version check
   claude-finops --install-hook  retired no-op (prints a message, changes nothing)
-  claude-finops --install-statusline   show model and context % in your statusline
+  claude-finops --install-statusline   show model, context % and 5-hour limit in your statusline
   claude-finops --help          this message
 
 Environment:
@@ -296,7 +296,9 @@ def main():
         return install_hook(remove="--uninstall-hook" in args)
     if "--install-statusline" in args or "--uninstall-statusline" in args:
         from finops.integrate import install_statusline
-        return install_statusline(remove="--uninstall-statusline" in args)
+        r = install_statusline(remove="--uninstall-statusline" in args)
+        print(r["message"])
+        return sys.exit(0 if r["ok"] else 1)
     if "--where" in args:
         return where()
     if "--keys" in args:

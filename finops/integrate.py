@@ -12,6 +12,7 @@ fail silent, never block, never take long.
 """
 import json
 import os
+import shlex
 import shutil
 import sys
 
@@ -59,14 +60,17 @@ def hook():
 # -------------------------------------------------------------- statusline ----
 
 def statusline():
-    """One line, refreshed constantly: model and context usage."""
+    """One line, refreshed constantly: model, context usage and the 5-hour limit."""
     try:
         d = _stdin_json()
-        pct = _dig(d, "context.percentUsed", "context.percent_used")
+        pct = _dig(d, "context_window.used_percentage", "context.percentUsed", "context.percent_used")
+        five = _dig(d, "rate_limits.five_hour.used_percentage")
         name = _dig(d, "model.display_name", "session.model", "model") or "claude"
         bits = [str(name)]
         if isinstance(pct, (int, float)):
             bits.append(f"{pct:.0f}% ctx")
+        if isinstance(five, (int, float)):
+            bits.append(f"{five:.0f}% 5h")
         print(" · ".join(bits))
     except Exception:
         print("")     # an empty statusline beats a stack trace under the prompt
@@ -81,7 +85,8 @@ def _command():
     if exe:
         return exe
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return f"{sys.executable} {os.path.join(root, 'run.py')}"
+    # settings run this through a shell: an install path with a space would split
+    return f"{shlex.quote(sys.executable)} {shlex.quote(os.path.join(root, 'run.py'))}"
 
 
 def _load_settings():
@@ -113,21 +118,31 @@ def install_hook(remove=False):
     print("The statusline (claude-finops --install-statusline) still shows model and context %.")
 
 
+def statusline_state():
+    """"ours" when our statusline is installed, "other" for someone else's, else None."""
+    cur = _load_settings().get("statusLine")
+    if not cur:
+        return None
+    return "ours" if "finops" in json.dumps(cur) else "other"
+
+
 def install_statusline(remove=False):
-    cmd = f"{_command()} --statusline"
+    """Wire the statusline into ~/.claude/settings.json. Returns {"ok", "message"}.
+
+    Claude Code wants {"type": "command", "command": ...}; an existing statusline that
+    isn't ours is left alone.
+    """
     s = _load_settings()
     if remove:
-        if "finops" in str(s.get("statusLine", "")):
+        if statusline_state() == "ours":
             s.pop("statusLine", None)
-    else:
-        prev = s.get("statusLine")
-        if prev and "finops" not in str(prev):
-            print(f"You already have a statusLine configured:\n  {prev}")
-            print("Leaving it alone. Remove it first if you want ours.")
-            return
-        s["statusLine"] = cmd
+            _save_settings(s)
+        return {"ok": True, "message": f"Removed the statusline from {SETTINGS}"}
+    if statusline_state() == "other":
+        return {"ok": False, "message": "You already have a statusline configured "
+                f"({json.dumps(s['statusLine'])}). Left it alone: remove it first if you want ours."}
+    s["statusLine"] = {"type": "command", "command": f"{_command()} --statusline"}
     _save_settings(s)
-    print(("Removed" if remove else "Installed") + f" the statusline in {SETTINGS}")
-    if not remove:
-        print("  Shows the model and context usage percentage.")
-        print("  Undo: claude-finops --uninstall-statusline")
+    return {"ok": True, "message": f"Installed the statusline in {SETTINGS}. It shows the model, "
+                                   "context % and 5-hour limit % under every prompt. "
+                                   "Undo: claude-finops --uninstall-statusline"}
