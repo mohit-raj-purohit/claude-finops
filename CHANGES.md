@@ -2,6 +2,35 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.9.0 — Peak hours, plan-limit history, Claude desktop sessions
+
+**Peak hours.** The Usage timeline has a new weekday × hour heatmap showing when
+you spend, in your own local time. Transcripts are stamped in UTC, so without the
+conversion a 10am session in India would show up at 4am.
+
+**Plan limits over time.** The Claude desktop app keeps a local record of your
+5-hour and weekly plan usage, sampled every few minutes. Burn rate & limits now
+charts it, with your peaks and how often you ran above 90%. The file's format is
+undocumented; if an app update changes it, the card says so and goes blank instead
+of showing something wrong.
+
+**Claude desktop app (Cowork) sessions are included.** Cowork writes Claude Code
+transcripts into the desktop app's own folder, which the dashboard never read. They
+now load alongside your other Claude sessions, as projects named `Cowork · …`.
+
+**Today against yesterday.** The overview's spend card shows how today compares
+with yesterday.
+
+**Resume from any session.** The session panel now shows the
+`claude --resume <id>` command with a Copy button, not only for running sessions.
+
+**Older Claude models are priced.** Claude 4.x (Opus 4 to 4.8, Sonnet 4 to 4.6) and
+Haiku 3.5 were missing from the price table, so their requests showed as unpriced.
+They now use Anthropic's published list prices.
+
+**Run Sync once after upgrading.** Cowork sessions and the new prices are picked up
+when the warehouse is rebuilt: click Sync, or start with `--rebuild`.
+
 ## 0.8.0 — Cost figures corrected: one row per request, list prices fixed
 
 **Requests were counted more than once.** A streamed response arrives as several
