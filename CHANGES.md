@@ -2,6 +2,25 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## Unreleased — Act now
+
+**Act now, on the overview.** The things only this dashboard can do used to sit a few
+clicks deep. The overview now opens with a short list of one-click actions that apply
+to you right now: compact or hand over a running session carrying heavy context, turn
+a shell command you keep re-running into a skill, move an instruction you keep
+re-typing into CLAUDE.md, or install the statusline. Only high-signal suggestions
+make the list; the full lists stay on their own pages.
+
+**Resume and Compact in every session row.** The Sessions table and Cost rankings
+now have a Resume button that copies `claude --resume <id>`, and a Compact button on
+any session that is running right now, without opening the session panel.
+
+**The statusline works.** It was being written to Claude Code's settings in a shape
+Claude Code doesn't accept, read a context field that doesn't exist, and broke on
+install paths with a space. It now uses the documented settings shape and fields, and
+also shows how much of your 5-hour limit you've used. It can be installed from the
+dashboard as well as with `--install-statusline`.
+
 ## 0.9.0 — Peak hours, plan-limit history, Claude desktop sessions
 
 **Peak hours.** The Usage timeline has a new weekday × hour heatmap showing when
