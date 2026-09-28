@@ -686,6 +686,7 @@ VIEWS.overview = async (page) => {
     if (!page.isConnected) return;
     const el = h(focusStrip(d) || '<div></div>');
     page.insertBefore(el, page.querySelector('.actnow')?.nextSibling || page.firstChild);
+    page._focusData = d;
     wireFocus(page);
   }).catch(() => {});
   if (hasClaude()) fetch('/api/act_now').then(r => r.json()).then(d => {
@@ -2401,40 +2402,81 @@ VIEWS.exports = async (page) => {
 /* ============================ focus cues ============================ */
 // "What needs me first": one ranked list built from the diagnosis, used for the nav
 // badges and the Focus strip at the top of the overview and diagnosis pages.
+// "What to change": things to fix once and habits to change, each with its reason.
+// Running sessions are left to ⚡ Act now, which can act on them. Items are keyed so a
+// dismissed one comes back only if its evidence changes (e.g. more sessions affected).
+const firstSentence = t => { const m = String(t || '').match(/^.*?[.!?](\s|$)/); return (m ? m[0] : String(t || '')).trim(); };
+// "29.7% of X." + "35.6% of X." -> "29.7–35.6% of X." plus the shared advice; null when they differ.
+function sameFix(fixes) {
+  const pct = /\d+(?:\.\d+)?%/, heads = fixes.map(firstSentence);
+  const shape = heads.map(t => t.replace(pct, '#'));
+  if (!shape.every(t => t === shape[0]) || !pct.test(heads[0])) return null;
+  const nums = heads.map(t => parseFloat(t.match(pct)[0]));
+  const range = `${Math.min(...nums)}–${Math.max(...nums)}%`;
+  const rest = fixes[0].slice(heads[0].length).trim().replace(/\bthis repo\b/g, 'each repo');
+  return `${shape[0].replace('#', range).replace(' here ', ' in these repos ')} ${rest}`.trim();
+}
 function focusItems(d) {
   const out = [];
-  for (const x of d.live_sessions || []) if (x.severity !== 'ok')
-    out.push({lvl: x.severity === 'high' ? 1 : 2, text: `Running session at ${fmtNum(x.context)} context: ${x.title || shortId(x.session_id)}`, view: 'diagnose', anchor: 'dx-live'});
   for (const m of d.memory_suggestions || []) if (m.kind === 'security')
-    out.push({lvl: 1, text: `Credentials pasted in prompts (${m.sessions} sessions): rotate them`, view: 'diagnose', anchor: 'dx-mem'});
+    out.push({lvl: 1, kind: 'fix', key: `sec:${m.sessions}`, view: 'diagnose', anchor: 'dx-mem',
+      text: `Rotate the credentials you pasted into prompts (${m.sessions} session${m.sessions === 1 ? '' : 's'})`,
+      why: 'Closing the sessions does not help: the secrets stay in plain text in those transcripts on disk.'});
+  const byIssue = (sev, lvl) => {
+    const groups = new Map();
+    for (const p of d.projects || []) for (const i of p.issues) if (i.severity === sev) {
+      if (!groups.has(i.title)) groups.set(i.title, []);
+      groups.get(i.title).push({project: p.name, fix: i.fix});
+    }
+    for (const [title, ps] of groups) out.push({lvl, kind: 'fix', view: 'diagnose', anchor: 'dx-issues',
+      key: `proj:${title}:${ps.map(x => x.project).sort().join(',')}`,
+      text: ps.length === 1 ? `${ps[0].project}: ${title}` : `${title} in ${ps.length} projects: ${ps.map(x => x.project).join(', ')}`,
+      why: ps.length === 1 ? ps[0].fix : sameFix(ps.map(x => x.fix))
+        || ps.slice(0, 3).map(x => `${x.project}: ${firstSentence(x.fix)}`).join(' · ')});
+  };
+  byIssue('high', 1);
   for (const r of d.recommendations || []) if (r.priority === 1)
-    out.push({lvl: 1, text: r.title, view: 'diagnose', anchor: 'dx-recs'});
-  for (const p of d.projects || []) for (const i of p.issues) if (i.severity === 'high')
-    out.push({lvl: 1, text: `${p.name}: ${i.title}`, view: 'diagnose', anchor: 'dx-issues'});
-  const s0 = (d.session_health || [])[0];
-  if (s0) out.push({lvl: 2, text: `Heaviest session: ${s0.title || shortId(s0.session_id)} (peak ${fmtNum(s0.peak)})`, view: 'diagnose', anchor: 'dx-past'});
-  for (const p of d.projects || []) for (const i of p.issues) if (i.severity === 'medium')
-    out.push({lvl: 2, text: `${p.name}: ${i.title}`, view: 'diagnose', anchor: 'dx-issues'});
+    out.push({lvl: 2, kind: 'habit', key: `rec:${r.title}`, view: 'diagnose', anchor: 'dx-recs',
+      text: r.title, why: `${firstSentence(r.why)} ${firstSentence(r.how)}`});
+  byIssue('medium', 3);
   return out.sort((a, b) => a.lvl - b.lvl);
 }
+const FOCUS_KEY = 'finops.focus.hidden';
+const focusHidden = () => { try { return new Set(JSON.parse(localStorage.getItem(FOCUS_KEY) || '[]')); } catch { return new Set(); } };
+const setFocusHidden = set => { try { localStorage.setItem(FOCUS_KEY, JSON.stringify([...set])); } catch {} };
 function focusStrip(d, n = 5) {
-  const items = focusItems(d);
-  if (!items.length) return '';
-  return `<section class="focus"><div class="focus-hd">🎯 Focus on these first
-      <span class="note">${items.filter(i => i.lvl === 1).length} urgent · ${items.filter(i => i.lvl === 2).length} next</span></div>
-    ${items.slice(0, n).map((it, k) => `<a class="focus-it l${it.lvl}" data-go="${it.view}" data-anchor="${it.anchor}">
-      <span class="fn">${k + 1}</span><span class="ft">${esc(it.text)}</span>
-      <span class="fl">${it.lvl === 1 ? 'Fix first' : 'Next'}</span></a>`).join('')}</section>`;
+  const all = focusItems(d), hidden = focusHidden();
+  const items = all.filter(i => !hidden.has(i.key));
+  const nHidden = all.length - items.length;
+  if (!all.length) return '';
+  const fixes = items.filter(i => i.kind === 'fix').length, habits = items.filter(i => i.kind === 'habit').length;
+  return `<section class="focus"><div class="focus-hd">🎯 What to change
+      <span class="note">${fixes} to fix once · ${habits} habit${habits === 1 ? '' : 's'} from your past sessions</span>
+      <span class="spacer"></span>${nHidden ? `<button class="act ghost" data-unhide="1">Show ${nHidden} hidden</button>` : ''}</div>
+    ${items.slice(0, n).map((it, k) => `<div class="focus-it l${it.lvl === 1 ? 1 : 2}" data-go="${it.view}" data-anchor="${it.anchor}" data-key="${esc(it.key)}">
+      <span class="fn">${k + 1}</span>
+      <span class="ft"><span class="fx">${esc(it.text)}</span><span class="fw">${esc(it.why || '')}</span></span>
+      <span class="fl">${it.kind === 'habit' ? 'Habit' : 'Fix once'}</span>
+      <button class="fd" title="Hide this until its evidence changes" aria-label="Hide">✕</button></div>`).join('')
+      || '<div class="note">Everything here is hidden. Nice.</div>'}</section>`;
 }
 function wireFocus(root) {
-  root.querySelectorAll('.focus-it').forEach(a => a.onclick = () => jumpTo(a.dataset.go, a.dataset.anchor));
+  const redraw = () => { const old = root.querySelector('.focus'); if (!old || !root._focusData) return;
+    const el = h(focusStrip(root._focusData) || '<div></div>'); old.replaceWith(el); wireFocus(root); };
+  root.querySelectorAll('.focus-it').forEach(a => {
+    a.onclick = () => jumpTo(a.dataset.go, a.dataset.anchor);
+    a.querySelector('.fd').onclick = e => { e.stopPropagation();
+      const hid = focusHidden(); hid.add(a.dataset.key); setFocusHidden(hid); redraw(); };
+  });
+  const un = root.querySelector('[data-unhide]');
+  if (un) un.onclick = () => { setFocusHidden(new Set()); redraw(); };
 }
 async function updateNavBadges() {
   const set = (id, n, lvl) => { const el = document.querySelector(`[data-nb="${id}"]`);
     if (el) { el.textContent = n ? n : ''; el.className = 'nb' + (n ? ' l' + lvl : ''); } };
   try {
     const [d, w, a] = await Promise.all([hasPriced() ? api('diagnose') : null, api('waste'), api('anomalies')]);
-    if (d) { const f = focusItems(d), urgent = f.filter(i => i.lvl === 1).length;
+    if (d) { const hid = focusHidden(), f = focusItems(d).filter(i => !hid.has(i.key)), urgent = f.filter(i => i.lvl === 1).length;
       set('diagnose', urgent || f.length, urgent ? 1 : 2); }
     const hw = w.findings.filter(x => x.severity === 'high').length;
     set('waste', hw || w.findings.length, hw ? 1 : 2);

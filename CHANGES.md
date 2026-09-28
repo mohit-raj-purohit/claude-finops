@@ -15,6 +15,13 @@ make the list; the full lists stay on their own pages.
 now have a Resume button that copies `claude --resume <id>`, and a Compact button on
 any session that is running right now, without opening the session panel.
 
+**"Focus on these first" is now "What to change".** It used to mix a running session,
+one-off fixes and habits learned from past sessions under one "Fix first" label, with
+no reason given, so it read as if closed sessions still needed fixing. Running sessions
+now live only in Act now. Each remaining item is labelled **Fix once** or **Habit**,
+shows the evidence behind it in one line, and has a ✕ to hide it until that evidence
+changes.
+
 **The statusline works.** It was being written to Claude Code's settings in a shape
 Claude Code doesn't accept, read a context field that doesn't exist, and broke on
 install paths with a space. It now uses the documented settings shape and fields, and

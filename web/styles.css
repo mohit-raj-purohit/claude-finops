@@ -352,7 +352,12 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .focus-it .fn { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
   font-size: 11px; font-weight: 700; color: #fff; flex: none; }
 .focus-it.l1 .fn { background: var(--critical); } .focus-it.l2 .fn { background: var(--warning); }
-.focus-it .ft { flex: 1; min-width: 0; }
+.focus-it .ft { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.focus-it .fx { color: var(--s1); }
+.focus-it .fw { font-size: 11.5px; color: var(--muted); }
+.focus-it .fd { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px;
+  padding: 2px 6px; border-radius: 6px; }
+.focus-it .fd:hover { background: var(--surface-2); color: var(--text); }
 .focus-it .fl { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .focus-it.l1 .fl { color: var(--critical-ink); } .focus-it.l2 .fl { color: var(--warning-ink); }
 
