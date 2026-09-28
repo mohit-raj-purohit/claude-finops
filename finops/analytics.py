@@ -335,6 +335,7 @@ class Analytics:
                             f" FROM requests r WHERE {w} AND {extra}", p + ep)
 
         tot["cost_today"] = spend("r.day = ?", [today])
+        tot["cost_yesterday"] = spend("r.day = ?", [(_d(today) - timedelta(days=1)).isoformat()])
         tot["cost_week"] = spend("r.day >= ?", [wk])
         tot["cost_period"] = spend("r.day >= ? AND r.day <= ?", [bp["start"], bp["end"]])
         tot["billing_period"] = bp

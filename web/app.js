@@ -73,6 +73,13 @@ const dur = s => s == null ? '—' : s < 60 ? `${Math.round(s)}s`
 const shortDay = d => (d || '').slice(5);
 const shortId = s => (s || '').slice(0, 8);
 
+// "(▲12% vs yesterday)"; nothing when yesterday had no spend to compare against.
+const vsYesterday = o => {
+  const y = o.cost_yesterday?.c, t = o.cost_today?.c;
+  if (!y || t == null) return '';
+  const d = (t - y) / y * 100;
+  return ` (${d >= 0 ? '▲' : '▼'}${Math.abs(d).toFixed(0)}% vs yesterday)`;
+};
 function kpi(label, value, detail, opts = {}) {
   const na = value == null;
   return `<div class="kpi${na ? ' na' : ''}">
@@ -500,7 +507,7 @@ VIEWS.overview = async (page) => {
   page.innerHTML = `
     <div class="grid g5">
       ${kpi('Estimated spend', fmtUSD(o.est_cost_usd),
-        `${fmtUSD(o.cost_today.c)} today · ${fmtUSD(o.cost_week.c)} last 7d`, {badge: BADGE.estimated})}
+        `${fmtUSD(o.cost_today.c)} today${vsYesterday(o)} · ${fmtUSD(o.cost_week.c)} last 7d`, {badge: BADGE.estimated})}
       ${kpi('Billable tokens', fmtNum(o.billable_tokens),
         `${fmtNum(o.output_tokens)} output · ${fmtNum(o.cache_read_tokens)} cache read`,
         {badge: BADGE.actual})}

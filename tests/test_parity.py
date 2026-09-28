@@ -58,3 +58,18 @@ class TestHeatmap(unittest.TestCase):
         h = a.heatmap({"start": "2030-01-01"})
         self.assertEqual(len(h["cells"]), 168)
         self.assertEqual(sum(c["requests"] for c in h["cells"]), 0)
+
+
+class TestYesterday(unittest.TestCase):
+    def test_cost_yesterday(self):
+        a = Analytics(make_db([("2026-03-09T10:00:00Z", "2026-03-09", 4.0, 10, "A"),
+                               ("2026-03-10T10:00:00Z", "2026-03-10", 6.0, 10, "A")]))
+        a._today = date(2026, 3, 10)
+        o = a.overview({})
+        self.assertAlmostEqual(o["cost_yesterday"]["c"], 4.0)
+        self.assertAlmostEqual(o["cost_today"]["c"], 6.0)
+
+    def test_no_spend_yesterday_is_zero_not_error(self):
+        a = Analytics(make_db([("2026-03-10T10:00:00Z", "2026-03-10", 6.0, 10, "A")]))
+        a._today = date(2026, 3, 10)
+        self.assertEqual(a.overview({})["cost_yesterday"]["c"], 0)
