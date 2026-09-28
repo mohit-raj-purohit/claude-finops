@@ -63,6 +63,13 @@ npm install -g claude-finops    # then `claude-finops` from anywhere
 
 ## What you actually get
 
+**It acts, not just reports.** The overview opens with **⚡ Act now**: one-click
+actions that apply to you right now. Compact a running session that is carrying too
+much context (it types `/compact` into that session's terminal), hand it over to a
+fresh session, turn a shell command you keep re-running into a skill, or move an
+instruction you keep re-typing into `CLAUDE.md`. Every session row has **Resume**
+(copies `claude --resume <id>`), and running ones have **Compact**.
+
 **Where the money goes, per project.** Every project ranked by cost, drilling down
 Project → Session → Prompt.
 
@@ -140,17 +147,21 @@ labelled as your own configured figures.
 
 ## What is in it
 
-**Command center** — Executive overview (spend, tokens, usage %, remaining, forecast),
-an AI FinOps Advisor that answers "what should I do today?" from live data, and a
+**Command center** — Executive overview (spend, tokens, usage %, remaining, forecast,
+today vs yesterday) opening with the ⚡ Act now strip, running sessions you can
+interrupt, compact, hand over or close, an AI FinOps Advisor that answers "what should I do today?" from live data, and a
 0–100 FinOps scorecard with per-dimension reasoning.
 
 **Usage** — Interactive timeline across 10 metrics and 6 time ranges with day
-drill-down; burn rate and limits with a gauge, days-until-limit and projected overage;
+drill-down, plus a weekday × hour peak-hours heatmap in your local time; burn rate and
+limits with a gauge, days-until-limit and projected overage, and your 5-hour and weekly
+plan-limit history from the Claude desktop app;
 per-model FinOps table with superlatives (most expensive, most used, most
 token-efficient, best cost-per-output); context-size distribution and cache
 with-vs-without analysis.
 
-**Drill-down** — Project → Session → Prompt, everywhere. A prompt explorer over every
+**Drill-down** — Project → Session → Prompt, everywhere, with Resume (and Compact for
+running sessions) on every session row. A prompt explorer over every
 prompt with full text, category, tokens, cache split, tool calls, files touched,
 latency and efficiency; five leaderboards; prompt intelligence (spend by activity);
 and a Claude Code view (tools, files, branches, cost per repository).
@@ -212,12 +223,14 @@ depends entirely on how agentic your workload is.
 
 ```
 ~/.claude/projects/**/*.jsonl
+<Claude desktop app>/local-agent-mode-sessions/**/.claude/projects/**/*.jsonl   (Cowork)
         │
         ▼  finops/etl.py     stream-parse, normalize, roll up
    ~/.claude-finops/data/finops.db   SQLite warehouse
         │
         ▼  finops/analytics.py   KPIs · burn · forecast · waste · anomalies · scorecard
    finops/api.py             stdlib HTTP: JSON API + static files (127.0.0.1 only)
+                             (+ <Claude desktop app>/plan-usage-history.json, read on request)
         │
         ▼  web/              vanilla JS, inline-SVG charts, no build step
 ```
@@ -262,6 +275,8 @@ claude-finops --stop          stop it
 claude-finops --where         where your data, settings and keys live
 claude-finops --set-key       store a provider API key (hidden prompt, 0600)
 claude-finops --keys          which provider keys are configured
+claude-finops --install-statusline    model, context % and 5-hour limit under every prompt
+claude-finops --uninstall-statusline  remove it again
 claude-finops --help          everything
 ```
 
@@ -293,6 +308,12 @@ place for you to delete once you are happy.
 
 ## Privacy
 
+**What it reads, all read-only:** Claude Code transcripts in `~/.claude/projects`, and,
+if the Claude desktop app is installed, its Cowork transcripts and
+`plan-usage-history.json` (`~/Library/Application Support/Claude` on macOS,
+`%APPDATA%\Claude` on Windows, `~/.config/Claude` on Linux), plus the other coding
+agents listed under Multi-agent.
+
 `~/.claude-finops/data/finops.db` and the prompt/CSV exports contain **your full prompt text**. The
 server binds to `127.0.0.1` only, but treat the database and any export you
 generate as sensitive.
@@ -310,7 +331,8 @@ configure a key with `--set-key`.
 
 The app has nothing tied to one person. Whoever runs it sees **their own** Claude usage:
 
-- It reads `~/.claude/projects` on the machine it runs on (override with `CLAUDE_PROJECTS=/path`).
+- It reads `~/.claude/projects` on the machine it runs on (override with `CLAUDE_PROJECTS=/path`),
+  plus the Claude desktop app's Cowork sessions when the default location is used.
 - The account label comes from that machine's `~/.claude.json`.
 - Budgets and limits you set in the UI are saved to `~/.claude-finops/settings.local.json`. The committed `config/settings.json` holds only shared defaults.
 
@@ -344,6 +366,18 @@ files on Windows.
   `config/free_models.json`.
 - **Skills & MCP** suggests MCP servers and skills from work you repeat, with the evidence.
   "Add" runs `claude mcp add -s user …`; "Create skill" writes `~/.claude/skills/<name>/SKILL.md`.
+  The strongest skill suggestions also appear in **⚡ Act now** on the overview.
+- **Compact** (Running sessions, Act now, session rows) types `/compact` into that session's
+  terminal: tmux, Terminal.app, iTerm2 or the Windows console. Anywhere else it copies the
+  command for you to paste. It asks you to click twice.
+- **Hand over / split** (Running sessions) writes a brief of the session to
+  `~/.claude/finops-handoffs/` and opens fresh session(s) in new terminals, one per sub-task if
+  you list them; it can close the old session (resumable).
+- **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal.
+  Each asks you to click twice.
+- **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
+  `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
+  already have.
 
 ---
 
