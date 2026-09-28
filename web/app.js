@@ -763,9 +763,10 @@ const METRICS = [
   ['avg_context', 'Avg context', fmtNum],
 ];
 VIEWS.usage = async (page) => {
-  const [tl, models, ov] = await Promise.all([api('timeline', `&grain=${S.grain}`),
-    api('models'), api('overview')]);
+  const [tl, models, ov, hm] = await Promise.all([api('timeline', `&grain=${S.grain}`),
+    api('models'), api('overview'), api('heatmap')]);
   const [, mlabel, mfmt] = METRICS.find(m => m[0] === S.metric) || METRICS[0];
+  const hmMetric = ['cost', 'tokens', 'requests'].includes(S.metric) ? S.metric : 'cost';
   page.innerHTML = `
     <div class="grid g5">
       ${kpi('Total tokens', fmtNum(ov.billable_tokens), null, {badge: BADGE.actual})}
@@ -793,6 +794,9 @@ VIEWS.usage = async (page) => {
        footer: 'Days are bucketed in UTC, as Claude Code timestamps its transcripts. '
              + 'If you work late in a timezone ahead of UTC, that work lands on the previous day here.',
        flush: 0})}
+    ${card('Peak hours', '<div class="chart" id="heat"></div>',
+      {badge: hmMetric === 'cost' ? BADGE.estimated : BADGE.actual,
+       hint: `your local time (${hm.tz || 'local'}) · ${hmMetric === 'cost' ? 'estimated cost' : hmMetric}`})}
     ${card('Model mix over time', '<div class="legend" id="mixleg"></div>' +
       '<div class="chart" id="mix"></div>', {badge: BADGE.estimated,
       hint: 'stacked estimated cost per model'})}
@@ -810,6 +814,7 @@ VIEWS.usage = async (page) => {
     xLabel: v => S.grain === 'day' ? shortDay(v) : v.slice(8).replace('T', ' ') + ':00',
     onClick: r => { if (S.grain === 'day') { S.filter.start = r.bucket; S.filter.end = r.bucket;
       S.range = 'custom'; bust(); render(); } }});
+  C.heatmap($('#heat', page), {cells: hm.cells, metric: hmMetric});
 
   // per-model stacked mix
   const byDay = new Map();

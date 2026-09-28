@@ -12,6 +12,7 @@ import sqlite3
 import statistics
 import sys
 import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
@@ -442,6 +443,30 @@ class Analytics:
                  SUM(r.billable_tokens) tokens, SUM(r.est_cost_usd) cost,
                  AVG(r.context_tokens) avg_context
           FROM requests r WHERE {w} AND r.day <> '' GROUP BY 1 ORDER BY 1""", p)
+
+    def heatmap(self, f=None):
+        """Spend by weekday x hour, in this machine's local time (Monday first).
+
+        Transcripts stamp UTC; bucketing on that would put a 10am IST session at
+        4am. SQLite's 'localtime' modifier applies the local offset, half-hour
+        zones included. Date filters still apply to UTC days like every view.
+        """
+        w, p = self.where(f)
+        rows = self.q(f"""
+          SELECT CAST(strftime('%w', r.ts, 'localtime') AS INTEGER) wd,
+                 CAST(strftime('%H', r.ts, 'localtime') AS INTEGER) hr,
+                 COALESCE(SUM(r.est_cost_usd),0) cost, COALESCE(SUM(r.billable_tokens),0) tokens,
+                 COUNT(*) requests
+          FROM requests r WHERE {w} AND r.ts <> '' GROUP BY 1, 2""", p)
+        grid = {(d, h): {"dow": d, "hour": h, "cost": 0.0, "tokens": 0, "requests": 0}
+                for d in range(7) for h in range(24)}
+        for r in rows:
+            if r["wd"] is None or r["hr"] is None:
+                continue
+            c = grid[((r["wd"] + 6) % 7, r["hr"])]
+            c["cost"], c["tokens"], c["requests"] = r["cost"], r["tokens"], r["requests"]
+        return {"cells": [grid[(d, h)] for d in range(7) for h in range(24)],
+                "tz": time.strftime("%Z"), "cost_basis": "estimated"}
 
     # ---------------- models ----------------
     def models(self, f=None):

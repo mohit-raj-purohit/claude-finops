@@ -167,3 +167,10 @@ class TestPagination(ServerFixture):
         self.assertEqual(code, 200)
         self.assertIn("total", body)
         self.assertLessEqual(len(body["rows"]), 1)
+
+
+class TestParityRoutes(ServerFixture):
+    def test_heatmap_route(self):
+        code, body = self.get("/api/heatmap")
+        self.assertEqual(code, 200)
+        self.assertEqual(len(body["cells"]), 168)

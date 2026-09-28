@@ -385,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.burn(f))
         if route == "timeline":
             return self.send_json(a.timeline(f, g("grain", "day")))
+        if route == "heatmap":
+            return self.send_json(a.heatmap(f))
         if route == "models":
             return self.send_json(a.models(f))
         if route == "projects":

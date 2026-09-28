@@ -349,3 +349,36 @@ export function legend(host, items, onToggle) {
     host.appendChild(s);
   });
 }
+
+/* ---------- heatmap: weekday x hour ---------- */
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+export function heatmap(host, {cells, metric = 'cost'}) {
+  host.innerHTML = '';
+  const max = Math.max(0, ...cells.map(c => +c[metric] || 0));
+  if (!max) { host.innerHTML = '<div class="empty">No activity in range</div>'; return; }
+  const W = Math.max(host.clientWidth || 640, 320);
+  const m = {t: 4, r: 4, b: 18, l: 34};
+  const cw = (W - m.l - m.r) / 24, ch = Math.min(22, Math.max(12, cw * 0.8));
+  const H = m.t + ch * 7 + m.b;
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, height: H, role: 'img'});
+  DOW.forEach((d, i) => svg.appendChild(el('text', {x: m.l - 6, y: m.t + i * ch + ch * 0.68,
+    'text-anchor': 'end'}, d)));
+  for (let h = 0; h < 24; h += 3) svg.appendChild(el('text', {x: m.l + h * cw + cw / 2,
+    y: H - 5, 'text-anchor': 'middle'}, String(h).padStart(2, '0')));
+  cells.forEach(c => {
+    const v = +c[metric] || 0;
+    const r = el('rect', {x: m.l + c.hour * cw + 1, y: m.t + c.dow * ch + 1,
+      width: Math.max(1, cw - 2), height: Math.max(1, ch - 2), rx: 2,
+      fill: v ? 'var(--s1)' : 'var(--grid)',
+      'fill-opacity': v ? (0.15 + 0.85 * Math.sqrt(v / max)).toFixed(3) : 1});
+    r.addEventListener('mousemove', ev => showTip(
+      `<div class="t">${DOW[c.dow]} ${String(c.hour).padStart(2, '0')}:00</div>
+       <div class="row"><span class="k">Est. cost</span><span class="v">${fmtUSD(c.cost)}</span></div>
+       <div class="row"><span class="k">Tokens</span><span class="v">${fmtNum(c.tokens)}</span></div>
+       <div class="row"><span class="k">Requests</span><span class="v">${fmtInt(c.requests)}</span></div>`,
+      ev.clientX, ev.clientY));
+    r.addEventListener('mouseleave', hideTip);
+    svg.appendChild(r);
+  });
+  host.appendChild(svg);
+}
