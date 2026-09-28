@@ -2,7 +2,7 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
-## Unreleased — Act now
+## 0.10.0 — Act now
 
 **Act now, on the overview.** The things only this dashboard can do used to sit a few
 clicks deep. The overview now opens with a short list of one-click actions that apply
