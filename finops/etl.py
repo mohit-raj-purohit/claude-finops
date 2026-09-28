@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from .classify import classify
 from .pricing import Pricing
 
-from .paths import ROOT, DB_PATH
+from .paths import ROOT, DB_PATH, DESKTOP_SESSIONS
 DEFAULT_SOURCE = os.path.expanduser("~/.claude/projects")
 
 SCHEMA_VERSION = 3   # 3: cross-session request_id dedup (resumed sessions copy history)
@@ -203,8 +203,14 @@ def _slug_to_name(slug):
 
 
 class Loader:
-    def __init__(self, db_path=DB_PATH, source=DEFAULT_SOURCE, pricing=None, other_agents=True):
+    def __init__(self, db_path=DB_PATH, source=DEFAULT_SOURCE, pricing=None, other_agents=True,
+                 desktop_roots=None):
         self.other_agents = other_agents
+        # An explicit source means "load exactly this"; only the default also picks up
+        # the desktop app's Cowork sessions (same JSONL format, different config dir).
+        self.desktop_roots = (desktop_roots if desktop_roots is not None
+                              else [DESKTOP_SESSIONS] if source == DEFAULT_SOURCE else [])
+        self.cowork = False
         self.db_path = db_path
         self.source = source
         self.pricing = pricing or Pricing()
@@ -232,13 +238,19 @@ class Loader:
                 if n.endswith(".jsonl"):
                     files.append(os.path.join(dirpath, n))
         files.sort()
-        for i, fp in enumerate(files, 1):
+        marker = os.sep + os.path.join(".claude", "projects") + os.sep
+        desktop = sorted(os.path.join(d, n) for root in self.desktop_roots
+                         for d, _, names in os.walk(root) for n in names
+                         if n.endswith(".jsonl") and marker in d + os.sep)
+        for i, fp in enumerate(files + desktop, 1):
             if verbose and i % 20 == 0:
-                print(f"  ...{i}/{len(files)} transcripts", file=sys.stderr)
+                print(f"  ...{i}/{len(files) + len(desktop)} transcripts", file=sys.stderr)
+            self.cowork = i > len(files)
             try:
                 self.load_file(fp)
             except Exception as exc:  # a corrupt transcript must not kill the load
                 print(f"  ! skipped {os.path.basename(fp)}: {exc}", file=sys.stderr)
+        self.cowork = False
         if self.other_agents:
             from .agents import AgentLoader
             counts = AgentLoader(self, log=lambda m: print(m, file=sys.stderr)).run()
@@ -253,6 +265,7 @@ class Loader:
         for k, v in (
             ("source_dir", self.source),
             ("transcript_files", str(len(files))),
+            ("desktop_transcript_files", str(len(desktop))),
             ("pricing_updated", str(self.pricing.updated)),
             ("pricing_source", str(self.pricing.source)),
             ("cost_basis", "estimated"),
@@ -260,7 +273,7 @@ class Loader:
         ):
             self.db.execute("INSERT INTO meta VALUES (?,?)", (k, v))
         self.db.commit()
-        return len(files)
+        return len(files) + len(desktop)
 
     def project_id(self, slug, cwd):
         if slug in self.projects:
@@ -271,6 +284,8 @@ class Loader:
             return pid
         is_sandbox = 1 if ("sandbox" in slug or slug.startswith("-private")) else 0
         name = os.path.basename(cwd) if cwd else _slug_to_name(slug)
+        if self.cowork:
+            name = f"Cowork · {name or 'session'}"
         cur = self.db.execute(
             "INSERT INTO projects (slug, path, name, is_sandbox) VALUES (?,?,?,?)",
             (slug, cwd, name or slug, is_sandbox))

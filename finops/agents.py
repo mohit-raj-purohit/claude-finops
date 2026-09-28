@@ -33,7 +33,8 @@ def _cursor_state_db():
 
 AGENTS = {
     "claude": {"name": "Claude Code", "data": "full",
-               "note": "Tokens, model, cost, prompts and tool calls per request."},
+               "note": "Tokens, model, cost, prompts and tool calls per request. "
+                       "Includes Claude desktop app (Cowork) sessions when present."},
     "codex": {"name": "Codex", "data": "tokens",
               "paths": [os.path.join(HOME, ".codex", "sessions")],
               "note": "Tokens and model per turn. Cost estimated at OpenAI API list prices; "

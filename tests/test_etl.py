@@ -216,3 +216,38 @@ class TestSchemaVersion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCoworkTranscripts(unittest.TestCase):
+    def _desktop(self):
+        root = tempfile.mkdtemp(prefix="finops-desktop-")
+        proj = os.path.join(root, "org", "user", "local_1", ".claude", "projects", "-cowork-x")
+        os.makedirs(proj)
+        rows = [user("2026-01-01T00:00:00Z", "plan my week", cwd="/tmp/outputs"),
+                assistant("2026-01-01T00:00:05Z", "req-c", "msg-c", {"type": "text", "text": "ok"})]
+        with open(os.path.join(proj, "c1.jsonl"), "w") as fh:
+            fh.write("\n".join(json.dumps(r) for r in rows) + "\n")
+        with open(os.path.join(root, "org", "user", "local_1", "audit.jsonl"), "w") as fh:
+            fh.write(json.dumps({"type": "user", "message": {"content": "x"}}) + "\n")
+        return root
+
+    def _build(self, **kw):
+        src = tempfile.mkdtemp(prefix="finops-src-")
+        db = tempfile.mktemp(suffix=".db", prefix="finops-test-")
+        Loader(db_path=db, source=src, other_agents=False, **kw).build(verbose=False)
+        return sqlite3.connect(db)
+
+    def test_cowork_loaded_with_readable_name_and_audit_skipped(self):
+        con = self._build(desktop_roots=[self._desktop()])
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 1)
+        self.assertEqual(con.execute("SELECT name FROM projects").fetchone()[0], "Cowork · outputs")
+        self.assertEqual(con.execute(
+            "SELECT value FROM meta WHERE key='desktop_transcript_files'").fetchone()[0], "1")
+
+    def test_explicit_source_does_not_scan_desktop(self):
+        con = self._build()
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 0)
+
+    def test_missing_desktop_root_is_fine(self):
+        con = self._build(desktop_roots=["/nonexistent/finops-desktop"])
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 0)

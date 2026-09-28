@@ -109,3 +109,15 @@ def migrate(log=print):
     with open(_MARKER, "w") as fh:
         fh.write("state dir in use; delete this file to re-run migration\n")
     return bool(moved)
+
+
+# The Claude desktop app's data dir. Read-only: Cowork transcripts and the plan
+# usage history live here.
+if os.name == "nt":
+    DESKTOP_DIR = os.path.join(os.environ.get("APPDATA", ""), "Claude")
+elif os.uname().sysname == "Darwin":
+    DESKTOP_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "Claude")
+else:
+    DESKTOP_DIR = os.path.join(os.path.expanduser("~"), ".config", "Claude")
+DESKTOP_SESSIONS = os.path.join(DESKTOP_DIR, "local-agent-mode-sessions")
+PLAN_HISTORY_PATH = os.path.join(DESKTOP_DIR, "plan-usage-history.json")
