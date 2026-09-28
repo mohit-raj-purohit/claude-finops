@@ -77,7 +77,16 @@ def act_now(a):
         except Exception:
             return default
 
-    return build(safe(lambda: list_sessions(a.pricing), []),
+    live = safe(lambda: list_sessions(a.pricing), [])
+    # the process registry names sessions after their folder; the transcript title reads better
+    ids = [x["session_id"] for x in live if x.get("session_id")]
+    titles = safe(lambda: {r["id"]: r["title"] for r in a.q(
+        "SELECT id, title FROM sessions WHERE title IS NOT NULL AND id IN (%s)" % ",".join("?" * len(ids)),
+        ids)} if ids else {}, {})
+    for x in live:
+        if titles.get(x.get("session_id")):
+            x["name"] = titles[x["session_id"]]
+    return build(live,
                  safe(lambda: suggestions(a)["skills"], []),
                  safe(lambda: Diagnoser(a).memory_suggestions({}), []),
                  safe(statusline_state, "other"))

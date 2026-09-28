@@ -685,10 +685,109 @@ VIEWS.overview = async (page) => {
   api('diagnose').then(d => {
     if (!page.isConnected) return;
     const el = h(focusStrip(d) || '<div></div>');
-    page.insertBefore(el, page.firstChild);
+    page.insertBefore(el, page.querySelector('.actnow')?.nextSibling || page.firstChild);
     wireFocus(page);
   }).catch(() => {});
+  if (hasClaude()) fetch('/api/act_now').then(r => r.json()).then(d => {
+    if (!page.isConnected || !(d.items || []).length) return;
+    const el = h(actNowStrip(d.items));
+    page.insertBefore(el, page.firstChild);
+    wireActNow(el, d.items);
+  }).catch(() => {});
 };
+
+/* ---------- act now: one-click actions, on the page everyone opens first ---------- */
+const ACT_ICON = {session: '🗜', skill: '⚙', memory: '📝', statusline: '▭'};
+const codeTicks = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+function actNowStrip(items) {
+  const btn = it => it.kind === 'session'
+    ? '<button class="act" data-do="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>'
+      + '<button class="act ghost" data-do="handover">⇢ Hand over</button>'
+    : it.kind === 'skill' ? '<button class="act" data-do="skill">＋ Create skill</button>'
+    : it.kind === 'memory' ? '<button class="act ghost" data-do="memory">Show examples</button>'
+    : '<button class="act" data-do="statusline">Install statusline</button>';
+  return `<section class="actnow"><div class="focus-hd">⚡ Act now
+      <span class="note">one click each · nothing changes until you click</span></div>
+    ${items.map((it, i) => `<div class="actnow-it" data-i="${i}">
+      <span class="ai">${ACT_ICON[it.kind] || '•'}</span>
+      <div class="ft"><b>${codeTicks(it.title)}</b><div class="note">${esc(it.detail)}</div></div>
+      <div class="live-actions">${btn(it)}<span class="live-msg"></span></div></div>`).join('')}</section>`;
+}
+function wireActNow(root, items) {
+  root.querySelectorAll('.actnow-it').forEach(row => {
+    const it = items[+row.dataset.i], msg = row.querySelector('.live-msg');
+    const say = (t, ok) => { msg.textContent = t; msg.className = 'live-msg ' + (ok ? 'ok' : 'err'); };
+    row.querySelectorAll('[data-do]').forEach(b => b.onclick = async () => {
+      const what = b.dataset.do;
+      if (what === 'handover') return go('live');
+      if (what === 'memory') return jumpTo('diagnose', 'dx-mem');
+      if (what === 'compact' && !armed(b)) return;
+      b.disabled = true;
+      try {
+        if (what === 'compact') {
+          const r = await sessionAction(it.pid, 'compact', {agent: 'claude'});
+          if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
+          say(r.ok ? r.message : `Failed: ${r.error}`, r.ok);
+          b.disabled = false; return;
+        }
+        const r = what === 'skill' ? await doAction('skill', it.skill) : await doAction('statusline');
+        say(what === 'skill' ? `Created ${r.path}. Use it with ${r.use}.` : r.message, r.ok !== false);
+        if (r.ok !== false) b.remove(); else b.disabled = false;
+      } catch (e) { say('Failed: ' + e.message, false); b.disabled = false; }
+    });
+  });
+}
+// Two-click confirm, inline (no browser dialogs): the first click arms, the second runs.
+function armed(b) {
+  if (b.classList.contains('armed')) { b.classList.remove('armed'); b.textContent = b.dataset.label; return true; }
+  b.dataset.label = b.textContent; b.classList.add('armed'); b.textContent = 'Click again to confirm';
+  setTimeout(() => { if (b.classList.contains('armed')) { b.classList.remove('armed'); b.textContent = b.dataset.label; } }, 4000);
+  return false;
+}
+// Open a view and scroll to an element that appears once the (possibly slow) view renders.
+async function jumpTo(view, anchor) {
+  if (S.view !== view) go(view);
+  for (let i = 0; i < 60; i++) {
+    const el = document.getElementById(anchor);
+    if (el) { el.scrollIntoView({behavior: 'smooth', block: 'start'}); el.classList.add('flash');
+      setTimeout(() => el.classList.remove('flash'), 1600); return; }
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+/* ---------- row actions: Resume (copy) and, for a running session, Compact ---------- */
+async function liveSessions() {
+  try {
+    const d = await fetch('/api/live?agents=claude').then(r => r.json());
+    return new Map((d.sessions || []).filter(x => x.signalable && x.pid).map(x => [x.session_id, x.pid]));
+  } catch { return new Map(); }
+}
+const rowActs = (r, live) => {
+  const pid = live && live.get(r.session_id);
+  return `<span class="row-acts">${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}"
+    title="Copy: ${esc(r.resume)}">⧉ Resume</button>` : ''}${pid ? ` <button class="act" data-compact="${pid}"
+    title="Running now: types /compact into its terminal">🗜 Compact</button>` : ''}</span>`;
+};
+function wireRowActs(host) {
+  if (!host) return;
+  host.querySelectorAll('[data-resume]').forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    try { await navigator.clipboard.writeText(b.dataset.resume); b.textContent = '✓ Copied'; }
+    catch { b.textContent = b.dataset.resume; }
+    setTimeout(() => { b.textContent = '⧉ Resume'; }, 1800);
+  });
+  host.querySelectorAll('[data-compact]').forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    if (!armed(b)) return;
+    b.disabled = true;
+    try {
+      const r = await sessionAction(+b.dataset.compact, 'compact', {agent: 'claude'});
+      if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
+      b.textContent = r.ok ? '✓ Sent' : 'Failed'; b.title = r.ok ? r.message : r.error;
+    } catch (err) { b.textContent = 'Failed'; b.title = err.message; }
+    setTimeout(() => { b.disabled = false; b.textContent = '🗜 Compact'; }, 2500);
+  });
+}
 
 function renderAdvisorHero(page, advisor) {
   if (!page || !advisor || !Array.isArray(advisor.actions)) return;
@@ -1076,7 +1175,7 @@ VIEWS.sessions = async (page) => {
   const sp = S.sessPage;
   const res = await api('sessions', `&limit=${sp.offset + sp.limit}&order=${order}`);
   const rows = res.rows, total = res.total;
-  const eff = await api('efficiency');
+  const [eff, live] = await Promise.all([api('efficiency'), liveSessions()]);
   const avgTok = rows.length ? rows.reduce((a, r) => a + r.tokens, 0) / rows.length : 0;
   page.innerHTML = `
     <div class="grid g4">
@@ -1121,6 +1220,7 @@ VIEWS.sessions = async (page) => {
     {h: 'Session', trunc: 1, title: r => r.session_id,
      f: r => `${r.tokens > avgTok * 3 ? '🔴 ' : ''}${esc(r.title || shortId(r.session_id))}
        <div class="sub mono">${esc(shortId(r.session_id))}</div>`},
+    {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Branch', f: r => r.git_branch ? `<span class="mono">${esc(r.git_branch)}</span>` : '—'},
     {h: 'Start', f: r => `<span class="mono">${esc((r.started_at || '').slice(0, 16).replace('T', ' '))}</span>`},
@@ -1141,6 +1241,7 @@ VIEWS.sessions = async (page) => {
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
   ], rows, {onRow: 1});
   wireTable($('#st', page), rows, r => openSession(r.session_id));
+  wireRowActs($('#st', page));
   const effCards = [...page.querySelectorAll('.card')].filter(c =>
     /output yield/.test(c.querySelector('h3')?.textContent || ''));
   wireTable(effCards[0], eff.low_efficiency_sessions, r => openSession(r.session_id));
@@ -1219,7 +1320,7 @@ const RANK_TABS = [
   ['cheapest', 'Top 20 cheapest'], ['most_efficient', 'Top 20 most efficient'],
   ['longest_sessions', 'Top 20 longest sessions']];
 VIEWS.rankings = async (page) => {
-  const lb = await api('leaderboards', '&n=20');
+  const [lb, live] = await Promise.all([api('leaderboards', '&n=20'), liveSessions()]);
   const tab = S.rankTab || 'most_expensive';
   const isSess = tab === 'longest_sessions';
   const rows = lb[tab];
@@ -1233,6 +1334,7 @@ VIEWS.rankings = async (page) => {
   const cols = isSess ? [
     {h: '#', num: 1, f: r => rows.indexOf(r) + 1},
     {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+    {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Duration', num: 1, f: r => dur(r.duration_s)},
     {h: 'Prompts', num: 1, f: r => fmtInt(r.prompts)},
@@ -1251,10 +1353,12 @@ VIEWS.rankings = async (page) => {
     {h: 'Tok eff', num: 1, f: r => fmtPct(r.efficiency * 100, 2)},
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.pcost)},
     {h: 'Session', trunc: 1, f: r => esc(r.session_title || shortId(r.session_id))},
+    {h: '', f: r => rowActs(r, live)},
     {h: 'Date', f: r => esc(r.day)},
   ];
   $('#rt', page).innerHTML = table(cols, rows, {onRow: 1});
   wireTable($('#rt', page), rows, r => isSess ? openSession(r.session_id) : openPrompt(r.prompt_id));
+  wireRowActs($('#rt', page));
   addChart(page, 'Top 12 prompts by estimated cost', el => C.barsH(el, {
     rows: (lb.most_expensive || []).slice(0, 12), label: r => clip(r.preview, 46), value: r => r.pcost,
     sub: r => `<div class="row"><span class="k">Project</span><span class="v">${esc(r.project)}</span></div>
@@ -2323,12 +2427,7 @@ function focusStrip(d, n = 5) {
       <span class="fl">${it.lvl === 1 ? 'Fix first' : 'Next'}</span></a>`).join('')}</section>`;
 }
 function wireFocus(root) {
-  root.querySelectorAll('.focus-it').forEach(a => a.onclick = async () => {
-    if (S.view !== a.dataset.go) { go(a.dataset.go); await new Promise(r => setTimeout(r, 400)); }
-    const el = document.getElementById(a.dataset.anchor);
-    if (el) { el.scrollIntoView({behavior: 'smooth', block: 'start'}); el.classList.add('flash');
-      setTimeout(() => el.classList.remove('flash'), 1600); }
-  });
+  root.querySelectorAll('.focus-it').forEach(a => a.onclick = () => jumpTo(a.dataset.go, a.dataset.anchor));
 }
 async function updateNavBadges() {
   const set = (id, n, lvl) => { const el = document.querySelector(`[data-nb="${id}"]`);

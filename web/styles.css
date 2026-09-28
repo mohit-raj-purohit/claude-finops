@@ -331,6 +331,17 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .nav a .nb.l1 { background: var(--critical); color: #fff; }
 .nav a .nb.l2 { background: var(--warning); color: #3a2a00; }
 
+.actnow { border: 1px solid color-mix(in srgb, var(--s1) 40%, var(--border));
+  background: color-mix(in srgb, var(--s1) 5%, var(--surface)); border-radius: var(--radius);
+  padding: 10px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+.actnow-it { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.actnow-it .ai { width: 22px; text-align: center; font-size: 15px; }
+.actnow-it .ft { flex: 1; min-width: 220px; }
+.actnow-it .live-actions { margin-top: 0; }
+.row-acts { white-space: nowrap; }
+.row-acts .act { padding: 2px 8px; font-size: 11px; }
+
 .focus { border: 1px solid color-mix(in srgb, var(--critical) 35%, var(--border));
   background: color-mix(in srgb, var(--critical) 5%, var(--surface)); border-radius: var(--radius);
   padding: 10px 12px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 5px; }
