@@ -185,3 +185,11 @@ class TestParityRoutes(ServerFixture):
             plan_history.PLAN_HISTORY_PATH = orig
         self.assertEqual(code, 200)
         self.assertFalse(body["ok"])
+
+    def test_act_now_route(self):
+        code, body = self.get("/api/act_now")
+        self.assertEqual(code, 200)
+        self.assertIsInstance(body["items"], list)
+
+    def test_statusline_install_needs_action_header(self):
+        self.assertEqual(self.post("/api/do/statusline", {})[0], 403)

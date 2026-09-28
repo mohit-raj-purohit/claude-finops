@@ -270,6 +270,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"job": j["id"]})
         if parts == ["skill"]:
             return self.send_json(X.create_skill(payload))
+        if parts == ["statusline"]:
+            from .integrate import install_statusline
+            return self.send_json(install_statusline())
         if len(parts) == 2 and parts[0] == "mcp":
             return self.send_json(X.add_mcp(parts[1], payload))
         return self.send_json({"error": "unknown action"}, 404)
@@ -390,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.timeline(f, g("grain", "day")))
         if route == "heatmap":
             return self.send_json(a.heatmap(f))
+        if route == "act_now":
+            from .act_now import act_now
+            return self.send_json(act_now(a))
         if route == "models":
             return self.send_json(a.models(f))
         if route == "projects":
