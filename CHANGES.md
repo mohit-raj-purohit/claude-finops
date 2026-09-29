@@ -2,6 +2,22 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## Unreleased
+
+**Hide prompts.** A new top-bar button hides prompt text and session titles as dots
+everywhere in the dashboard: tables, prompt details, chart labels, tooltips and the
+Act now strip. Use it before you share your screen. Click again to show them. The
+choice is remembered in your browser. Exports are unchanged.
+
+**Recent panel.** A new **☰ Recent** button in the top bar (or press `R`) opens a side
+panel on any page. Sessions running right now come first, with Resume, Compact and Stop.
+Stop interrupts the current turn, and each of Compact and Stop needs two clicks. Past
+sessions follow, newest first. Click one to see its prompts, and click a prompt for
+the same detail view the Prompt explorer opens. Search finds prompts by their text.
+Esc closes the detail view first, then the panel. It covers all dates, keeps your
+agent and project filters, and respects Hide prompts. Close and Force kill stay on
+Running sessions.
+
 ## 0.10.1 — Maintenance release
 
 Version number only. The dashboard is the same as 0.10.0.

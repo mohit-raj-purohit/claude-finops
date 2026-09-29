@@ -457,3 +457,32 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .brand .ver { font-size: 9.5px; font-weight: 600; color: var(--muted);
               border: 1px solid var(--border); border-radius: 99px;
               padding: 1px 5px; margin-left: 5px; letter-spacing: .01em; }
+.iconbtn.on { background: var(--surface-3); color:var(--text); border-color: var(--s1); }
+
+/* ---------- Recent panel: sits under the detail drawer so a click opens on top ---------- */
+.recent-scrim { position:fixed; inset:0; background:rgba(11,11,11,.18); z-index:98; }
+.recent { position:fixed; top:0; right:0; bottom:0; width:min(440px, 100vw); background:var(--plane);
+          z-index:99; box-shadow:-8px 0 40px rgba(0,0,0,.18); display:flex; flex-direction:column; }
+.recent > header { padding:13px 16px; background:var(--surface); border-bottom:1px solid var(--border);
+          display:flex; align-items:center; gap:10px; }
+.recent > header h2 { margin:0; font-size:14.5px; font-weight:640; }
+.recent-search { position:relative; padding:10px 16px 0; }
+.recent-search input { width:100%; box-sizing:border-box; padding:7px 10px 7px 28px; border-radius:8px;
+          font-size:12.5px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); }
+.recent-search .mag { position:absolute; left:26px; top:calc(50% + 5px); transform:translateY(-50%);
+          color:var(--muted); font-size:12px; pointer-events:none; }
+.recent .content { overflow-y:auto; padding:10px 16px 40px; display:flex; flex-direction:column; gap:8px; }
+.recent-hd { display:flex; align-items:center; font-size:11px; font-weight:640; text-transform:uppercase;
+          letter-spacing:.04em; color:var(--muted); margin-top:4px; }
+.recent-hd a { text-transform:none; letter-spacing:0; font-weight:500; }
+.recent-it { display:flex; flex-direction:column; gap:5px; }
+.recent-it .live-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.recent-it .act { padding:2px 8px; font-size:11px; }
+.recent-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.recent-prompts { display:flex; flex-direction:column; border-top:1px solid var(--border); padding-top:4px; }
+.recent-p { display:flex; gap:8px; align-items:baseline; padding:4px 2px; border-radius:5px;
+          color:var(--text); text-decoration:none; font-size:12px; }
+.recent-p:hover { background:var(--surface-3); }
+.recent-pv { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.live-dot { width:8px; height:8px; border-radius:50%; background:var(--axis); flex:none; }
+.live-dot.busy, .recent-it .hd > .live-dot[title="Running now"] { background:var(--s1); }

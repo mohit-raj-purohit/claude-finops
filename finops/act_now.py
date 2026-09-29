@@ -33,6 +33,8 @@ def build(live, skills, memory, statusline):
             "kind": "session", "severity": x["severity"], "pid": x.get("pid"),
             "session_id": x.get("session_id"), "hosts_dashboard": bool(x.get("hosts_dashboard")),
             "title": f"{x.get('name') or 'A session'} is carrying {_k(x['context'])} tokens of context",
+            # the part of the title that comes from the user's prompts, for the privacy mask
+            "private": x.get("name"),
             "detail": f"{x.get('project') or ''} · every message re-reads all of it. "
                       + ("Hand it over to a fresh session." if x["severity"] == "high"
                          else "Compact it at the next break."),
@@ -52,6 +54,7 @@ def build(live, skills, memory, statusline):
         items.append({
             "kind": "memory",
             "title": f"You keep re-typing instructions about: {m['text']}",
+            "private": m["text"],
             "detail": f"Seen in {m['sessions']} sessions. Put it in {m['target']} once instead.",
         })
     if statusline is None:

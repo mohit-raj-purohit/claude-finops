@@ -21,6 +21,15 @@ const h = (html) => { const t = document.createElement('template');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+/* ---------- privacy mask ----------
+   For screen-sharing: prompt text and session titles (written from your prompts)
+   render as dots. Only the page changes; the warehouse and exports are untouched. */
+const MASK_KEY = 'finops-mask-prompts';
+let MASKED = false;
+try { MASKED = localStorage.getItem(MASK_KEY) === '1'; } catch (_) {}
+const pt = t => MASKED && t ? String(t).replace(/\S/g, '•') : t;
+const stitle = x => (!MASKED && x.title) || shortId(x.session_id);
+
 const qs = () => {
   const f = S.filter, p = new URLSearchParams();
   if (f.start) p.set('start', f.start);
@@ -173,6 +182,8 @@ function shell() {
             <input id="gsearch" placeholder="Search prompts, sessions, models, dates…"></div>
           <button class="iconbtn upd" id="upd" hidden></button>
           <button class="iconbtn" id="tour-btn" title="Walk through this dashboard">? Tour</button>
+          <button class="iconbtn" id="recent-btn" title="Past sessions and prompts, from any page (R)">☰ Recent</button>
+          <button class="iconbtn" id="mask"></button>
           <button class="iconbtn" id="theme" title="Toggle theme">◐</button>
           <button class="iconbtn" id="refresh" title="Reload data">↻</button>
           <button class="act" id="sync" title="Re-read every agent's local data so the dashboard is current">⟳ Sync</button>
@@ -194,6 +205,14 @@ function shell() {
     render();
   };
   $('#refresh').onclick = () => { bust(); render(); };
+  maskLabel();
+  $('#mask').onclick = () => {
+    MASKED = !MASKED;
+    try { localStorage.setItem(MASK_KEY, MASKED ? '1' : '0'); } catch (_) {}
+    maskLabel(); closeDrawer(); render();
+    if (RECENT.open) { RECENT.offset = 0; renderRecent(); }
+  };
+  $('#recent-btn').onclick = () => toggleRecent();
   updateChip();
   $('#sync').onclick = runSync;
   syncLabel();
@@ -201,6 +220,15 @@ function shell() {
   $('#gsearch').oninput = e => { clearTimeout(t); const v = e.target.value;
     t = setTimeout(() => { if (v.trim().length >= 2) { S.searchTerm = v; go('search'); }
       else if (S.view === 'search') go('overview'); }, 260); };
+}
+
+function maskLabel() {
+  const b = $('#mask');
+  b.textContent = MASKED ? '◌ Show prompts' : '◉ Hide prompts';
+  b.title = MASKED ? 'Prompt text is hidden. Click to show it'
+    : 'Hide prompt text and session titles, e.g. before sharing your screen';
+  b.setAttribute('aria-pressed', MASKED);
+  b.classList.toggle('on', MASKED);
 }
 
 /* ---------- update notice ----------
@@ -367,7 +395,13 @@ function drawer(title, bodyHtml, sub) {
   document.body.append(scrim, d);
   return d;
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', e => {
+  // Esc closes the top-most layer: a detail drawer first, then the Recent panel.
+  if (e.key === 'Escape') { if ($('.drawer')) closeDrawer(); else if (RECENT.open) toggleRecent(false); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
+  if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'r' && !$('.drawer'))
+    toggleRecent();
+});
 
 async function openPrompt(id) {
   const d = drawer('Prompt detail', '<div class="loading">Loading…</div>');
@@ -379,11 +413,11 @@ async function openPrompt(id) {
       ${kpi('Output tokens', fmtInt(p.output_tokens))}
       ${kpi('Peak context', fmtInt(p.max_context_tokens))}
     </div>
-    ${card('Prompt', `<div class="prompt-text">${esc(p.text)}</div>
+    ${card('Prompt', `<div class="prompt-text">${esc(pt(p.text))}</div>
       <div class="mt" style="margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted)">
         <span>${esc(p.ts || '')}</span><span class="pill">${esc(p.category)}</span>
         <span>confidence ${(100*(p.category_confidence||0)).toFixed(0)}%</span>
-        ${(p.category_evidence||[]).length ? `<span>matched: ${esc(p.category_evidence.join(', '))}</span>` : ''}
+        ${(p.category_evidence||[]).length ? `<span>matched: ${esc(pt(p.category_evidence.join(', ')))}</span>` : ''}
         <span>${fmtInt(p.char_len)} chars · ${fmtInt(p.word_len)} words</span>
         ${p.source ? `<span class="pill">${esc(p.source)}</span>` : ''}
       </div>`, {badge: BADGE.actual})}
@@ -411,7 +445,7 @@ async function openPrompt(id) {
         : '<div class="na">No files touched</div>', {badge: BADGE.actual})}
     </div>
     ${card('Context', `<dl class="kv">
-      <dt>Session</dt><dd><a data-sess="${esc(p.session_id)}">${esc(p.session_title || shortId(p.session_id))}</a></dd>
+      <dt>Session</dt><dd><a data-sess="${esc(p.session_id)}">${esc((!MASKED && p.session_title) || shortId(p.session_id))}</a></dd>
       <dt>Project</dt><dd>${esc(p.project)}</dd>
       <dt>Git branch</dt><dd>${p.git_branch ? esc(p.git_branch) : NA()}</dd>
       <dt>Models</dt><dd>${esc(p.models || '—')}</dd>
@@ -443,7 +477,7 @@ async function openSession(id) {
       hint: 'context tokens actual, cost estimated'})}
     ${card('Prompts in this session', table([
       {h: 'Time', f: r => `<span class="mono">${esc((r.ts||'').slice(11,16))}</span>`},
-      {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
+      {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
       {h: 'Category', f: r => `<span class="pill">${esc(r.category)}</span>`},
       {h: 'Tools', num: 1, f: r => fmtInt(r.tool_calls)},
       {h: 'Peak ctx', num: 1, f: r => fmtInt(r.max_context)},
@@ -462,7 +496,7 @@ async function openSession(id) {
       ${s.resume ? `<dt>Resume</dt><dd><span class="mono">${esc(s.resume)}</span>
         <button class="btn pb-copy" id="sess-resume" data-copy="${esc(s.resume)}">Copy</button></dd>` : ''}
       <dt>Session ID</dt><dd class="mono">${esc(s.id)}</dd>
-      <dt>Title</dt><dd>${s.title ? esc(s.title) : NA()}</dd>
+      <dt>Title</dt><dd>${s.title ? esc(pt(s.title)) : NA()}</dd>
       <dt>Project</dt><dd>${esc(s.project)}</dd>
       <dt>Git branch</dt><dd>${s.git_branch ? esc(s.git_branch) : NA()}</dd>
       <dt>CLI version</dt><dd>${s.cli_version ? esc(s.cli_version) : NA()}</dd>
@@ -650,7 +684,7 @@ VIEWS.overview = async (page) => {
   const lp = leaderboards.most_expensive.slice(0, 10);
   $('#topprompts', page).innerHTML = table([
     {h: '#', num: 1, f: (r) => lp.indexOf(r) + 1},
-    {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
+    {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
     {h: 'Category', f: r => `<span class="pill">${esc(r.category)}</span>`},
     {h: 'Tokens', num: 1, f: r => fmtNum(r.ptokens)},
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.pcost)},
@@ -660,7 +694,7 @@ VIEWS.overview = async (page) => {
   const ls = (await api('sessions', '&limit=10&order=cost')).rows;
   $('#topsessions', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
-     f: r => esc(r.title || shortId(r.session_id))},
+     f: r => esc(stitle(r))},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Prompts', num: 1, f: r => fmtInt(r.prompts)},
     {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
@@ -711,7 +745,7 @@ function actNowStrip(items) {
       <span class="note">one click each · nothing changes until you click</span></div>
     ${items.map((it, i) => `<div class="actnow-it" data-i="${i}">
       <span class="ai">${ACT_ICON[it.kind] || '•'}</span>
-      <div class="ft"><b>${codeTicks(it.title)}</b><div class="note">${esc(it.detail)}</div></div>
+      <div class="ft"><b>${codeTicks(MASKED && it.private ? it.title.split(it.private).join(pt(it.private)) : it.title)}</b><div class="note">${esc(it.detail)}</div></div>
       <div class="live-actions">${btn(it)}<span class="live-msg"></span></div></div>`).join('')}</section>`;
 }
 function wireActNow(root, items) {
@@ -1201,13 +1235,13 @@ VIEWS.sessions = async (page) => {
       </div>`, {badge: BADGE.estimated, hint: 'click a row to open the session'})}
     <div class="grid g2">
       ${card('Lowest output yield', table([
-        {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+        {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
         {h: 'Output share', num: 1, f: r => fmtPct(r.output_ratio * 100, 2)},
         {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
         {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
       ], eff.low_efficiency_sessions, {onRow: 1}), {badge: BADGE.estimated, hint: 'low efficiency'})}
       ${card('Highest output yield', table([
-        {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+        {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
         {h: 'Output share', num: 1, f: r => fmtPct(r.output_ratio * 100, 2)},
         {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
         {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
@@ -1219,7 +1253,7 @@ VIEWS.sessions = async (page) => {
   if (sessMore) sessMore.onclick = () => { sp.offset += sp.limit; bust(); render(); };
   $('#st', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
-     f: r => `${r.tokens > avgTok * 3 ? '🔴 ' : ''}${esc(r.title || shortId(r.session_id))}
+     f: r => `${r.tokens > avgTok * 3 ? '🔴 ' : ''}${esc(stitle(r))}
        <div class="sub mono">${esc(shortId(r.session_id))}</div>`},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
@@ -1249,7 +1283,7 @@ VIEWS.sessions = async (page) => {
   wireTable(effCards[1], eff.high_efficiency_sessions, r => openSession(r.session_id));
   addChart(page, 'Top sessions by estimated cost', el => C.barsH(el, {
     rows: [...rows].sort((a, b) => b.cost - a.cost).slice(0, 12),
-    label: r => clip(r.title || shortId(r.session_id), 42), value: r => r.cost,
+    label: r => clip(stitle(r), 42), value: r => r.cost,
     sub: r => `<div class="row"><span class="k">Project</span><span class="v">${esc(r.project)}</span></div>
       <div class="row"><span class="k">Tokens</span><span class="v">${fmtNum(r.tokens)}</span></div>
       <div class="row"><span class="k">Prompts</span><span class="v">${fmtInt(r.prompts)}</span></div>`,
@@ -1289,12 +1323,12 @@ VIEWS.prompts = async (page) => {
   if (promptMore) promptMore.onclick = () => { pp.offset += pp.limit; bust(); render(); };
   $('#pt', page).innerHTML = table([
     {h: 'When', f: r => `<span class="mono">${esc((r.ts || '').slice(0, 16).replace('T', ' '))}</span>`},
-    {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
+    {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
     {h: 'Category', f: r => `<span class="pill" title="confidence ${(100*(r.category_confidence||0)).toFixed(0)}%${
       r.category_evidence?.length ? ' · matched: ' + esc(r.category_evidence.join(', ')) : ''}">${esc(r.category)}</span>`},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Session', trunc: 1, title: r => r.session_id,
-     f: r => `<span class="mono sub">${esc(r.session_title || shortId(r.session_id))}</span>`},
+     f: r => `<span class="mono sub">${esc((!MASKED && r.session_title) || shortId(r.session_id))}</span>`},
     {h: 'Models', f: r => (r.models || '').split(',').map(m =>
       `<span class="swatch" title="${esc(modelName(m))}" style="background:${modelColor(m)}"></span>`).join('')},
     {h: 'Chars', num: 1, f: r => fmtInt(r.char_len)},
@@ -1334,7 +1368,7 @@ VIEWS.rankings = async (page) => {
     S.rankTab = b.dataset.rt; render(); });
   const cols = isSess ? [
     {h: '#', num: 1, f: r => rows.indexOf(r) + 1},
-    {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+    {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Duration', num: 1, f: r => dur(r.duration_s)},
@@ -1345,7 +1379,7 @@ VIEWS.rankings = async (page) => {
     {h: 'Start', f: r => `<span class="mono">${esc((r.started_at || '').slice(0, 16).replace('T', ' '))}</span>`},
   ] : [
     {h: '#', num: 1, f: r => rows.indexOf(r) + 1},
-    {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
+    {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
     {h: 'Category', f: r => `<span class="pill">${esc(r.category)}</span>`},
     {h: 'Models', f: r => (r.models || '').split(',').map(m =>
       `<span class="swatch" title="${esc(modelName(m))}" style="background:${modelColor(m)}"></span>`).join('')},
@@ -1353,7 +1387,7 @@ VIEWS.rankings = async (page) => {
     {h: 'Output', num: 1, f: r => fmtNum(r.output_tokens)},
     {h: 'Tok eff', num: 1, f: r => fmtPct(r.efficiency * 100, 2)},
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.pcost)},
-    {h: 'Session', trunc: 1, f: r => esc(r.session_title || shortId(r.session_id))},
+    {h: 'Session', trunc: 1, f: r => esc((!MASKED && r.session_title) || shortId(r.session_id))},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Date', f: r => esc(r.day)},
   ];
@@ -1361,7 +1395,7 @@ VIEWS.rankings = async (page) => {
   wireTable($('#rt', page), rows, r => isSess ? openSession(r.session_id) : openPrompt(r.prompt_id));
   wireRowActs($('#rt', page));
   addChart(page, 'Top 12 prompts by estimated cost', el => C.barsH(el, {
-    rows: (lb.most_expensive || []).slice(0, 12), label: r => clip(r.preview, 46), value: r => r.pcost,
+    rows: (lb.most_expensive || []).slice(0, 12), label: r => clip(pt(r.preview), 46), value: r => r.pcost,
     sub: r => `<div class="row"><span class="k">Project</span><span class="v">${esc(r.project)}</span></div>
       <div class="row"><span class="k">Tokens</span><span class="v">${fmtNum(r.ptokens)}</span></div>`}),
     {badge: BADGE.estimated, after: '.nothing'});
@@ -1448,13 +1482,13 @@ VIEWS.hygiene = async (page) => {
       series: [{key: 'ctx', label: 'Context tokens', color: seriesVar(0)}],
       xLabel: v => `#${v}`});
     $('#hy-traj', page).insertAdjacentHTML('beforeend',
-      `<div class="note" style="margin-top:6px">${esc(s.title || shortId(s.session_id))} — ${fmtInt(s.requests)} requests,
+      `<div class="note" style="margin-top:6px">${esc(stitle(s))} — ${fmtInt(s.requests)} requests,
        ${fmtUSD(s.cost_usd)}. Crossed ${K(kT)} at request #${s.ever_crossed[kT] ? s.first_cross_idx[kT] + 1 : '—'};
        ${fmtPct(s.cost_after_pct[kT])} of its spend came after that.</div>`);
   };
   const rows = hy.sessions_ranked;
   $('#hy-sess', page).innerHTML = table([
-    {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+    {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
     {h: 'Project', trunc: 1, f: r => esc(r.project || '')},
     {h: 'Context', f: r => `<span class="spk" data-i="${rows.indexOf(r)}" style="display:inline-block;width:110px"></span>`},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
@@ -1599,7 +1633,7 @@ VIEWS.context = async (page) => {
     {k: 'With caching (your actual usage)', v: ca.cost_with_cache}],
     label: r => r.k, value: r => r.v, color: (r, i) => i ? seriesVar(2) : seriesVar(1), height: 60});
   $('#hs', page).innerHTML = table([
-    {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+    {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
     {h: 'Avg context', num: 1, f: r => fmtNum(r.avg_context)},
@@ -1653,14 +1687,14 @@ VIEWS.waste = async (page) => {
     const f = all.find(x => x.kind === host.dataset.kind);
     const isSess = !!f.evidence[0]?.session_id && !f.evidence[0]?.prompt_id;
     const cols = isSess ? [
-      {h: 'Session', trunc: 1, f: r => esc(r.title || shortId(r.session_id))},
+      {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
       {h: 'Project', f: r => esc(r.project || '—')},
       {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
       {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens ?? r.reads)},
       {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
       {h: 'Est. excess', num: 1, f: r => fmtUSD(r.excess)},
     ] : [
-      {h: 'Prompt', trunc: 1, title: r => r.preview, f: r => esc(r.preview)},
+      {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
       {h: 'Detail', f: r => r.n ? `repeated ${r.n}×` : r.char_len ? fmtInt(r.char_len) + ' chars'
         : r.tools ? fmtInt(r.tools) + ' tool calls'
         : r.out_tokens != null ? fmtInt(r.out_tokens) + ' output tokens' : '—'},
@@ -1719,7 +1753,7 @@ VIEWS.attribution = async (page) => {
     ${b.configured_unused_mcp.length ? `<div class="note">Configured but never called: <b>${esc(b.configured_unused_mcp.join(', '))}</b>. Their tool definitions still load into every session. Remove them with <code>claude mcp remove &lt;name&gt;</code>.</div>` : ''}`;
   const put = (id, cols, rows, onRow) => { const el = $(id, page); el.innerHTML = table(cols, rows, {onRow: !!onRow}); wireTable(el, rows, onRow); };
   put('#at-sess', [
-    {h: 'Session', trunc: 1, title: r => r.session_id, f: r => esc(r.title || shortId(r.session_id))},
+    {h: 'Session', trunc: 1, title: r => r.session_id, f: r => esc(stitle(r))},
     {h: 'Project', f: r => esc(r.project)},
     {h: 'Main agent', num: 1, f: r => fmtNum(r.main_tokens)},
     {h: 'Subagents', num: 1, f: r => r.sub_tokens ? `${fmtNum(r.sub_tokens)} (${r.subagents})` : '—'},
@@ -1822,7 +1856,7 @@ VIEWS.live = async (page) => {
       <div class="item sev-${sevOf(x)}" data-i="${i}">
         <div class="hd">${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
           <span class="pill">${esc(agentName(x.agent))}</span>
-          ${esc(x.name || shortId(x.session_id))} <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
+          ${esc((!MASKED && x.name) || shortId(x.session_id))} <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
           ${x.hosts_dashboard ? '<span class="status high">runs this dashboard</span>' : ''}
           <span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">${x.context == null ? 'context not recorded' : fmtNum(x.context) + ' context'} · ${fmtInt(x.steps)} steps${x.est_cost_usd == null ? '' : ' · ' + fmtUSD(x.est_cost_usd)}</span></div>
@@ -1958,7 +1992,7 @@ VIEWS.diagnose = async (page) => {
     <div id="dx-live"></div>${card('Running now', d.live_sessions.length ? `<div class="stack">${d.live_sessions.map(x => `
       <div class="item sev-${x.severity === 'ok' ? 'low' : x.severity}">
         <div class="hd">${x.severity === 'high' ? '🔴' : x.severity === 'medium' ? '🟡' : '🟢'}
-          ${esc(x.title || shortId(x.session_id))} <span class="note">· ${esc(x.project)}</span><span class="spacer"></span>
+          ${esc(stitle(x))} <span class="note">· ${esc(x.project)}</span><span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">${fmtNum(x.context)} context · ${fmtInt(x.steps)} steps</span></div>
         <div class="dt">${esc(x.advice)} <span class="note">Last write ${x.idle_min} min ago; context grew
           ${fmtNum(x.start_context)} → ${fmtNum(x.context)}.</span></div>${pb(x.playbook)}</div>`).join('')}</div>`
@@ -1966,7 +2000,7 @@ VIEWS.diagnose = async (page) => {
       {badge: BADGE.actual, hint: 'Read live from transcripts on each load'})}
     <div id="dx-past"></div>${card('Past sessions that carried too much context', `<div class="stack">${d.session_health.map(x => `
       <div class="item sev-${x.peak >= 300000 ? 'high' : 'medium'}">
-        <div class="hd"><a href="#" class="sess-link" data-sess="${esc(x.session_id)}">${esc(x.title || shortId(x.session_id))}</a>
+        <div class="hd"><a href="#" class="sess-link" data-sess="${esc(x.session_id)}">${esc(stitle(x))}</a>
           <span class="note">· ${esc(x.project)}</span><span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">peak ${fmtNum(x.peak)} · ${fmtUSD(x.cost)} ·
             ~${fmtNum(x.tokens_above_100k)} tokens re-read above 100K (not a saving)</span></div>
@@ -1976,12 +2010,12 @@ VIEWS.diagnose = async (page) => {
     <div id="dx-mem"></div>${card(`Add to ${md}${isCl ? ' / memory' : ''} (from your past prompts)`, `<div class="stack">${d.memory_suggestions.map(x => `
       <div class="item sev-${x.kind === 'security' ? 'high' : x.already_saved ? 'low' : 'medium'}">
         <div class="hd">${x.kind === 'security' ? '🔐' : x.kind === 'template' ? '⚙' : x.kind === 'reference' ? '🔗' : '📝'}
-          ${esc(x.text.slice(0, 140))}${x.already_saved ? ' <span class="na">already saved</span>' : ''}
+          ${esc(pt(x.text.slice(0, 140)))}${x.already_saved ? ' <span class="na">already saved</span>' : ''}
           <span class="spacer"></span><span class="note">${fmtInt(x.sessions)} sessions</span></div>
         <div class="dt">${esc(x.why)}</div>
         <div class="dt"><b>Put it in:</b> ${esc(x.target)}</div>
         ${(x.examples || []).length ? `<details><summary style="cursor:pointer;font-size:11.5px">Examples</summary>
-          ${x.examples.map(e => `<div class="dt note">“${esc(e)}”</div>`).join('')}</details>` : ''}${pb(x.playbook)}</div>`).join('')
+          ${x.examples.map(e => `<div class="dt note">“${esc(pt(e))}”</div>`).join('')}</details>` : ''}${pb(x.playbook)}</div>`).join('')
       || '<div class="empty">No repeated instructions found</div>'}</div>`,
       {badge: BADGE.recommendation, hint: 'Mined from non-sandbox prompts; secrets masked'})}
     ${card('Why consumption is high', `<div class="stack">${d.drivers.map(x => `
@@ -2325,7 +2359,7 @@ VIEWS.search = async (page) => {
   if (r.prompts.length) {
     $('#sp', page).innerHTML = table([
       {h: 'When', f: x => `<span class="mono">${esc((x.ts || '').slice(0, 16).replace('T', ' '))}</span>`},
-      {h: 'Prompt', trunc: 1, title: x => x.preview, f: x => esc(x.preview)},
+      {h: 'Prompt', trunc: 1, title: x => pt(x.preview), f: x => esc(pt(x.preview))},
       {h: 'Category', f: x => `<span class="pill">${esc(x.category)}</span>`},
       {h: 'Tokens', num: 1, f: x => fmtNum(x.billable_tokens)},
       {h: 'Est. cost', num: 1, f: x => fmtUSD(x.est_cost_usd)},
@@ -2334,7 +2368,7 @@ VIEWS.search = async (page) => {
   }
   if (r.sessions.length) {
     $('#ss', page).innerHTML = table([
-      {h: 'Session', trunc: 1, f: x => esc(x.title || shortId(x.session_id))},
+      {h: 'Session', trunc: 1, f: x => esc(stitle(x))},
       {h: 'Project', f: x => esc(x.project)},
       {h: 'Branch', f: x => x.git_branch ? `<span class="mono">${esc(x.git_branch)}</span>` : '—'},
       {h: 'Tokens', num: 1, f: x => fmtNum(x.billable_tokens)},
@@ -2583,6 +2617,154 @@ async function render() {
       <b>Something went wrong rendering this view.</b>
       <pre class="prompt-text" style="margin-top:8px">${esc(e.stack || e)}</pre></div></div>`;
   }
+}
+
+/* ---------- Recent panel ----------
+   Past sessions and their prompts from any page, without leaving it. Resume and
+   stop act on sessions, so the list is grouped by session; running ones sit on
+   top. Close and Force kill stay on Running sessions, one click away from here. */
+const RECENT = {open: false, offset: 0, limit: 30, q: '', open_ids: new Set()};
+// Recent means all time: keep agent/project filters, drop the date range and thresholds.
+const recentQs = () => { const p = new URLSearchParams(qs());
+  ['start', 'end', 'min_cost', 'min_tokens'].forEach(k => p.delete(k)); return p.toString(); };
+const fmtWhen = iso => iso ? `${ago(iso)} · ${esc(iso.slice(0, 16).replace('T', ' '))}` : '';
+
+function toggleRecent(force) {
+  RECENT.open = force ?? !RECENT.open;
+  document.querySelectorAll('.recent,.recent-scrim').forEach(e => e.remove());
+  $('#recent-btn')?.classList.toggle('on', RECENT.open);
+  if (!RECENT.open) return;
+  const scrim = h('<div class="recent-scrim"></div>');
+  const p = h(`<aside class="recent" aria-label="Recent sessions"><header>
+      <h2>Recent</h2><span class="note">all time · agent &amp; project filters apply</span>
+      <span class="spacer"></span><button class="iconbtn" data-x>Close ✕</button></header>
+    <div class="recent-search"><span class="mag">⌕</span>
+      <input id="recent-q" placeholder="Search your prompts…" value="${esc(RECENT.q)}"></div>
+    <div class="content"><div class="loading">Loading…</div></div></aside>`);
+  scrim.onclick = () => toggleRecent(false);
+  p.querySelector('[data-x]').onclick = () => toggleRecent(false);
+  let t;
+  p.querySelector('#recent-q').oninput = e => { clearTimeout(t);
+    t = setTimeout(() => { RECENT.q = e.target.value.trim(); RECENT.offset = 0; renderRecent(); }, 260); };
+  document.body.append(scrim, p);
+  RECENT.offset = 0;
+  renderRecent();
+}
+
+async function renderRecent() {
+  const box = $('.recent .content');
+  if (!box) return;
+  const more = RECENT.offset > 0;
+  const [live, res] = await Promise.all([
+    more || RECENT.q ? null : fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(',')))
+      .then(r => r.json()).catch(() => ({sessions: []})),
+    RECENT.q
+      ? fetch(`/api/prompts?${recentQs()}&order=recent&limit=${RECENT.limit}&offset=${RECENT.offset}&q=${encodeURIComponent(RECENT.q)}`).then(r => r.json())
+      : fetch(`/api/sessions?${recentQs()}&order=recent&limit=${RECENT.limit}&offset=${RECENT.offset}`).then(r => r.json())]);
+  if (!$('.recent')) return;   // closed while loading
+  const rows = res.rows || [];
+  const liveIds = new Set(((live || {}).sessions || RECENT.live || []).map(x => x.session_id));
+  if (live) RECENT.live = live.sessions || [];
+  const html = RECENT.q ? recentPrompts(rows) : recentSessions(rows, liveIds);
+  const shown = RECENT.offset + rows.length;
+  const moreBtn = shown < (res.total || 0)
+    ? `<button class="btn pb-copy recent-more">Load more (${fmtInt(shown)} of ${fmtInt(res.total)})</button>` : '';
+  if (more) { box.querySelector('.recent-more')?.remove(); box.insertAdjacentHTML('beforeend', html + moreBtn); }
+  else box.innerHTML = (RECENT.q ? '' : recentLive(RECENT.live || [])) + html + moreBtn
+    || '<div class="empty">Nothing found</div>';
+  if (!rows.length && !more && RECENT.q) box.innerHTML = '<div class="empty">No prompt matches</div>';
+  wireRecent(box);
+}
+
+const recentLive = list => !list.length ? '' : `<div class="recent-hd">Running now
+    <span class="spacer"></span><a href="#" data-go-live>Close or kill ›</a></div>
+  ${list.map((x, i) => `<div class="item recent-it sev-${x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low'}" data-live="${i}">
+    <div class="hd"><span class="live-dot ${x.status === 'busy' ? 'busy' : ''}" title="${esc(x.status)}"></span>
+      <span class="recent-title">${esc((!MASKED && x.name) || shortId(x.session_id))}</span>
+      <span class="spacer"></span><span class="note">${esc(x.status || '')}</span></div>
+    <div class="mt"><span>${esc(x.project || '')}</span>
+      ${x.context ? `<span>${fmtNum(x.context)} context</span>` : ''}
+      ${x.est_cost_usd != null ? `<span>${fmtUSD(x.est_cost_usd)}</span>` : ''}</div>
+    <div class="live-actions">
+      ${x.resume ? `<button class="act ghost" data-resume="${esc(x.resume)}" title="Copy: ${esc(x.resume)}">⧉ Resume</button>` : ''}
+      ${x.signalable && x.agent === 'claude' ? '<button class="act" data-la="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>' : ''}
+      ${x.signalable ? `<button class="act warn" data-la="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : 'title="Stops the current turn, like pressing Esc"'}>⏸ Stop</button>` : ''}
+      ${x.session_id ? `<button class="act ghost" data-open-sess="${esc(x.session_id)}">Details</button>` : ''}
+      <span class="live-msg"></span></div></div>`).join('')}
+  <div class="recent-hd">Past sessions</div>`;
+
+const recentSessions = (rows, liveIds) => rows.map(r => `
+  <div class="item recent-it clickable${RECENT.open_ids.has(r.session_id) ? ' open' : ''}" data-sess="${esc(r.session_id)}">
+    <div class="hd">${liveIds.has(r.session_id) ? '<span class="live-dot" title="Running now"></span>' : ''}
+      <span class="recent-title">${esc(stitle(r))}</span><span class="spacer"></span>
+      <span class="note">${fmtUSD(r.cost)}</span></div>
+    <div class="mt"><span>${esc(r.project || '')}</span><span>${fmtInt(r.prompts)} prompts</span>
+      <span>${fmtWhen(r.started_at)}</span></div>
+    <div class="live-actions">
+      ${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}" title="Copy: ${esc(r.resume)}">⧉ Resume</button>` : ''}
+      <button class="act ghost" data-open-sess="${esc(r.session_id)}">Details</button>
+      <span class="spacer"></span><span class="note recent-caret">${RECENT.open_ids.has(r.session_id) ? '▾' : '▸'} prompts</span></div>
+    <div class="recent-prompts"${RECENT.open_ids.has(r.session_id) ? '' : ' hidden'}></div></div>`).join('')
+  || '<div class="empty">No sessions for these filters</div>';
+
+const promptLine = x => `<a href="#" class="recent-p" data-prompt="${x.prompt_id}" title="${esc(pt(x.preview))}">
+  <span class="mono sub">${esc((x.ts || '').slice(5, 16).replace('T', ' '))}</span>
+  <span class="recent-pv">${esc(pt(x.preview) || '—')}</span>
+  <span class="note">${fmtUSD(x.pcost ?? x.est_cost_usd)}</span></a>`;
+
+const recentPrompts = rows => rows.map(x => `<div class="item recent-it">
+    ${promptLine(x)}
+    <div class="mt"><span>${esc((!MASKED && x.session_title) || shortId(x.session_id))}</span>
+      <span>${esc(x.project || '')}</span>
+      <a href="#" data-open-sess="${esc(x.session_id)}">Session ›</a></div></div>`).join('');
+
+async function loadSessionPrompts(host, sid) {
+  host.innerHTML = '<div class="note">Loading…</div>';
+  try {
+    const s = await fetch(`/api/session/${encodeURIComponent(sid)}`).then(r => r.json());
+    const ps = s.prompts || [];
+    host.innerHTML = ps.length ? ps.map(promptLine).join('') : '<div class="note">No prompts recorded</div>';
+    wireRecent(host);
+  } catch (e) { host.innerHTML = `<div class="live-msg err">${esc(e.message)}</div>`; }
+}
+
+function wireRecent(root) {
+  wireRowActs(root);   // Resume: copy command
+  root.querySelectorAll('[data-open-sess]').forEach(a => a.onclick = e => {
+    e.preventDefault(); e.stopPropagation(); openSession(a.dataset.openSess); });
+  root.querySelectorAll('[data-prompt]').forEach(a => a.onclick = e => {
+    e.preventDefault(); e.stopPropagation(); openPrompt(+a.dataset.prompt); });
+  root.querySelectorAll('[data-go-live]').forEach(a => a.onclick = e => {
+    e.preventDefault(); toggleRecent(false); go('live'); });
+  root.querySelector('.recent-more')?.addEventListener('click', () => {
+    RECENT.offset += RECENT.limit; renderRecent(); });
+  root.querySelectorAll('.item[data-sess]').forEach(it => {
+    const host = it.querySelector('.recent-prompts'), sid = it.dataset.sess;
+    if (!host.hidden && !host.childElementCount) loadSessionPrompts(host, sid);
+    it.onclick = e => {
+      if (e.target.closest('button, a, .recent-prompts')) return;
+      host.hidden = !host.hidden;
+      it.classList.toggle('open', !host.hidden);
+      it.querySelector('.recent-caret').textContent = (host.hidden ? '▸' : '▾') + ' prompts';
+      host.hidden ? RECENT.open_ids.delete(sid) : RECENT.open_ids.add(sid);
+      if (!host.hidden && !host.childElementCount) loadSessionPrompts(host, sid);
+    };
+  });
+  root.querySelectorAll('.item[data-live]').forEach(it => {
+    const x = RECENT.live[+it.dataset.live], msg = it.querySelector('.live-msg');
+    it.querySelectorAll('[data-la]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      if (!armed(b)) return;   // two clicks, like Running sessions
+      b.disabled = true;
+      try {
+        const r = await sessionAction(x.pid, b.dataset.la, {agent: x.agent});
+        if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
+        msg.textContent = r.ok ? r.message : `Failed: ${r.error}`;
+        msg.className = 'live-msg ' + (r.ok ? 'ok' : 'err');
+      } catch (err) { msg.textContent = 'Failed: ' + err.message; msg.className = 'live-msg err'; }
+      setTimeout(() => { b.disabled = false; }, 2500);
+    });
+  });
 }
 
 /* ============================ boot ============================ */

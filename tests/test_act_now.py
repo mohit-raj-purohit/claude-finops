@@ -39,6 +39,13 @@ class TestActNow(unittest.TestCase):
         self.assertEqual([i["kind"] for i in r["items"]], ["memory"])
         self.assertIn("Answer length", r["items"][0]["title"])
 
+    def test_prompt_derived_text_marked_private_for_mask(self):
+        mem = [{"kind": "theme", "already_saved": False, "text": "Answer length", "sessions": 4, "target": "t"}]
+        r = build([live("Fix login bug", 260_000, "high")], [], mem, "ours")
+        for it in r["items"]:
+            self.assertIn(it["private"], it["title"])
+        self.assertEqual([i["private"] for i in r["items"]], ["Fix login bug", "Answer length"])
+
     def test_statusline_offered_only_when_absent(self):
         self.assertEqual([i["kind"] for i in build([], [], [], None)["items"]], ["statusline"])
         self.assertEqual(build([], [], [], "ours")["items"], [])
