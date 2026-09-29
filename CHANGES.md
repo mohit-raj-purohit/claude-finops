@@ -2,6 +2,33 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.12.0 — A cleaner top bar, colour-graded context metrics
+
+**A cleaner, data-rich top bar.** The page title now carries the date range and active
+filters on a small line under it. Next to it, a strip shows estimated spend, sessions,
+prompts, requests and active days for the current filters, on every page. Agent and date
+range are compact grouped controls, the sandbox setting is a **Hide sandbox** switch, and
+the data coverage note is shorter (hover it for the last rebuild time).
+
+**Icons that say what they do.** The top-bar buttons are one joined toolbar: a compass for
+**Tour**, a history clock for **Recent** (still `R`), an eye for **Hide prompts** (crossed
+out while prompts are hidden), a moon or sun for the theme you would switch to, and a
+circular arrow for **Reload**, which redraws the page from the warehouse. **Sync** now
+shows a database icon, because it reads your transcripts from disk, so the two no longer
+look alike.
+
+**Colour-graded context metrics.** On Context hygiene, the spend-share cards are tinted
+green, amber, orange or red by how much of your spend sat at large context (hover a card
+for its bands). The context-window card uses tighter bands, and the totals cards stay
+neutral. The colours are a reading aid, not a verdict.
+
+**A tour step for every metric.** The Context hygiene tour now walks through each card:
+what it measures, why it matters and how to read it against the others, plus the context
+chart.
+
+**A loader worth waiting for.** While a page computes you see a skeleton in its shape,
+a status line saying what it is doing (with a timer on slow queries) and a tip.
+
 ## 0.11.0 — Hide prompts, Recent panel
 
 **Hide prompts.** A new top-bar button hides prompt text and session titles as dots
