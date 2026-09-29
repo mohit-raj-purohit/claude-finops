@@ -2,6 +2,17 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.13.0 — Flat icons everywhere, the dashboard opens itself
+
+**Opens in your browser.** Run `claude-finops` and the dashboard opens in your default
+browser as soon as it is ready, so there is no URL to copy. On a machine without a browser
+(SSH, headless) nothing opens and the printed address still works.
+
+**One icon style across the app.** The emoji and text symbols in the sidebar, buttons,
+alerts, card headings and ratings are now flat line icons in the same style as the top
+bar. They follow the light and dark theme and look the same on every system. Severity
+markers are small flat dots in green, amber, orange and red.
+
 ## 0.12.0 — A cleaner top bar, colour-graded context metrics
 
 **A cleaner, data-rich top bar.** The page title now carries the date range and active
