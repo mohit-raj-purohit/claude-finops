@@ -2592,6 +2592,83 @@ function maybeGuide(name) {
   setTimeout(tryOpen, 400);
 }
 
+// A frozen copy of a form block for a guide picture: demo values, no ids that clash.
+function guideCopy(host, html) {
+  host.innerHTML = `<div class="cfg">${html}</div>`;
+  host.querySelectorAll('[id]').forEach(el => el.id = 'gcopy-' + el.id);
+  host.querySelectorAll('[for]').forEach(el => el.setAttribute('for', 'gcopy-' + el.getAttribute('for')));
+  host.querySelectorAll('input, select, button, textarea').forEach(el => { el.disabled = true; el.tabIndex = -1; });
+}
+const DEMO = {spend: 312, day: 14, busy: 29, tokens: 7.4e8, typical: 8.5e6, large: 3.3e7};
+
+GUIDES.budgets = [
+  {id: 'overview', title: 'What is this page?', img: 'guide/budgets.png',
+   marks: [{n: 1, x: 12, y: 18}, {n: 2, x: 12, y: 58}, {n: 3, x: 12, y: 82}],
+   text: ['This page helps you stop spending too much on AI.',
+          '<b>①</b> The top shows how you are doing. <b>②</b> Below it you set your limits. <b>③</b> Session limits stop one conversation from getting too big.',
+          'You only need to fill in what you care about. Everything else can stay empty.'],
+   target: '[data-blk="money"]'},
+  {id: 'money', title: '① Money limits', target: '[data-blk="money"]',
+   live: h => guideCopy(h, `<div class="grid g2">
+     ${amountField({id: 'b-monthly', label: 'Monthly budget (USD)', kind: 'usd', value: 400,
+        chips: usdChips([[DEMO.spend, 'Last 30 days'], 250, 500])})}
+     ${amountField({id: 'b-daily', label: 'Daily budget (USD)', kind: 'usd', value: null,
+        chips: usdChips([[DEMO.day, 'Average day'], [DEMO.busy, 'Busy day']])})}</div>`),
+   text: ['Type the most money you want to spend in a month, or in a day.',
+          'Not sure? Tap a suggestion. They come from your own recent spending.',
+          'We warn you as you get close. Leave a box empty if you don\'t need it.']},
+  {id: 'tokens', title: '② Token limits', target: '[data-blk="tokens"]',
+   live: h => guideCopy(h, amountField({id: 'b-tokens', label: 'Monthly token budget', kind: 'tokens',
+     value: 9e8, chips: tokChips([[DEMO.tokens, 'Last 30 days'], 1e9, 5e9])})),
+   text: ['A token is a small piece of text, about ¾ of a word. Claude counts all its work in tokens.',
+          'Set how many tokens you want to use in a month. You can type short numbers like <b>900M</b> or <b>2B</b>.']},
+  {id: 'session', title: '③ Session limit', target: '[data-blk="session"]',
+   live: h => guideCopy(h, `<div class="grid g2">
+     ${amountField({id: 'g-tokens', label: 'Per-session token budget', kind: 'tokens', value: 8e6,
+        chips: tokChips([[DEMO.typical, 'Typical'], [DEMO.large, 'Large'], 5e6, 10e6])})}
+     ${pctField({id: 'g-warn', label: 'Warn me at', values: [75, 80], presets: [50, 60, 70, 75, 80, 90], max: 99})}</div>`),
+   text: ['A session is one Claude Code conversation.',
+          'Long conversations cost more, because Claude re-reads everything each time.',
+          'Set a limit for one conversation. Then pick when you want a warning, like at 75% and 80%.']},
+  {id: 'after', title: 'After you say "continue", and project limits', target: '#g-projects',
+   live: h => guideCopy(h, `<div class="grid g2">
+     <div class="fld"><div class="hd">After I say "continue"</div>
+       <label style="display:flex;gap:6px;margin:6px 0"><input type="radio" checked> Ask again every +25%</label>
+       <label style="display:flex;gap:6px;margin:6px 0"><input type="radio"> Once per session</label></div>
+     <div class="fld"><div class="hd">Different limit for a project</div>
+       <div style="display:flex;gap:6px;align-items:center"><select><option>shop-app</option></select>
+         <input type="text" value="15M" style="width:90px"><label><input type="checkbox"> off</label></div></div></div>`),
+   text: ['When a conversation reaches its limit, you can let it keep going.',
+          'Choose if we ask you again a bit later, or never again for that conversation.',
+          'A big project can have its own, bigger limit. Or you can turn the limit off for it.']},
+  {id: 'live', title: 'Live warnings (optional)', target: '#livebox',
+   live: h => { h.innerHTML = `<div class="cfg"><div class="livebox"><div class="lb-head"><b>Live warnings in Claude Code</b>
+       <span class="blk-sub">(optional)</span><span class="spacer"></span><span class="lb-state">○ Not installed</span>
+       <button class="act" disabled>Install</button></div></div>
+       <div class="g-cc">Session guard: this session has used 8.4M tokens, 105% of its 8M budget.
+         Allow this tool call? <b>❯ Yes</b> &nbsp; No</div></div>`; },
+   text: ['<b>You don\'t need this for your limits to work.</b>',
+          'Install it if you want Claude Code itself to warn you while you work, and to ask "continue?" when a conversation reaches its limit. The dark box shows what that looks like.',
+          'You can uninstall it any time.']},
+  {id: 'advanced', title: 'Advanced (you can skip this)', target: '[data-blk="advanced"]',
+   live: h => guideCopy(h, `<div class="grid g2">
+     ${amountField({id: 'l-cost', label: 'Monthly cost allowance (USD)', kind: 'usd', zero: 1, value: null})}
+     ${pctField({id: 't-thr', label: 'Warn when a budget reaches', values: [50, 75, 90, 100], presets: [25, 50, 75, 90, 100, 110], max: 1000})}</div>`),
+   text: ['<b>Plan limits:</b> only fill these in if you know your plan\'s real numbers.',
+          '<b>Alert thresholds:</b> when a money or token limit reaches these percentages, it gets marked.',
+          'Most people never need to change these.']},
+  {id: 'save', title: 'Save, then check your results', target: '#savecfg',
+   live: h => { h.innerHTML = `<div class="cfg"><div class="save-row"><button class="chip on" disabled>Save</button>
+       <span class="ok">Saved.</span></div>
+       <div class="meter high" style="margin:8px 0"><i style="width:82%"></i></div>
+       <div class="fld-hint">Monthly spend · 82% used</div>
+       <div style="margin-top:8px">${dot('yellow')} a conversation at 75% of its limit &nbsp; ${dot('red')} over its limit</div></div>`; },
+   text: ['Press <b>Save</b>. Your limits are kept on this computer.',
+          'The top of this page then shows how you are doing against each limit.',
+          'On the <b>Sessions</b> page, amber and red dots show conversations near or over their limit.']},
+];
+
+
 VIEWS.budgets = async (page) => {
   const b = await api('budgets');
   const st = S.opts.settings;

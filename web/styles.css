@@ -668,6 +668,7 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .guide .g-dots { display:flex; gap:5px; }
 .guide .g-dots i { width:7px; height:7px; border-radius:50%; background:var(--border-strong); }
 .guide .g-dots i.on { background:var(--s1); }
+.guide .g-cc { margin-top:10px; padding:10px 12px; border-radius:8px; background:#1e1e1e; color:#e6e6e6; font:12.5px/1.5 ui-monospace, Menlo, monospace; }
 .pulse { animation: guide-pulse 1s ease-in-out 2; border-radius:10px; }
 @keyframes guide-pulse { 50% { box-shadow:0 0 0 4px color-mix(in srgb, var(--s1) 55%, transparent); } }
 @media (max-width: 600px) { .guide .g-text { font-size:14px; } .guide footer .spacer { display:none; } }
