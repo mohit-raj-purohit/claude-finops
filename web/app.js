@@ -148,6 +148,7 @@ const NAV = [
     ['attribution', 'users', 'Who used the tokens', 'priced'],
     ['waste', 'trash', 'Waste detection'],
     ['freemodels', 'gift', 'Free models', 'claude'],
+    ['jev', 'sparkles', 'Jev (fast decisions)'],
     ['compare', 'scale', 'Compare models', 'priced'],
     ['toolkit', 'wrench', 'Skills & MCP', 'claude'],
     ['recommendations', 'listChecks', 'Recommendations'],
@@ -3861,6 +3862,121 @@ VIEWS.compare = async (page) => {
 };
 
 /* ---------- skills & MCP from recurring work ---------- */
+/* ---------- jev: TypeSafe's fast decision model ---------- */
+let JEV_MSG = null;          // {where: 'install'|'key', ok, text}: shown once after the page redraws
+VIEWS.jev = async (page) => {
+  const d = await api('jev');
+  const st = d.status, k = d.key, fit = d.fit;
+  const flash = where => JEV_MSG && JEV_MSG.where === where
+    ? `<div class="fld-hint ${JEV_MSG.ok ? 'ok' : ''}" style="${JEV_MSG.ok ? '' : 'color:var(--critical-ink)'}">${esc(JEV_MSG.text)}</div>` : '';
+  const state = !st.claude
+    ? `<span class="lb-state warn">Claude Code's <code>claude</code> command was not found on this computer, so Jev can't be installed from here.</span>`
+    : st.installed ? `<span class="lb-state on">● Installed${st.version ? ' · version ' + esc(st.version) : ''}${st.enabled === false ? ' (turned off in Claude Code)' : ''}</span>`
+    : '<span class="lb-state">○ Not installed</span>';
+  const keyState = k.source === 'shell' ? `set in your shell${k.last4 ? ' · ends ' + esc(k.last4) : ''}`
+    : k.source ? `saved${k.last4 ? ' · ends ' + esc(k.last4) : ''}` : 'not set';
+  const small = fit.share_pct < 1;
+  const usd = v => v ? fmtUSD(v) : '$0';
+  page.innerHTML = `
+    ${card('What is Jev?', `<div class="cfg">
+      <p class="blk-intro">Jev is a very fast, very cheap AI that makes decisions. It picks one option, answers yes or no,
+        gives a score, or pulls out a value. It can't write text or code.</p>
+      <p class="blk-intro">It doesn't make Claude Code itself cheaper. It makes the apps and scripts you build cheaper, by
+        replacing AI calls that only make a decision, like sorting tickets or checking a pull request.</p>
+      <p class="blk-intro">Installing it teaches Claude how to use Jev when you build those.
+        <a href="https://docs.typesafe.ai" target="_blank" rel="noopener">Read Jev's docs</a></p></div>`,
+      {hint: 'made by TypeSafe AI'})}
+    ${card('Set up Jev', `<div class="cfg">
+      <section class="blk">
+        <h4><span class="num">①</span> Install the Jev plugin for Claude Code</h4>
+        <div class="lb-head">${state}<span class="spacer"></span>
+          ${st.claude && !st.installed ? '<button class="act" id="jev-install">Install</button>' : ''}
+          ${st.installed ? '<button class="act" id="jev-uninstall">Uninstall</button>' : ''}</div>
+        <div class="livebox" id="jev-confirm" hidden>
+          <p><b>This adds TypeSafe's plugin to Claude Code for all your projects.</b> It runs these two commands:</p>
+          <pre class="mono" style="margin:6px 0;white-space:pre-wrap">claude plugin marketplace add typesafe-ai/skills
+claude plugin install typesafe@typesafe-ai</pre>
+          <p class="blk-sub">Jev only sees what the apps you build send it. Uninstall any time.</p>
+          <div class="live-actions"><button class="chip on" id="jev-go">Confirm install</button>
+            <button class="act ghost" id="jev-cancel">Cancel</button></div></div>
+        <div id="jev-log"></div>${flash('install')}
+      </section>
+      <section class="blk">
+        <h4><span class="num">②</span> Add your Jev API key</h4>
+        <p class="blk-intro">The key lets your apps and Claude talk to Jev. Get one at
+          <a href="https://console.typesafe.ai" target="_blank" rel="noopener">console.typesafe.ai</a>.</p>
+        <div class="lb-head"><span class="lb-state ${k.source ? 'on' : ''}">Key: ${keyState}</span></div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+          <input type="password" id="jev-key" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"
+            aria-label="Jev API key" placeholder="${k.source ? 'paste a new key to replace it' : 'paste your Jev API key'}">
+          <button class="act" id="jev-key-save">Save key</button>
+          ${k.source === 'claude_settings' ? '<button class="act" id="jev-key-rm">Remove</button>' : ''}</div>
+        <div class="fld-err" id="jev-key-err" role="alert"></div>${flash('key')}
+        <p class="fld-hint">It is saved in Claude Code's settings (<span class="mono">~/.claude/settings.json</span>), so new
+          Claude Code sessions can use it. Restart any open ones. This page never shows the key again.
+          ${k.source === 'shell' ? ' A key set in your shell takes priority over a saved one.' : ''}</p>
+      </section></div>`)}
+    ${card('Where Jev fits in your work', `<div class="cfg">
+      <p class="blk-intro">We looked for your Claude Code prompts that were really just a decision: short, no tools, and
+        asking "which one", "yes or no", "classify" and the like.</p>
+      <div class="grid g4">
+        ${kpi('Decision-like prompts', fmtInt(fit.prompts), `of ${fmtInt(fit.total_prompts)} in this range`)}
+        ${kpi('Cost on Claude', usd(fit.claude_cost), fmtPct(fit.share_pct, 2) + ' of your spend', {badge: BADGE.estimated})}
+        ${kpi('Rough cost on Jev', usd(fit.jev_cost), 'at TypeSafe\'s published price', {badge: BADGE.estimated})}
+        ${kpi('Saving', usd(Math.max(fit.claude_cost - fit.jev_cost, 0)), 'if these had gone to Jev')}
+      </div>
+      ${small ? `<p class="fld-hint" style="margin-top:8px">Your Claude Code work is mostly writing code, which Jev can't do.
+        Jev pays off in apps and scripts that make many decisions, like sorting support tickets or reviewing pull requests.</p>` : ''}
+      ${fit.examples.length ? `<div class="sec" style="margin-top:12px">Examples</div><div class="stack">${fit.examples.map(e =>
+        `<div class="item"><div class="dt">${MASKED ? '<i>Prompt text hidden</i>' : esc(e.text)}
+          <span class="spacer"></span> ${fmtUSD(e.cost)}</div></div>`).join('')}</div>` : ''}</div>`,
+      {badge: BADGE.estimated, hint: 'read-only, from this computer\'s transcripts'})}`;
+  JEV_MSG = null;
+  const redraw = msg => { JEV_MSG = msg; bust(); render(); };
+  const confirmBox = $('#jev-confirm', page);
+  const inst = $('#jev-install', page);
+  if (inst) inst.onclick = () => { confirmBox.hidden = false; $('#jev-go', page).focus(); };
+  $('#jev-cancel', page).onclick = () => { confirmBox.hidden = true; };
+  const runJob = async (what, btn) => {
+    btn.disabled = true;
+    try {
+      const {job} = await doAction('jev/' + what);
+      const j = await followJob(job, $('#jev-log', page));
+      redraw({where: 'install', ok: j.state === 'done',
+              text: j.state === 'done' ? (what === 'install' ? 'Installed. Restart any open Claude Code sessions to use it.' : 'Removed.')
+                : (j.log[j.log.length - 1] || 'It did not finish.')});
+    } catch (e) { redraw({where: 'install', ok: false, text: e.message}); }
+  };
+  $('#jev-go', page).onclick = e => runJob('install', e.currentTarget);
+  const un = $('#jev-uninstall', page);
+  if (un) un.onclick = () => {
+    if (!un.dataset.armed) {
+      un.dataset.armed = '1'; un.textContent = 'Click again to uninstall';
+      setTimeout(() => { if (un.isConnected) { delete un.dataset.armed; un.textContent = 'Uninstall'; } }, 4000);
+      return;
+    }
+    runJob('uninstall', un);
+  };
+  const keyIn = $('#jev-key', page), keyErr = $('#jev-key-err', page);
+  keyIn.oninput = () => { keyErr.textContent = ''; keyIn.classList.remove('bad'); };
+  keyIn.onkeydown = e => { if (e.key === 'Enter') $('#jev-key-save', page).click(); };
+  $('#jev-key-save', page).onclick = async () => {
+    if (!keyIn.value.trim()) { keyErr.textContent = 'Paste your Jev API key first.'; keyIn.classList.add('bad'); return; }
+    try { await doAction('jev/key', {value: keyIn.value}); redraw({where: 'key', ok: true, text: 'Saved. New Claude Code sessions will use it.'}); }
+    catch (e) { keyErr.textContent = e.message; keyIn.classList.add('bad'); }
+  };
+  const rm = $('#jev-key-rm', page);
+  if (rm) rm.onclick = async () => {
+    if (!rm.dataset.armed) {
+      rm.dataset.armed = '1'; rm.textContent = 'Click again to remove';
+      setTimeout(() => { if (rm.isConnected) { delete rm.dataset.armed; rm.textContent = 'Remove'; } }, 4000);
+      return;
+    }
+    try { await doAction('jev/key', {remove: true}); redraw({where: 'key', ok: true, text: 'Removed.'}); }
+    catch (e) { keyErr.textContent = e.message; }
+  };
+};
+
 VIEWS.toolkit = async (page) => {
   const d = await fetch('/api/suggestions').then(r => r.json());
   const ev = x => (x || []).map(e => `<code>${esc(e)}</code>`).join(' ');
@@ -4140,6 +4256,10 @@ const TOURS = {
     {el: 'card:High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},
     {el: 'card:Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of opportunities.', act: 'Batch these into one config change.'},
     {el: 'card:Low-priority observations', t: 'Low-priority observations', see: 'Small findings, kept for completeness.', get: 'Context for the numbers above.', act: 'Skim them; act only if one matches a habit you want to change.'}],
+  jev: [
+    {el: 'card:What is Jev?', t: 'What Jev is', see: 'A fast, cheap AI that only makes decisions: pick one, yes or no, a score, a value.', get: 'Cheaper, faster apps and scripts, wherever an AI call only decides something.', act: 'Read the three lines. Jev does not make Claude Code itself cheaper.'},
+    {el: 'card:Set up Jev', t: 'Install and key', see: 'One click installs the Jev plugin for Claude Code; the key is saved in Claude Code\'s settings.', get: 'Claude knows how to use Jev when you build something.', act: 'Press Install, check the two commands, then Confirm. Paste your key and Save.'},
+    {el: 'card:Where Jev fits', t: 'Where Jev fits', see: 'Your prompts that were really just a decision, and what they would cost on Jev.', get: 'An honest number before you change anything.', act: 'If it is tiny, Jev belongs in your apps, not your coding sessions.'}],
   freemodels: [
     {el: 'card:How to use and test a free model', t: 'How it works', see: 'How to plug a local or free cloud model into Claude Code, and how to test it.', get: 'Zero-cost options for simple or private work.', act: 'Read the RAM guidance before you pick a model.'},
     {el: 'card1', t: 'A model', see: 'Each model with its size, RAM needs, strengths and limits.', get: 'A realistic idea of what runs on your machine.', act: `Click <b>${I('plus')} Add</b> on a model that fits your RAM.`}],

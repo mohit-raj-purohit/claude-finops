@@ -446,6 +446,27 @@ files on Windows.
 
 ---
 
+## Jev (fast decisions)
+
+[Jev](https://docs.typesafe.ai) is TypeSafe AI's "System One" model: very fast, very cheap typed
+decisions (pick one, yes or no, a score, a value). It does not write text or code, so it does not
+make Claude Code itself cheaper; it makes the apps and scripts you build cheaper where an LLM call
+only decides something.
+
+The **Jev (fast decisions)** page (sidebar, Optimize):
+
+- **Install** runs Claude Code's own plugin manager, after showing you the commands:
+  `claude plugin marketplace add typesafe-ai/skills` then `claude plugin install typesafe@typesafe-ai`.
+  **Uninstall** runs `claude plugin uninstall typesafe@typesafe-ai`.
+- **API key** is saved as `env.TYPESAFE_API_KEY` in `~/.claude/settings.json` (backed up first,
+  nothing else changed), so new Claude Code sessions can use it. The page only ever gets back
+  its last four characters. A key exported in your shell takes priority.
+- **Where Jev fits** counts your Claude Code prompts that were really just a decision (short, no
+  tools, worded as "which one", "yes or no", "classify"…) and what they would cost at TypeSafe's
+  published price ($0.042 per million input tokens). Read-only.
+
+---
+
 ## Multi-agent
 
 Besides Claude Code, the warehouse loads every other coding agent it finds on the machine:

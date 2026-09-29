@@ -360,6 +360,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(install_statusline())
         if len(parts) == 2 and parts[0] == "session_limit":
             return self.send_json(_set_session_limit(parts[1], payload))
+        if parts in (["jev", "install"], ["jev", "uninstall"]):
+            from . import jev
+            return self.send_json({"job": X._job(jev.install if parts[1] == "install" else jev.uninstall)["id"]})
+        if parts == ["jev", "key"]:
+            from . import jev
+            try:
+                if payload.get("remove"):
+                    jev.remove_key()
+                else:
+                    jev.save_key(payload.get("value") if isinstance(payload.get("value"), str) else "")
+            except ValueError as e:
+                raise BadRequest(str(e))
+            return self.send_json({"ok": True, "key": jev.key_status()})
         if len(parts) == 2 and parts[0] == "key":
             from .cloud import save_key, key_status
             value = payload.get("value")
@@ -564,6 +577,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
         if route.startswith("guard/session/"):
             return self.send_json(_session_limit_status(a, route[len("guard/session/"):]))
+        if route == "jev":
+            from . import jev
+            return self.send_json({"status": jev.status(), "key": jev.key_status(), "fit": jev.fit(a, f)})
         if route == "keys":
             from .cloud import key_status
             return self.send_json(key_status())
