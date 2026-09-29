@@ -159,6 +159,9 @@ const NAV = [
     ['cloud', 'cloud', 'Billed vs local', 'cloud'],
     ['exports', 'download', 'Export & data'],
   ]],
+  ['Setup', [
+    ['settings', 'cog', 'Settings'],
+  ]],
 ];
 
 // Toolbar icons: 24px line icons drawn in currentColor, so they follow the theme.
@@ -2468,6 +2471,8 @@ async function drawKeys(page) {
       <div class="fld-hint ok" id="key-${pid}-ok" role="status"></div>
     </div>`).join('');
   const done = async (pid, text) => {
+    S.opts = await fetch('/api/options').then(r => r.json());
+    applyAgentChrome();                    // Billed vs local appears once a key exists
     await drawKeys(page);
     const ok = $('#key-' + pid + '-ok', page); if (ok) ok.textContent = text;
   };
@@ -2637,11 +2642,6 @@ VIEWS.budgets = async (page) => {
         shorthand: <span class="mono">20M</span>, <span class="mono">500k</span>, <span class="mono">$3,000</span>.
         Leave a field blank to keep it unconfigured; the dashboard then reports it as unavailable rather than
         inventing a value.</div>
-      <div class="sec" style="margin-top:18px">API keys <span style="text-transform:none;letter-spacing:0;font-weight:450">(optional)</span></div>
-      <div class="fld-hint" style="margin-bottom:6px">Only needed for <b>Billed vs local</b>, which compares what the vendor
-        billed with what this machine recorded. Keys are stored in
-        <span class="mono">~/.claude-finops/secrets.local.json</span>, readable only by you, and are never shown again.</div>
-      <div id="cfg-keys" class="stack"><div class="note">Loading…</div></div>
     </div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
   // amounts: chips fill the field; hints follow what is typed; errors clear as you edit
   page.querySelectorAll('.cfg [data-fill]').forEach(c => c.onclick = () => {
@@ -2759,12 +2759,23 @@ VIEWS.budgets = async (page) => {
     bust(); await render();
     const m = $('#cfg-msg'); if (m) { m.className = 'ok'; m.textContent = 'Saved.'; }
   };
-  drawKeys(page);
   const bl = b.lines.filter(l => l.configured && l.budget);
   if (bl.length) addChart(page, 'Budget used', el => C.barsH(el, {
     rows: bl, label: l => l.name, value: l => 100 * l.actual / l.budget, fmt: v => fmtPct(v), max: 100,
     color: l => l.actual >= l.budget ? 'var(--critical)' : l.actual >= 0.75 * l.budget ? 'var(--warning)' : seriesVar(2)}),
     {badge: BADGE.estimated, after: '.nothing'});
+};
+
+/* ---------- settings ---------- */
+VIEWS.settings = async (page) => {
+  page.innerHTML = card('API keys', `<div class="cfg">
+      <div class="fld-hint" style="margin-bottom:8px">You only need these for the <b>Billed vs local</b> page,
+        which compares what the company that makes the tool billed with what this computer recorded.
+        Skip this if you don't use it. Keys stay on this computer, in a file only you can read, and are
+        never shown again.</div>
+      <div id="cfg-keys" class="stack"><div class="note">Loading…</div></div></div>`,
+    {hint: 'optional'});
+  drawKeys(page);
 };
 
 /* ---------- scorecard ---------- */
@@ -3629,7 +3640,7 @@ VIEWS.cloud = async (page) => {
         <span class="note">${cfg[k] ? 'key found' : 'no key'}</span></div>
       <div class="dt"><b>Gives you:</b> ${esc(p.covers)}</div>
       <div class="dt"><b>Get a key:</b> ${esc(p.how)}</div>
-      <div class="dt">Then add it under <b>API keys</b> on the <a href="#" data-go-budgets>Budgets</a> page,
+      <div class="dt">Then add it on the <a href="#" data-go-settings>Settings</a> page,
         run <code>claude-finops --set-key</code>, or set <code>${esc(p.env)}</code> in your environment.</div>
     </div>`).join('');
   page.innerHTML = `
@@ -3660,7 +3671,7 @@ VIEWS.cloud = async (page) => {
     ${card('Cursor members', `<div id="cl-cur"></div>`, {flush: 1, badge: BADGE.actual})}
     ${card('Billed API cost by line item', `<div id="cl-api"></div>`, {flush: 1, badge: BADGE.actual,
       hint: 'From the Anthropic cost report: API spend only, not subscription plans'})}`;
-  page.querySelectorAll('[data-go-budgets]').forEach(a => a.onclick = e => { e.preventDefault(); go('budgets'); });
+  page.querySelectorAll('[data-go-settings]').forEach(a => a.onclick = e => { e.preventDefault(); go('settings'); });
   $('#cl-day', page).innerHTML = table([
     {h: 'Day', f: r => esc(r.day)},
     {h: 'Billed $', num: 1, f: r => fmtUSD(r.billed_cost)},
@@ -3878,11 +3889,12 @@ const TOURS = {
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
     {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
     {el: 'card:Configure budgets', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save configuration.'},
-    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'},
-    {el: 'card:Configure budgets', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor, with where each one comes from.', get: 'Billed vs local, without touching the terminal.', act: 'Paste a key and Save key. It is never shown again, only its last four characters.'}],
+    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
+  settings: [
+    {el: 'card:API keys', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor.', get: 'The Billed vs local page, without the terminal.', act: 'Paste a key and press Save key. It is never shown again, only its last four characters.'}],
   cloud: [
     {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
-    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Add a key under API keys on the Budgets page, or run claude-finops --set-key.'},
+    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Add a key on the Settings page, or run claude-finops --set-key.'},
     {el: 'card:Billed vs local', t: 'The comparison', see: 'Billed totals against local totals for the same period.', get: 'Proof of how much of the bill this machine explains.', act: 'A large gap means most spend happens elsewhere: check the user tables.'},
     {el: 'card:Claude Code users', t: 'Users org-wide', see: 'Each Claude Code user in the organisation and their usage.', get: 'Who drives the bill across the team.', act: 'Compare your own row with the team average.'},
     {el: 'card:Cursor members', t: 'Cursor members', see: 'Cursor team members and their spend.', get: 'The same picture for Cursor seats.', act: 'Look for seats with no usage at all.'},
