@@ -4,8 +4,13 @@ Developer helpers. Not shipped in the npm package.
 
 ## demo_data.py — made-up usage for screenshots
 
+    rm -rf /tmp/finops-demo
     python3 tools/demo_data.py /tmp/finops-demo
     CLAUDE_FINOPS_HOME=/tmp/finops-demo CLAUDE_PROJECTS=/tmp/finops-demo/projects PORT=8790 ./run.sh --foreground
+
+`PORT=8790` matters: without it the dashboard starts on 8787 and restarts your real one.
+The script refuses a folder that already holds a `settings.local.json` or `data/finops.db`
+unless an earlier demo run made it, so it cannot overwrite real data. Use a new or empty folder.
 
 Everything in it is invented. Use it for every screenshot, never real data.
 

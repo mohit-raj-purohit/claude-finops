@@ -1,7 +1,7 @@
 """Made-up usage for screenshots and demos. Never reads anything from this machine.
 
   python3 tools/demo_data.py [home]      # default: a new temp dir
-  CLAUDE_FINOPS_HOME=<home> CLAUDE_PROJECTS=<home>/projects ./run.sh --foreground
+  CLAUDE_FINOPS_HOME=<home> CLAUDE_PROJECTS=<home>/projects PORT=8790 ./run.sh --foreground
 
 Writes Claude Code-shaped transcripts for a few invented projects under
 <home>/projects, builds <home>/data/finops.db from them, and writes example
@@ -46,6 +46,13 @@ def _session(rng, project, start, turns):
 
 def build(home, days=30, seed=7):
     from finops.etl import Loader
+    marker = os.path.join(home, ".finops-demo")
+    if not os.path.exists(marker) and any(
+            os.path.exists(os.path.join(home, p)) for p in ("settings.local.json", os.path.join("data", "finops.db"))):
+        raise ValueError(f"{home} already holds a real dashboard's settings or data. "
+                         "Pick a new or empty folder for the demo.")
+    os.makedirs(home, exist_ok=True)
+    open(marker, "w").close()
     rng = random.Random(seed)
     src = os.path.join(home, "projects")
     today = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
@@ -80,4 +87,4 @@ if __name__ == "__main__":
     home = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="finops-demo-")
     out = build(home)
     print(f"{out['sessions']} demo sessions in {home}")
-    print(f"CLAUDE_FINOPS_HOME={home} CLAUDE_PROJECTS={home}/projects ./run.sh --foreground")
+    print(f"CLAUDE_FINOPS_HOME={home} CLAUDE_PROJECTS={home}/projects PORT=8790 ./run.sh --foreground")

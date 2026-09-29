@@ -2532,6 +2532,7 @@ function closeGuide() {
 }
 function guideKeys(e) {
   if (!GUIDE) return;
+  e.stopPropagation();
   const slides = GUIDES[GUIDE.name];
   if (e.key === 'Escape') { e.preventDefault(); closeGuide(); }
   else if (e.key === 'ArrowRight' && GUIDE.i < slides.length - 1) { e.preventDefault(); GUIDE.i++; drawGuide(); }
@@ -2554,8 +2555,8 @@ function drawGuide() {
     <div class="g-pic">${s.img
       ? `<span class="g-fig"><img src="${esc(s.img)}" alt="${esc(s.alt || '')}">${(s.marks || []).map(m =>
           `<span class="g-mark" style="left:${m.x}%;top:${m.y}%">${m.n}</span>`).join('')}</span>`
-      : '<div class="g-live"></div>'}</div>
-    <div class="g-text">${s.text.map(t => `<p>${t}</p>`).join('')}</div>
+      : '<div class="g-ex">Example</div><div class="g-live"></div>'}</div>
+    <div class="g-text" aria-live="polite">${s.text.map(t => `<p>${t}</p>`).join('')}</div>
     <footer>
       <div class="g-dots" aria-hidden="true">${slides.map((_, i) => `<i class="${i === GUIDE.i ? 'on' : ''}"></i>`).join('')}</div>
       <span class="spacer"></span>
@@ -2577,7 +2578,7 @@ function showMe(selector) {
   const t = $(selector);
   if (!t) return;
   if (t.tagName === 'DETAILS') t.open = true;
-  t.scrollIntoView({block: 'center', behavior: 'smooth'});
+  t.scrollIntoView({block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
   t.classList.remove('pulse'); void t.offsetWidth; t.classList.add('pulse');
   setTimeout(() => t.classList.remove('pulse'), 2200);
 }
@@ -2588,6 +2589,7 @@ function maybeGuide(name) {
   if (seen || !GUIDES[name]) return;
   const tryOpen = () => {
     if (S.view !== name || GUIDE) return;
+    try { if (localStorage.getItem(guideSeenKey(name)) === '1') return; } catch (_) {}
     if (TOUR) return setTimeout(tryOpen, 800);     // wait for the welcome tour to finish
     openGuide(name);
   };
@@ -2837,8 +2839,7 @@ VIEWS.budgets = async (page) => {
         <button class="chip on" id="savecfg">Save</button><span id="cfg-msg" role="status"></span>
         <span class="fld-hint">Saved on this computer only. Amounts take shorthand: 20M, 500k, $3,000.</span>
       </div>
-    </div>`, {actions: `<button class="act" id="guide-open">${I('help')} How does this work?</button>`,
-              footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure.`})}`;
+    </div>`, {actions: `<button class="act" id="guide-open">${I('help')} How does this work?</button>`})}`;
   // amounts: chips fill the field; hints follow what is typed; errors clear as you edit
   page.querySelectorAll('.cfg [data-fill]').forEach(c => c.onclick = () => {
     const el = $('#' + c.dataset.fill, page);
@@ -2939,6 +2940,7 @@ VIEWS.budgets = async (page) => {
                    step_pct: step, projects};
     if (errs.length) {
       errs.forEach(([id, e]) => setErr(page, id, e));
+      page.querySelectorAll('details.adv').forEach(d => { if (d.querySelector('.fld-err:not(:empty)')) d.open = true; });
       msg.className = 'err';
       msg.textContent = `Fix ${errs.length} field${errs.length === 1 ? '' : 's'} before saving.`;
       const first = $('#' + errs[0][0], page) || $('#' + errs[0][0] + '-err', page);
@@ -2971,10 +2973,11 @@ VIEWS.budgets = async (page) => {
 /* ---------- settings ---------- */
 VIEWS.settings = async (page) => {
   page.innerHTML = card('API keys', `<div class="cfg">
-      <div class="fld-hint" style="margin-bottom:8px">You only need these for the <b>Billed vs local</b> page,
-        which compares what the company that makes the tool billed with what this computer recorded.
-        Skip this if you don't use it. Keys stay on this computer, in a file only you can read, and are
-        never shown again.</div>
+      <div class="fld-hint" style="margin-bottom:8px">An API key is a password that lets this dashboard ask
+        Anthropic or Cursor for your company's bill. You only need one for the <b>Billed vs local</b> page,
+        which compares what was billed with what this computer recorded. That page shows up in the sidebar
+        once a key is saved. Skip this if you don't use it. Keys stay on this computer, in a file only you
+        can read. They are never shown again.</div>
       <div id="cfg-keys" class="stack"><div class="note">Loading…</div></div></div>`,
     {hint: 'optional'});
   drawKeys(page);
@@ -2997,7 +3000,7 @@ VIEWS.scorecard = async (page) => {
           : d.score >= 30 ? 'approaching' : 'critical'}"><i style="width:${d.score}%"></i></div>
         <div class="note">${esc(d.detail)}</div></div>`).join('')}
       </div></div>`, {badge: BADGE.estimated,
-      footer: 'Each dimension is measured from your transcripts; budget adherence needs a budget in Settings.'})}
+      footer: 'Each dimension is measured from your transcripts; budget adherence needs a budget on the Budgets page.'})}
     <div class="grid g3">
       ${card('What is good', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
         sc.what_is_good.map(x => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')

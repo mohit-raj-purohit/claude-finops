@@ -660,7 +660,7 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .guide .g-pic { text-align:center; }
 .guide .g-fig { position:relative; display:inline-block; max-width:100%; line-height:0; }
 .guide .g-fig img { display:block; max-width:100%; max-height:45vh; width:auto; height:auto; }
-.guide .g-live { padding:12px; pointer-events:none; user-select:none; }
+.guide .g-live { text-align:left; padding:12px; pointer-events:none; user-select:none; }
 .guide .g-mark { position:absolute; transform:translate(-50%,-50%); width:26px; height:26px; border-radius:50%;
   background:var(--s1); color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center;
   justify-content:center; box-shadow:0 0 0 3px var(--surface); }
@@ -672,5 +672,7 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .guide .g-dots i.on { background:var(--s1); }
 .guide .g-cc { margin-top:10px; padding:10px 12px; border-radius:8px; background:#1e1e1e; color:#e6e6e6; font:12.5px/1.5 ui-monospace, Menlo, monospace; }
 .pulse { animation: guide-pulse 1s ease-in-out 2; border-radius:10px; }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; outline: 3px solid var(--s1); } }
+.guide .g-ex { text-align:left; padding:8px 12px 0; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; }
 @keyframes guide-pulse { 50% { box-shadow:0 0 0 4px color-mix(in srgb, var(--s1) 55%, transparent); } }
 @media (max-width: 600px) { .guide .g-text { font-size:14px; } .guide footer .spacer { display:none; } }

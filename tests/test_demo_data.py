@@ -33,6 +33,18 @@ class TestDemoData(unittest.TestCase):
                     with open(os.path.join(dirpath, f), errors="replace") as fh:
                         self.assertNotIn(real, fh.read(), f)
 
+    def test_refuses_a_foreign_home(self):
+        foreign = tempfile.mkdtemp(prefix="finops-real-")
+        with open(os.path.join(foreign, "settings.local.json"), "w") as fh:
+            fh.write("{}")
+        with self.assertRaises(ValueError):
+            demo_data.build(foreign)
+        with open(os.path.join(foreign, "settings.local.json")) as fh:
+            self.assertEqual(fh.read(), "{}")       # untouched
+
+    def test_can_rebuild_its_own_home(self):
+        demo_data.build(self.home)
+
 
 if __name__ == "__main__":
     unittest.main()
