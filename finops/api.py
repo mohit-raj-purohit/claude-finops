@@ -283,6 +283,16 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["statusline"]:
             from .integrate import install_statusline
             return self.send_json(install_statusline())
+        if len(parts) == 2 and parts[0] == "key":
+            from .cloud import save_key, key_status
+            value = payload.get("value")
+            if not payload.get("remove") and not (isinstance(value, str) and value.strip()):
+                raise BadRequest("Paste a key, or use Remove.")
+            try:
+                save_key(parts[1], "" if payload.get("remove") else value)
+            except ValueError as e:
+                raise BadRequest(str(e))
+            return self.send_json({"ok": True, "keys": key_status()})
         if parts == ["guard"]:
             from .integrate import install_guard
             return self.send_json(install_guard(remove=bool(payload.get("remove"))))
@@ -475,6 +485,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not want or any(x != "claude" for x in want) else []
             rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
+        if route == "keys":
+            from .cloud import key_status
+            return self.send_json(key_status())
         if route == "cloud":
             from .cloud import report
             return self.send_json(report(a, _int(qs, "days", 30)))

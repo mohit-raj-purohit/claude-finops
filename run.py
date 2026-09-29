@@ -243,7 +243,6 @@ def keys():
 def set_key(pid=None):
     """Prompt for a key and store it 0600. The value is never echoed or logged."""
     import getpass
-    import json
     from finops.paths import SECRETS_PATH
     provs = _providers()
     if pid not in provs:
@@ -258,19 +257,13 @@ def set_key(pid=None):
     p = provs[pid]
     print(f"{p['name']}: paste the key (input stays hidden), or press Enter to remove it.")
     value = getpass.getpass("key: ").strip()
+    from finops.cloud import save_key
     try:
-        data = json.load(open(SECRETS_PATH))
-    except (OSError, ValueError):
-        data = {}
-    if value:
-        data[p["field"]] = value
-    else:
-        data.pop(p["field"], None)
-    fd = os.open(SECRETS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        json.dump(data, fh, indent=2)
+        save_key(pid, value)
+    except ValueError as e:
+        sys.exit(str(e))
     print(f"{'Stored' if value else 'Removed'} — {SECRETS_PATH}")
-    print("Restart the dashboard for it to take effect: claude-finops --stop && claude-finops")
+    print("The dashboard picks it up on the next Refresh; no restart needed.")
 
 
 def main():

@@ -3,9 +3,10 @@
 Everything else in this dashboard reads local files. This module is the one part that
 talks to the internet, and only when you ask it to (the Refresh button / --cloud-sync).
 
-Keys are never stored by the UI. Put them in the environment, or store one with
-`claude-finops --set-key`, which writes ~/.claude-finops/secrets.local.json (0600,
-outside the install tree, never packaged):
+Keys come from the environment, or are stored with `claude-finops --set-key` or the
+API keys section on the Budgets page. Both write ~/.claude-finops/secrets.local.json
+(0600, outside the install tree, never packaged); the dashboard never sends a stored
+key back to the browser, only whether it is set and its last four characters:
 
     {"anthropic_admin_key": "sk-ant-admin...", "cursor_api_key": "key_..."}
 
@@ -63,6 +64,53 @@ def key_for(provider):
 
 def configured():
     return {k: bool(key_for(k)) for k in PROVIDERS}
+
+
+# A light shape check, to catch pasting the wrong thing: not a validity test.
+KEY_SHAPES = {
+    "anthropic": (lambda v: v.startswith("sk-ant-admin"),
+                  "An Anthropic Admin key starts with sk-ant-admin (a regular API key will not work)."),
+    "cursor": (lambda v: len(v) >= 16, "That looks too short for a Cursor Admin API key."),
+}
+
+
+def key_status():
+    """Per provider: where the key comes from and its last four characters. Never the key."""
+    stored = _secrets()
+    out = {}
+    for pid, p in PROVIDERS.items():
+        env, val = os.environ.get(p["env"]), stored.get(p["field"])
+        src = "env" if env else "stored" if val else None
+        key = env or val or ""
+        out[pid] = {"name": p["name"], "env": p["env"], "how": p["how"], "covers": p["covers"],
+                    "source": src, "last4": key[-4:] if len(key) >= 12 else None}
+    return out
+
+
+def save_key(provider, value):
+    """Store (value) or remove (empty value) one provider key in the 0600 secrets file.
+
+    Raises ValueError for an unknown provider or a value that fails the shape check.
+    """
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r}")
+    value = (value or "").strip()
+    if value:
+        if any(ch.isspace() for ch in value):
+            raise ValueError("A key has no spaces or line breaks in it.")
+        ok, msg = KEY_SHAPES.get(provider, (lambda v: True, ""))
+        if not ok(value):
+            raise ValueError(msg)
+    data = _secrets()
+    if value:
+        data[PROVIDERS[provider]["field"]] = value
+    else:
+        data.pop(PROVIDERS[provider]["field"], None)
+    os.makedirs(os.path.dirname(SECRETS_PATH), exist_ok=True)
+    fd = os.open(SECRETS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
+    os.chmod(SECRETS_PATH, 0o600)      # O_CREAT's mode only applies to a new file
 
 
 def _get(url, headers, data=None, method="GET"):

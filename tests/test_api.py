@@ -209,3 +209,70 @@ class TestParityRoutes(ServerFixture):
 
     def test_statusline_install_needs_action_header(self):
         self.assertEqual(self.post("/api/do/statusline", {})[0], 403)
+
+
+class TestKeys(ServerFixture):
+    """API keys set from the Budgets page: stored 0600, never sent back."""
+    KEY = "sk-ant-admin01-" + "x" * 30 + "WXYZ"
+
+    def setUp(self):
+        from unittest import mock
+        from finops import cloud
+        self.secrets = tempfile.mktemp(suffix=".json", prefix="finops-test-secrets-")
+        self.p = [mock.patch.object(cloud, "SECRETS_PATH", self.secrets),
+                  mock.patch.dict(os.environ, {"ANTHROPIC_ADMIN_KEY": "", "CURSOR_API_KEY": ""})]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+        os.path.exists(self.secrets) and os.remove(self.secrets)
+
+    def save(self, provider, body, headers=None):
+        return self.post(f"/api/do/key/{provider}", body, headers=headers or {"X-FinOps-Action": "1"})
+
+    def test_store_reports_status_without_the_key(self):
+        code, body = self.save("anthropic", {"value": self.KEY})
+        self.assertEqual(code, 200)
+        self.assertNotIn(self.KEY, json.dumps(body))
+        self.assertEqual(body["keys"]["anthropic"]["source"], "stored")
+        self.assertEqual(body["keys"]["anthropic"]["last4"], "WXYZ")
+        code, status = self.get("/api/keys")
+        self.assertNotIn(self.KEY, json.dumps(status))
+        self.assertEqual(os.stat(self.secrets).st_mode & 0o777, 0o600)
+        with open(self.secrets) as fh:
+            self.assertEqual(json.load(fh)["anthropic_admin_key"], self.KEY)
+
+    def test_remove(self):
+        self.save("anthropic", {"value": self.KEY})
+        code, body = self.save("anthropic", {"remove": True})
+        self.assertEqual(code, 200)
+        self.assertIsNone(body["keys"]["anthropic"]["source"])
+
+    def test_rejects_wrong_shape_empty_and_unknown(self):
+        self.assertEqual(self.save("anthropic", {"value": "sk-ant-api03-regular-key-000000"})[0], 400)
+        self.assertEqual(self.save("anthropic", {"value": "  "})[0], 400)
+        self.assertEqual(self.save("nope", {"value": self.KEY})[0], 400)
+        self.assertFalse(os.path.exists(self.secrets))
+
+    def test_rejects_cross_origin(self):
+        code, _ = self.save("anthropic", {"value": self.KEY},
+                            headers={"X-FinOps-Action": "1", "Origin": "http://evil.example"})
+        self.assertEqual(code, 403)
+        self.assertFalse(os.path.exists(self.secrets))
+
+    def test_env_var_wins_and_is_reported(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CURSOR_API_KEY": "key_" + "e" * 30}):
+            self.assertEqual(self.get("/api/keys")[1]["cursor"]["source"], "env")
+
+
+class TestBudgetSuggestions(ServerFixture):
+    def test_budgets_carry_suggestions(self):
+        code, body = self.get("/api/budgets")
+        self.assertEqual(code, 200)
+        sg = body["suggest"]
+        for k in ("spend_30d", "tokens_30d", "daily_avg", "daily_p90", "session_tokens"):
+            self.assertIn(k, sg)
+        self.assertEqual(sg["session_tokens"], sorted(sg["session_tokens"]))

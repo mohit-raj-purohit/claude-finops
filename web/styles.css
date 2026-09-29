@@ -605,3 +605,22 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .actnow-it .ai .i { width:17px; height:17px; vertical-align:middle; }
 .focus-hd .i { align-self:center; }
 .status .glyph .i { display:block; width:10px; height:10px; }
+
+/* ---------- budgets form ---------- */
+.cfg .sec { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em;
+            font-weight:620; margin:0 0 6px; }
+.cfg .fld { margin-bottom:12px; }
+.cfg .fld > .hd { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted);
+                  padding:5px 2px 3px; font-weight:600; }
+.cfg input[type=text], .cfg input[type=password], .cfg select {
+  width:100%; padding:5px 7px; border-radius:6px; border:1px solid var(--border); background:var(--surface-2); }
+.cfg input.bad, .cfg select.bad { border-color:var(--critical); box-shadow:0 0 0 1px var(--critical); }
+.cfg .sugg { display:flex; flex-wrap:wrap; gap:4px; margin:5px 0 0; align-items:center; }
+.cfg .sugg .chip { font-size:11px; padding:2px 9px; }
+.cfg .fld-hint { font-size:11px; color:var(--muted); margin:3px 2px 0; }
+.cfg .fld-err { font-size:11.5px; color:var(--critical-ink); margin:3px 2px 0; font-weight:550; }
+.cfg .fld-hint:empty, .cfg .fld-err:empty { display:none; }
+.cfg .save-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:14px 0 4px; }
+.cfg .save-row .chip { padding:6px 18px; }
+.cfg .ok, .cfg #cfg-msg.ok { color:var(--good-ink); font-size:12px; }
+.cfg #cfg-msg.err { color:var(--critical-ink); font-size:12px; font-weight:550; }

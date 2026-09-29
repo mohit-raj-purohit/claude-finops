@@ -1591,6 +1591,7 @@ class Analytics:
                     "thresholds_breached": breached, "thresholds_forecast_breach": fbreach,
                     "unit": unit}
 
+        out["suggest"] = self.budget_suggestions(f)
         fc_cost = fc.get("scenarios", {}).get("expected", {}).get("end_of_period_cost")
         out["lines"].append(line("Monthly spend", b.get("monthly_usd"), period["c"], fc_cost))
         out["lines"].append(line("Daily spend", b.get("daily_usd"), today["c"], today["c"]))
@@ -1614,6 +1615,32 @@ class Analytics:
                            (model, bp["start"], bp["end"]))["c"]
             out["lines"].append(line(f"Model: {self.pricing.display_name(model)}", bud, act, None))
         return out
+
+    def budget_suggestions(self, f=None):
+        """Figures the Budgets form offers as suggestions: recent spend and session sizes.
+
+        Last 30 days up to today, under the current filter; session sizes are Claude Code
+        sessions' whole-session billable tokens (a sorted sample, at most 2,000 values),
+        so the page can say how many past sessions a budget would have caught.
+        """
+        w, p = self.where(f)
+        start = (self.today() - timedelta(days=29)).isoformat()
+        days = [r["c"] for r in self.q(
+            f"SELECT r.day, SUM(r.est_cost_usd) c FROM requests r WHERE {w} AND r.day >= ? "
+            f"GROUP BY r.day", p + [start])]
+        tot = self.one(f"SELECT COALESCE(SUM(r.est_cost_usd),0) c, COALESCE(SUM(r.billable_tokens),0) t "
+                       f"FROM requests r WHERE {w} AND r.day >= ?", p + [start])
+        sizes = [r["t"] for r in self.q(
+            "SELECT billable_tokens t FROM sessions WHERE agent='claude' AND billable_tokens > 0 "
+            "ORDER BY t")]
+        if len(sizes) > 2000:
+            step = len(sizes) / 2000.0
+            sizes = [sizes[int(i * step)] for i in range(2000)]
+        days.sort()
+        return {"spend_30d": round(tot["c"], 2), "tokens_30d": tot["t"],
+                "daily_avg": round(tot["c"] / 30.0, 2),
+                "daily_p90": round(days[min(len(days) - 1, int(len(days) * 0.9))], 2) if days else 0,
+                "session_tokens": sizes}
 
     def _session_budget_line(self, f, bp, line):
         """Largest Claude Code session this period against its own budget, and who went over."""

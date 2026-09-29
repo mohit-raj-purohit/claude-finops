@@ -2338,10 +2338,189 @@ VIEWS.forecast = async (page) => {
 };
 
 /* ---------- budgets ---------- */
+/* ---------- budgets form helpers ---------- */
+// "20M", "500k", "$3,000", "2.5B" -> number; blank -> null. kind: 'tokens' | 'usd' | 'count'
+function parseAmount(raw, kind) {
+  const s = String(raw ?? '').trim().replace(/[,\s_]/g, '').replace(/^\$/, '');
+  if (s === '') return {value: null};
+  const m = /^(\d+(?:\.\d+)?|\.\d+)([kmb])?$/i.exec(s);
+  if (!m) return {error: kind === 'usd' ? 'Enter an amount like 3000, $3,000 or 3k.'
+                        : 'Enter a number like 20M, 500k or 2,000,000.'};
+  const v = parseFloat(m[1]) * ({k: 1e3, m: 1e6, b: 1e9}[(m[2] || '').toLowerCase()] || 1);
+  return {value: kind === 'usd' ? Math.round(v * 100) / 100 : Math.round(v)};
+}
+// Round up to two significant figures, so suggestions are round numbers.
+const niceUp = v => {
+  if (!(v > 0)) return 0;
+  const p = 10 ** (Math.floor(Math.log10(v)) - 1);
+  return Math.ceil(v / p - 1e-9) * p;
+};
+// 8400000 -> "8.4M": compact, and parseAmount reads it back exactly for round numbers.
+function shortAmount(v) {
+  const u = [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']].find(([d]) => Math.abs(v) >= d);
+  return u ? +(v / u[0]).toFixed(2) + u[1] : String(Math.round(v));
+}
+// items: a number, or [value, label, title]; data-driven ones are rounded up, zeros dropped
+function suggChips(items, fmt) {
+  const seen = new Set();
+  return items.map(it => Array.isArray(it) ? {v: niceUp(it[0]), l: it[1], t: it[2]} : {v: it})
+    .filter(c => c.v > 0 && !seen.has(c.v) && seen.add(c.v))
+    .map(c => ({...c, l: c.l ? `${c.l} · ${fmt(c.v)}` : fmt(c.v)}));
+}
+const usdChips = items => suggChips(items, v => '$' + shortAmount(v));
+const tokChips = items => suggChips(items, shortAmount);
+
+function amountField({id, label, value, kind, zero, chips = [], hint = ''}) {
+  const shown = value == null ? '' : kind === 'usd' ? String(value) : Number(value).toLocaleString('en-US');
+  return `<div class="fld">
+    <div class="hd"><label for="${id}">${label}</label></div>
+    <input type="text" inputmode="decimal" id="${id}" data-kind="${kind}" ${zero ? 'data-zero="1"' : ''}
+      value="${esc(shown)}" placeholder="not set" autocomplete="off" spellcheck="false"
+      aria-describedby="${id}-hint ${id}-err">
+    ${chips.length ? `<div class="sugg" aria-label="Suggestions">${chips.map(c =>
+      `<button type="button" class="chip" data-fill="${id}" data-v="${c.v}" title="${esc(c.t || 'Use this value')}">${esc(c.l)}</button>`).join('')}</div>` : ''}
+    <div class="fld-hint" id="${id}-hint">${hint}</div>
+    <div class="fld-err" id="${id}-err" role="alert"></div>
+  </div>`;
+}
+// The reason a typed amount is not acceptable, or '' when it is (blank is always fine).
+function amountError(el) {
+  const r = parseAmount(el.value, el.dataset.kind);
+  if (r.error) return r.error;
+  if (r.value == null) return '';
+  if (r.value < 0) return 'Cannot be negative.';
+  if (r.value === 0 && !el.dataset.zero) return 'Must be more than 0, or leave it blank.';
+  return '';
+}
+// Toggle chips for a list of percentages, plus a box to add another one.
+function pctField({id, label, values, presets, max}) {
+  const all = [...new Set([...presets, ...values])].sort((a, b) => a - b);
+  return `<div class="fld"><div class="hd">${label}</div>
+    <div class="sugg" id="${id}" data-max="${max}">${all.map(p =>
+      `<button type="button" class="chip ${values.includes(p) ? 'on' : ''}" data-pct="${p}" aria-pressed="${values.includes(p)}">${p}%</button>`).join('')}
+      <input type="text" inputmode="decimal" class="pct-add" placeholder="+ other %" aria-label="Add another percentage"
+        style="width:92px;padding:2px 8px;border-radius:99px">
+    </div>
+    <div class="fld-err" id="${id}-err" role="alert"></div></div>`;
+}
+function wirePct(page) {
+  page.querySelectorAll('.cfg [data-max]').forEach(box => {
+    const toggle = b => b.onclick = () => {
+      b.classList.toggle('on'); b.setAttribute('aria-pressed', b.classList.contains('on'));
+      clearErr(page, box.id);
+    };
+    box.querySelectorAll('[data-pct]').forEach(toggle);
+    const add = box.querySelector('.pct-add');
+    const commit = () => {
+      const raw = add.value.trim().replace(/%$/, '');
+      if (!raw) return;
+      const v = +raw, max = +box.dataset.max;
+      if (!Number.isFinite(v) || v < 1 || v > max) return setErr(page, box.id, `Enter a percentage from 1 to ${max}.`);
+      let b = box.querySelector(`[data-pct="${v}"]`);
+      if (!b) {
+        b = h(`<button type="button" class="chip" data-pct="${v}" aria-pressed="false">${v}%</button>`);
+        const after = [...box.querySelectorAll('[data-pct]')].find(x => +x.dataset.pct > v);
+        box.insertBefore(b, after || add);
+        toggle(b);
+      }
+      if (!b.classList.contains('on')) b.click();
+      add.value = '';
+      clearErr(page, box.id);
+    };
+    add.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } };
+    add.onblur = commit;
+  });
+}
+function setErr(page, id, text) {
+  const e = $('#' + id + '-err', page); if (e) e.textContent = text;
+  const el = $('#' + id, page) || $('#' + id + '-tok', page);
+  if (el && el.tagName !== 'DIV') el.classList.add('bad');
+}
+function clearErr(page, id) {
+  const e = $('#' + id + '-err', page); if (e) e.textContent = '';
+  [$('#' + id, page), $('#' + id + '-tok', page), $('#' + id + '-path', page)]
+    .forEach(el => el && el.classList.remove('bad'));
+}
+
+// API keys: status only ever comes back from the server, never the key itself.
+async function drawKeys(page) {
+  const host = $('#cfg-keys', page);
+  if (!host) return;
+  let ks;
+  try { ks = await fetch('/api/keys').then(r => r.json()); }
+  catch (e) { host.innerHTML = '<div class="note">Could not read the key status.</div>'; return; }
+  host.innerHTML = Object.entries(ks).map(([pid, k]) => `
+    <div class="item">
+      <div class="hd">${esc(k.name)}<span class="spacer"></span>
+        <span class="badge ${k.source ? '' : 'na'}">${k.source === 'env' ? 'set by $' + esc(k.env)
+          : k.source === 'stored' ? 'stored' + (k.last4 ? ' · ends ' + esc(k.last4) : '') : 'not set'}</span></div>
+      <div class="dt"><b>Gives you:</b> ${esc(k.covers)}</div>
+      <div class="dt"><b>Get a key:</b> ${esc(k.how)}</div>
+      ${k.source === 'env'
+        ? `<div class="fld-hint">The ${esc(k.env)} environment variable takes priority. Unset it to manage the key here.</div>`
+        : `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <input type="password" id="key-${pid}" autocomplete="off" spellcheck="false" style="flex:1;min-width:0"
+              aria-label="${esc(k.name)} key" placeholder="${k.source ? 'paste a new key to replace it' : 'paste the key'}">
+            <button class="act" data-keysave="${pid}">Save key</button>
+            ${k.source === 'stored' ? `<button class="act" data-keyrm="${pid}">Remove</button>` : ''}
+          </div>`}
+      <div class="fld-err" id="key-${pid}-err" role="alert"></div>
+      <div class="fld-hint ok" id="key-${pid}-ok" role="status"></div>
+    </div>`).join('');
+  const done = async (pid, text) => {
+    await drawKeys(page);
+    const ok = $('#key-' + pid + '-ok', page); if (ok) ok.textContent = text;
+  };
+  host.querySelectorAll('[data-keysave]').forEach(b => {
+    const pid = b.dataset.keysave, inp = $('#key-' + pid, host), err = $('#key-' + pid + '-err', host);
+    inp.oninput = () => { err.textContent = ''; inp.classList.remove('bad'); };
+    inp.onkeydown = e => { if (e.key === 'Enter') b.click(); };
+    b.onclick = async () => {
+      if (!inp.value.trim()) { err.textContent = 'Paste a key first.'; inp.classList.add('bad'); return; }
+      b.disabled = true;
+      try {
+        await doAction('key/' + pid, {value: inp.value});
+        inp.value = '';
+        await done(pid, 'Saved. Billed vs local uses it on the next Refresh.');
+      } catch (e) { err.textContent = e.message; inp.classList.add('bad'); b.disabled = false; }
+    };
+  });
+  host.querySelectorAll('[data-keyrm]').forEach(b => b.onclick = async () => {
+    if (!b.dataset.armed) {            // two clicks, like the other destructive actions
+      b.dataset.armed = '1'; b.textContent = 'Click again to remove';
+      setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = 'Remove'; } }, 4000);
+      return;
+    }
+    const pid = b.dataset.keyrm;
+    try { await doAction('key/' + pid, {remove: true}); await done(pid, 'Removed.'); }
+    catch (e) { const err = $('#key-' + pid + '-err', host); if (err) err.textContent = e.message; }
+  });
+}
+
 VIEWS.budgets = async (page) => {
   const b = await api('budgets');
   const st = S.opts.settings;
   const sg = st.guard || {};
+  // suggestions from your own recent usage (see Analytics.budget_suggestions)
+  const SG = b.suggest || {}, sizes = SG.session_tokens || [];
+  const pctile = q => sizes.length ? sizes[Math.min(sizes.length - 1, Math.floor(q * sizes.length))] : 0;
+  const overShare = v => {
+    let lo = 0, hi = sizes.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (sizes[m] > v) hi = m; else lo = m + 1; }
+    const n = sizes.length - lo;
+    return n ? `${fmtInt(n)} of your ${fmtInt(sizes.length)} past sessions (${fmtPct(100 * n / sizes.length, 0)}) went over this.`
+      : `None of your ${fmtInt(sizes.length)} past sessions went over this.`;
+  };
+  const HINTS = {
+    'b-monthly': v => v ? `At your last-30-days pace (${fmtUSD(SG.spend_30d)}) you would use ${fmtPct(100 * SG.spend_30d / v, 0)} of this.`
+      : `Last 30 days: ${fmtUSD(SG.spend_30d)} (estimated).`,
+    'b-daily': () => `Your average day is ${fmtUSD(SG.daily_avg)}; 1 day in 10 costs more than ${fmtUSD(SG.daily_p90)}.`,
+    'b-tokens': v => v ? `The last 30 days used ${fmtNum(SG.tokens_30d)} tokens, ${fmtPct(100 * SG.tokens_30d / v, 0)} of this.`
+      : `Last 30 days: ${fmtNum(SG.tokens_30d)} tokens.`,
+    'g-tokens': v => !sizes.length ? '' : v ? overShare(v) : `Half your sessions stay under ${fmtNum(pctile(.5))} tokens.`,
+  };
+  const planHint = `Your own figure, from your plan or invoice. ${esc(agentWord())} data does not include it.`;
+  const stepVal = sg.step_pct ?? 25;
   page.innerHTML = `
     ${card('Budget vs actual vs forecast', `<div class="stack">${b.lines.map(l => l.configured ? `
       <div class="item">
@@ -2374,98 +2553,146 @@ VIEWS.budgets = async (page) => {
             (estimated). Set a budget below to track variance and get threshold warnings.</div></div>`
       ).join('')}</div>`, {badge: BADGE.estimated,
       hint: `alert thresholds: ${b.thresholds_pct.join('%, ')}%`})}
-    ${card('Configure budgets, limits and thresholds', `
+    ${card('Configure budgets, limits and thresholds', `<div class="cfg">
       <div class="grid g3">
-        <div><div class="hd" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:620;margin-bottom:6px">Budgets</div>
-          <label class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-            <div class="hd">Monthly budget (USD)</div>
-            <input type="number" step="1" id="b-monthly" value="${st.budgets.monthly_usd ?? ''}" placeholder="not set">
-            <div class="hd">Daily budget (USD)</div>
-            <input type="number" step="0.5" id="b-daily" value="${st.budgets.daily_usd ?? ''}" placeholder="not set">
-            <div class="hd">Monthly token budget</div>
-            <input type="number" id="b-tokens" value="${st.budgets.monthly_tokens ?? ''}" placeholder="not set">
-          </label></div>
-        <div><div class="hd" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:620;margin-bottom:6px">Plan limits</div>
-          <label class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-            <div class="hd">Monthly cost allowance (USD)</div>
-            <input type="number" step="1" id="l-cost" value="${st.limits.monthly_cost_allowance_usd ?? ''}" placeholder="not exposed by ${agentWord()} data">
-            <div class="hd">Monthly token allowance</div>
-            <input type="number" id="l-tok" value="${st.limits.monthly_token_allowance ?? ''}" placeholder="not exposed by ${agentWord()} data">
-            <div class="hd">Monthly request allowance</div>
-            <input type="number" id="l-req" value="${st.limits.monthly_request_allowance ?? ''}" placeholder="not exposed by ${agentWord()} data">
-            <div class="hd">Remaining credits (USD)</div>
-            <input type="number" step="0.01" id="l-cred" value="${st.limits.remaining_credits_usd ?? ''}" placeholder="not exposed by ${agentWord()} data">
-          </label></div>
-        <div><div class="hd" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:620;margin-bottom:6px">Alert thresholds</div>
-          <label class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-            <div class="hd">Comma-separated %</div>
-            <input type="text" id="t-thr" value="${st.alert_thresholds_pct.join(',')}"
-              style="width:100%;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
-          </label>
-          <button class="chip on" id="savecfg" style="margin-top:10px;width:100%;justify-content:center">Save configuration</button>
-          <div class="note" style="margin-top:8px">Writes to <span class="mono">config/settings.json</span>.
-          Leave a field blank to keep it unconfigured — the dashboard will report it as unavailable
-          rather than inventing a value.</div>
+        <div><div class="sec">Budgets</div>
+          ${amountField({id: 'b-monthly', label: 'Monthly budget (USD)', kind: 'usd', value: st.budgets.monthly_usd,
+            chips: usdChips([[SG.spend_30d, 'Last 30 days', 'Your estimated spend over the last 30 days, rounded up'],
+                             [SG.spend_30d * 1.1, 'Last 30 days +10%', 'Some headroom over your recent spend'],
+                             1000, 2500, 5000])})}
+          ${amountField({id: 'b-daily', label: 'Daily budget (USD)', kind: 'usd', value: st.budgets.daily_usd,
+            chips: usdChips([[SG.daily_avg, 'Average day', 'Your average day over the last 30 days, rounded up'],
+                             [SG.daily_p90, 'Busy day', '1 day in 10 costs more than this'], 50, 100, 250])})}
+          ${amountField({id: 'b-tokens', label: 'Monthly token budget', kind: 'tokens', value: st.budgets.monthly_tokens,
+            chips: tokChips([[SG.tokens_30d, 'Last 30 days', 'Billable tokens over the last 30 days, rounded up'],
+                             1e9, 5e9, 10e9])})}
+        </div>
+        <div><div class="sec">Plan limits</div>
+          <div class="fld-hint" style="margin:-2px 2px 6px">${planHint}</div>
+          ${amountField({id: 'l-cost', label: 'Monthly cost allowance (USD)', kind: 'usd', zero: 1,
+            value: st.limits.monthly_cost_allowance_usd})}
+          ${amountField({id: 'l-tok', label: 'Monthly token allowance', kind: 'tokens', zero: 1,
+            value: st.limits.monthly_token_allowance})}
+          ${amountField({id: 'l-req', label: 'Monthly request allowance', kind: 'count', zero: 1,
+            value: st.limits.monthly_request_allowance})}
+          ${amountField({id: 'l-cred', label: 'Remaining credits (USD)', kind: 'usd', zero: 1,
+            value: st.limits.remaining_credits_usd})}
+        </div>
+        <div><div class="sec">Alert thresholds</div>
+          ${pctField({id: 't-thr', label: 'Warn when a budget reaches', values: st.alert_thresholds_pct,
+            presets: [25, 50, 75, 90, 100, 110], max: 1000})}
+          <div class="fld-hint">Applies to every budget line above. Click to turn a percentage on or off.</div>
         </div>
       </div>
-      <div class="hd" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:620;margin:16px 0 6px">Session guard</div>
+      <div class="sec" style="margin-top:16px">Session guard</div>
       <div class="grid g3">
-        <label class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-          <div class="hd">Per-session token budget</div>
-          <input type="number" step="100000" id="g-tokens" value="${sg.session_tokens ?? ''}" placeholder="not set">
-          <div class="hd">Warn at % (comma-separated)</div>
-          <input type="text" id="g-warn" value="${(sg.warn_pct || []).join(',')}"
-            style="width:100%;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
-        </label>
-        <div class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-          <div class="hd">After you approve at 100%</div>
-          <label style="display:flex;gap:6px;align-items:center;margin:6px 0">
-            <input type="radio" name="g-after" value="step" ${sg.after_approval !== 'once' ? 'checked' : ''}>
-            Ask again every +<input type="number" id="g-step" min="1" value="${sg.step_pct ?? 25}" style="width:64px;flex:none">%</label>
-          <label style="display:flex;gap:6px;align-items:center;margin:6px 0">
-            <input type="radio" name="g-after" value="once" ${sg.after_approval === 'once' ? 'checked' : ''}>
-            Once per session</label>
-          <div class="hd" style="margin-top:10px">Hook</div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <span class="badge ${S.opts.guard_installed ? '' : 'na'}">${S.opts.guard_installed ? 'installed' : 'not installed'}</span>
-            <button class="act" id="g-install">${S.opts.guard_installed ? 'Uninstall guard' : 'Install guard'}</button>
+        <div>
+          ${amountField({id: 'g-tokens', label: 'Per-session token budget', kind: 'tokens', value: sg.session_tokens,
+            chips: tokChips([[pctile(.75), 'Typical', '3 in 4 of your sessions stay under this'],
+                             [pctile(.9), 'Large', '9 in 10 of your sessions stay under this'],
+                             5e6, 10e6, 25e6, 50e6])})}
+          ${pctField({id: 'g-warn', label: 'Warn at', values: sg.warn_pct || [], presets: [50, 60, 70, 75, 80, 90], max: 99})}
+        </div>
+        <div>
+          <div class="fld"><div class="hd">After you approve at 100%</div>
+            <label style="display:flex;gap:6px;align-items:center;margin:6px 0;flex-wrap:wrap">
+              <input type="radio" name="g-after" value="step" ${sg.after_approval !== 'once' ? 'checked' : ''}>
+              Ask again every
+              <select id="g-step-sel" style="width:auto">
+                ${[10, 25, 50, 100].map(v => `<option value="${v}" ${stepVal === v ? 'selected' : ''}>+${v}%</option>`).join('')}
+                <option value="other" ${[10, 25, 50, 100].includes(stepVal) ? '' : 'selected'}>other…</option>
+              </select>
+              <input type="text" inputmode="decimal" id="g-step" value="${stepVal}" placeholder="%"
+                style="width:64px;${[10, 25, 50, 100].includes(stepVal) ? 'display:none' : ''}"></label>
+            <label style="display:flex;gap:6px;align-items:center;margin:6px 0">
+              <input type="radio" name="g-after" value="once" ${sg.after_approval === 'once' ? 'checked' : ''}>
+              Once per session</label>
+            <div class="fld-err" id="g-step-err" role="alert"></div>
           </div>
-          <div class="note" id="g-msg" style="margin-top:6px"></div>
+          <div class="fld"><div class="hd">Hook</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span class="badge ${S.opts.guard_installed ? '' : 'na'}">${S.opts.guard_installed ? 'installed' : 'not installed'}</span>
+              <button class="act" id="g-install">${S.opts.guard_installed ? 'Uninstall guard' : 'Install guard'}</button>
+            </div>
+            <div class="fld-hint" id="g-msg"></div>
+          </div>
         </div>
-        <div class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
-          <div class="hd">Project overrides</div>
-          <div id="g-projects"></div>
-          <button class="act" id="g-add" style="margin-top:6px">${I('plus')} Add override</button>
+        <div>
+          <div class="fld"><div class="hd">Project overrides</div>
+            <div id="g-projects"></div>
+            <datalist id="gtok-list">${[pctile(.75), pctile(.9), 5e6, 10e6, 25e6, 50e6].filter(v => v > 0)
+              .map(v => `<option value="${shortAmount(niceUp(v))}">`).join('')}</datalist>
+            <button class="act" id="g-add" style="margin-top:6px">${I('plus')} Add override</button>
+          </div>
         </div>
       </div>
-      <div class="note" style="margin-top:8px">Counts billable tokens (including cache reads), like the Tokens
-        column in Sessions. With the guard installed, Claude Code warns you at each % above and asks before the
-        next tool call once a session reaches its budget. It cannot end a session, and if it fails it lets the
-        call through.</div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
+      <div class="fld-hint">Counts billable tokens (including cache reads), like the Tokens column in Sessions.
+        With the guard installed, Claude Code warns you at each % above and asks before the next tool call once a
+        session reaches its budget. It cannot end a session, and if it fails it lets the call through.</div>
+      <div class="save-row">
+        <button class="chip on" id="savecfg">Save configuration</button>
+        <span id="cfg-msg" role="status"></span>
+      </div>
+      <div class="fld-hint">Saved to <span class="mono">~/.claude-finops/settings.local.json</span>. Amounts take
+        shorthand: <span class="mono">20M</span>, <span class="mono">500k</span>, <span class="mono">$3,000</span>.
+        Leave a field blank to keep it unconfigured; the dashboard then reports it as unavailable rather than
+        inventing a value.</div>
+      <div class="sec" style="margin-top:18px">API keys <span style="text-transform:none;letter-spacing:0;font-weight:450">(optional)</span></div>
+      <div class="fld-hint" style="margin-bottom:6px">Only needed for <b>Billed vs local</b>, which compares what the vendor
+        billed with what this machine recorded. Keys are stored in
+        <span class="mono">~/.claude-finops/secrets.local.json</span>, readable only by you, and are never shown again.</div>
+      <div id="cfg-keys" class="stack"><div class="note">Loading…</div></div>
+    </div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
+  // amounts: chips fill the field; hints follow what is typed; errors clear as you edit
+  page.querySelectorAll('.cfg [data-fill]').forEach(c => c.onclick = () => {
+    const el = $('#' + c.dataset.fill, page);
+    el.value = el.dataset.kind === 'usd' ? String(+c.dataset.v) : shortAmount(+c.dataset.v);
+    el.dispatchEvent(new Event('input'));
+  });
+  page.querySelectorAll('.cfg input[data-kind]').forEach(el => {
+    const upd = () => {
+      clearErr(page, el.id);
+      const hint = HINTS[el.id], h = $('#' + el.id + '-hint', page);
+      if (hint && h) { const r = parseAmount(el.value, el.dataset.kind); h.textContent = r.error ? '' : hint(r.value); }
+    };
+    el.addEventListener('input', upd);
+    el.addEventListener('blur', () => { const e = amountError(el); if (e) setErr(page, el.id, e); });
+    upd();
+  });
+  wirePct(page);
+  const stepSel = $('#g-step-sel', page), stepIn = $('#g-step', page);
+  stepSel.onchange = () => {
+    stepIn.style.display = stepSel.value === 'other' ? '' : 'none';
+    if (stepSel.value !== 'other') stepIn.value = stepSel.value; else stepIn.focus();
+    clearErr(page, 'g-step');
+  };
   // project overrides: [{path, off, tokens}], edited in place, saved with the rest
   const gp = Object.entries(sg.projects || {}).map(([path, o]) =>
-    ({path, off: !!o.off, tokens: o.session_tokens ?? ''}));
+    ({path, off: !!o.off, tokens: o.session_tokens == null ? '' : o.session_tokens.toLocaleString('en-US')}));
   const known = [...new Map((S.opts.projects || [])
     .filter(p => p.path && (p.agent || 'claude') === 'claude' && !p.is_sandbox)
     .map(p => [p.path, p])).values()].sort((a, b) => a.name.localeCompare(b.name));
   const drawProjects = () => {
     $('#g-projects', page).innerHTML = gp.length ? gp.map((o, i) => `
       <div style="display:flex;gap:6px;align-items:center;margin:4px 0">
-        <select data-gp="${i}" data-k="path" style="flex:1;min-width:0;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
+        <select data-gp="${i}" data-k="path" id="gp-${i}-path" style="flex:1;min-width:0">
           <option value="">choose a project</option>
           ${[...new Set([o.path, ...known.map(p => p.path)].filter(Boolean))].map(path => {
             const p = known.find(k => k.path === path);
             return `<option value="${esc(path)}" ${path === o.path ? 'selected' : ''} title="${esc(path)}">${esc(p ? p.name : path)}</option>`;
           }).join('')}
         </select>
-        <input type="number" step="100000" data-gp="${i}" data-k="tokens" value="${o.tokens}" placeholder="budget"
-          style="width:110px;flex:none" ${o.off ? 'disabled' : ''}>
+        <input type="text" inputmode="decimal" list="gtok-list" data-gp="${i}" data-k="tokens" id="gp-${i}-tok"
+          value="${esc(o.tokens)}" placeholder="budget, e.g. 20M" style="width:130px;flex:none" ${o.off ? 'disabled' : ''}>
         <label style="display:flex;gap:3px;align-items:center"><input type="checkbox" data-gp="${i}" data-k="off" ${o.off ? 'checked' : ''}>off</label>
         <button class="act" data-gp-rm="${i}" title="Remove override" aria-label="Remove override">${I('x')}</button>
-      </div>`).join('') : '<div class="note">None: every project uses the budget on the left.</div>';
-    page.querySelectorAll('[data-gp]').forEach(el => el.onchange = () => {
+      </div>
+      <div class="fld-err" id="gp-${i}-err" role="alert"></div>`).join('')
+      : '<div class="fld-hint">None: every project uses the per-session budget.</div>';
+    page.querySelectorAll('[data-gp]').forEach(el => el[el.type === 'text' ? 'oninput' : 'onchange'] = () => {
       const o = gp[+el.dataset.gp], k = el.dataset.k;
       o[k] = k === 'off' ? el.checked : el.value;
+      clearErr(page, `gp-${el.dataset.gp}`);
       if (k === 'off') drawProjects();
     });
     page.querySelectorAll('[data-gp-rm]').forEach(b => b.onclick = () => { gp.splice(+b.dataset.gpRm, 1); drawProjects(); });
@@ -2484,29 +2711,55 @@ VIEWS.budgets = async (page) => {
   page.querySelectorAll('[data-over]').forEach(a => a.onclick = e => {
     e.preventDefault(); S.sessOrder = 'tokens'; S.sessPage.offset = 0; bust(); go('sessions'); });
   $('#savecfg', page).onclick = async () => {
-    const v = id => { const x = $('#' + id, page).value.trim(); return x === '' ? null : +x; };
+    const msg = $('#cfg-msg', page);
+    msg.className = ''; msg.textContent = '';
+    page.querySelectorAll('.cfg .fld-err').forEach(e => { if (!e.id.startsWith('key-')) e.textContent = ''; });
+    page.querySelectorAll('.cfg .bad').forEach(e => e.classList.remove('bad'));
+    const errs = [];
+    const amt = id => { const el = $('#' + id, page), e = amountError(el); if (e) errs.push([id, e]);
+      return e ? null : parseAmount(el.value, el.dataset.kind).value; };
+    const pcts = id => [...page.querySelectorAll(`#${id} [data-pct].on`)].map(b => +b.dataset.pct).sort((a, b) => a - b);
+    const budgets = {monthly_usd: amt('b-monthly'), daily_usd: amt('b-daily'), monthly_tokens: amt('b-tokens')};
+    const limits = {monthly_cost_allowance_usd: amt('l-cost'), monthly_token_allowance: amt('l-tok'),
+                    monthly_request_allowance: amt('l-req'), remaining_credits_usd: amt('l-cred')};
+    const thr = pcts('t-thr');
+    if (!thr.length) errs.push(['t-thr', 'Pick at least one percentage.']);
+    const after = (page.querySelector('[name=g-after]:checked') || {}).value || 'step';
+    let step = stepSel.value === 'other' ? parseAmount(stepIn.value, 'count').value : +stepSel.value;
+    if (after === 'step' && !(step >= 1 && step <= 1000)) errs.push(['g-step', 'Enter a step between 1 and 1000%.']);
+    if (!(step >= 1 && step <= 1000)) step = 25;
     const projects = {};
-    gp.filter(o => o.path && (o.off || +o.tokens > 0)).forEach(o =>
-      projects[o.path] = o.off ? {off: true} : {session_tokens: +o.tokens});
-    const guard = {
-      session_tokens: v('g-tokens'),
-      warn_pct: $('#g-warn', page).value.split(',').map(x => +x.trim()).filter(Boolean),
-      after_approval: (page.querySelector('[name=g-after]:checked') || {}).value || 'step',
-      step_pct: v('g-step') || 25,
-      projects,
-    };
-    const res = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-FinOps-Action': '1'},
-      body: JSON.stringify({
-        budgets: {monthly_usd: v('b-monthly'), daily_usd: v('b-daily'), monthly_tokens: v('b-tokens')},
-        limits: {monthly_cost_allowance_usd: v('l-cost'), monthly_token_allowance: v('l-tok'),
-                 monthly_request_allowance: v('l-req'), remaining_credits_usd: v('l-cred')},
-        alert_thresholds_pct: $('#t-thr', page).value.split(',').map(x => +x.trim()).filter(Boolean),
-        guard,
-      })}).then(r => r.json());
-    if (res.error) { $('#g-msg', page).textContent = res.error; return; }
+    gp.forEach((o, i) => {
+      const id = `gp-${i}`;
+      if (!o.path) return errs.push([id, 'Pick a project, or remove this row.']);
+      if (projects[o.path]) return errs.push([id, 'This project already has an override above.']);
+      if (o.off) return (projects[o.path] = {off: true});
+      const r = parseAmount(o.tokens, 'tokens');
+      if (r.error) return errs.push([id, r.error]);
+      if (!(r.value > 0)) return errs.push([id, 'Enter a budget, or tick off.']);
+      projects[o.path] = {session_tokens: r.value};
+    });
+    const guard = {session_tokens: amt('g-tokens'), warn_pct: pcts('g-warn'), after_approval: after,
+                   step_pct: step, projects};
+    if (errs.length) {
+      errs.forEach(([id, e]) => setErr(page, id, e));
+      msg.className = 'err';
+      msg.textContent = `Fix ${errs.length} field${errs.length === 1 ? '' : 's'} before saving.`;
+      const first = $('#' + errs[0][0], page) || $('#' + errs[0][0] + '-err', page);
+      if (first) { first.scrollIntoView({block: 'center', behavior: 'smooth'}); first.focus && first.focus(); }
+      return;
+    }
+    let res;
+    try {
+      res = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-FinOps-Action': '1'},
+        body: JSON.stringify({budgets, limits, alert_thresholds_pct: thr, guard})}).then(r => r.json());
+    } catch (e) { res = {error: 'Could not reach the dashboard server. Is it still running?'}; }
+    if (res.error) { msg.className = 'err'; msg.textContent = 'Not saved: ' + res.error; return; }
     S.opts = await fetch('/api/options').then(r => r.json());
-    bust(); render();
+    bust(); await render();
+    const m = $('#cfg-msg'); if (m) { m.className = 'ok'; m.textContent = 'Saved.'; }
   };
+  drawKeys(page);
   const bl = b.lines.filter(l => l.configured && l.budget);
   if (bl.length) addChart(page, 'Budget used', el => C.barsH(el, {
     rows: bl, label: l => l.name, value: l => 100 * l.actual / l.budget, fmt: v => fmtPct(v), max: 100,
@@ -3376,9 +3629,8 @@ VIEWS.cloud = async (page) => {
         <span class="note">${cfg[k] ? 'key found' : 'no key'}</span></div>
       <div class="dt"><b>Gives you:</b> ${esc(p.covers)}</div>
       <div class="dt"><b>Get a key:</b> ${esc(p.how)}</div>
-      <div class="dt">Then set <code>${esc(p.env)}</code> in your environment, or add
-        <code>"${esc(p.field)}"</code> to <code>~/.claude-finops/secrets.local.json</code>
-        (gitignored, never packaged). Restart the dashboard afterwards.</div>
+      <div class="dt">Then add it under <b>API keys</b> on the <a href="#" data-go-budgets>Budgets</a> page,
+        run <code>claude-finops --set-key</code>, or set <code>${esc(p.env)}</code> in your environment.</div>
     </div>`).join('');
   page.innerHTML = `
     <div class="note"><b>The only page that talks to the internet.</b> ${esc(d.note)}
@@ -3400,7 +3652,7 @@ VIEWS.cloud = async (page) => {
         `${fmtInt(t.cursor_members)} members`, {badge: BADGE.actual})}
     </div>
     ${card('Set up the APIs', `<div class="stack">${setup}</div>`,
-      {hint: 'Keys are read from your environment or a local file; the dashboard never stores them'})}
+      {hint: 'Stored keys stay on this machine (0600) and are never shown again'})}
     ${card('Billed vs local, per day', `<div id="cl-day"></div>`, {flush: 1, badge: BADGE.actual,
       hint: 'Claude Code: what the vendor billed against what this machine recorded'})}
     ${card('Claude Code users (org-wide)', `<div id="cl-users"></div>`, {flush: 1, badge: BADGE.actual,
@@ -3408,6 +3660,7 @@ VIEWS.cloud = async (page) => {
     ${card('Cursor members', `<div id="cl-cur"></div>`, {flush: 1, badge: BADGE.actual})}
     ${card('Billed API cost by line item', `<div id="cl-api"></div>`, {flush: 1, badge: BADGE.actual,
       hint: 'From the Anthropic cost report: API spend only, not subscription plans'})}`;
+  page.querySelectorAll('[data-go-budgets]').forEach(a => a.onclick = e => { e.preventDefault(); go('budgets'); });
   $('#cl-day', page).innerHTML = table([
     {h: 'Day', f: r => esc(r.day)},
     {h: 'Billed $', num: 1, f: r => fmtUSD(r.billed_cost)},
@@ -3624,10 +3877,12 @@ const TOURS = {
   budgets: [
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
     {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
-    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
+    {el: 'card:Configure budgets', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save configuration.'},
+    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'},
+    {el: 'card:Configure budgets', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor, with where each one comes from.', get: 'Billed vs local, without touching the terminal.', act: 'Paste a key and Save key. It is never shown again, only its last four characters.'}],
   cloud: [
     {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
-    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Run claude-finops --set-key, or set the environment variable, then restart.'},
+    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Add a key under API keys on the Budgets page, or run claude-finops --set-key.'},
     {el: 'card:Billed vs local', t: 'The comparison', see: 'Billed totals against local totals for the same period.', get: 'Proof of how much of the bill this machine explains.', act: 'A large gap means most spend happens elsewhere: check the user tables.'},
     {el: 'card:Claude Code users', t: 'Users org-wide', see: 'Each Claude Code user in the organisation and their usage.', get: 'Who drives the bill across the team.', act: 'Compare your own row with the team average.'},
     {el: 'card:Cursor members', t: 'Cursor members', see: 'Cursor team members and their spend.', get: 'The same picture for Cursor seats.', act: 'Look for seats with no usage at all.'},

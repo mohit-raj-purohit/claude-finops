@@ -217,8 +217,15 @@ billed at another model's rate.
 }
 ```
 
-The **Budgets** view edits limits, budgets and thresholds from the browser and writes
-them back to this file.
+The **Budgets** view edits limits, budgets and thresholds from the browser and saves them to
+your `~/.claude-finops/settings.local.json` (the shipped `config/settings.json` stays as the
+defaults). Each amount has suggestions from your own last 30 days and session sizes, accepts
+shorthand (`20M`, `500k`, `$3,000`), and says what is wrong with a value before saving it.
+
+Its **API keys** section stores the optional provider keys used by **Billed vs local**
+(the same file `--set-key` writes, `~/.claude-finops/secrets.local.json`, mode 0600). The
+page only ever gets back whether a key is set, where from, and its last four characters. An
+environment variable (`ANTHROPIC_ADMIN_KEY`, `CURSOR_API_KEY`) takes priority over a stored key.
 
 ### Per-session token budget and the session guard
 
@@ -365,7 +372,8 @@ The app makes exactly one outbound request of its own: once a day it asks
 you when an upgrade is out (npm has no way to push one at you). It sends nothing
 about you or your usage. Turn it off with `NO_UPDATE_NOTIFIER=1` or
 `CLAUDE_FINOPS_NO_UPDATE_CHECK=1`. Provider cost APIs are called only if you
-configure a key with `--set-key`.
+configure a key (with `--set-key` or under API keys on the Budgets page), and only
+when you click Refresh on Billed vs local.
 
 ---
 
