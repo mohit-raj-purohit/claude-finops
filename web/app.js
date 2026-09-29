@@ -2597,13 +2597,15 @@ function guideCopy(host, html) {
   host.innerHTML = `<div class="cfg">${html}</div>`;
   host.querySelectorAll('[id]').forEach(el => el.id = 'gcopy-' + el.id);
   host.querySelectorAll('[for]').forEach(el => el.setAttribute('for', 'gcopy-' + el.getAttribute('for')));
+  host.querySelectorAll('[aria-describedby]').forEach(el => el.setAttribute('aria-describedby',
+    el.getAttribute('aria-describedby').split(/\s+/).filter(Boolean).map(t => 'gcopy-' + t).join(' ')));
   host.querySelectorAll('input, select, button, textarea').forEach(el => { el.disabled = true; el.tabIndex = -1; });
 }
 const DEMO = {spend: 312, day: 14, busy: 29, tokens: 7.4e8, typical: 8.5e6, large: 3.3e7};
 
 GUIDES.budgets = [
   {id: 'overview', title: 'What is this page?', img: 'guide/budgets.png',
-   marks: [{n: 1, x: 12, y: 18}, {n: 2, x: 12, y: 58}, {n: 3, x: 12, y: 82}],
+   marks: [{n: 1, x: 95, y: 11}, {n: 2, x: 95, y: 62}, {n: 3, x: 95, y: 77}],
    text: ['This page helps you stop spending too much on AI.',
           '<b>①</b> The top shows how you are doing. <b>②</b> Below it you set your limits. <b>③</b> Session limits stop one conversation from getting too big.',
           'You only need to fill in what you care about. Everything else can stay empty.'],
@@ -4085,8 +4087,8 @@ const TOURS = {
   budgets: [
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
     {el: 'card:Set your limits', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
-    {el: 'card:Set your limits', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save configuration.'},
-    {el: 'card:Set your limits', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, per-project overrides, and the Live warnings box (optional).', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
+    {el: 'card:Set your limits', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save.'},
+    {el: 'card:Set your limits', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, per-project overrides, and the Live warnings box (optional).', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then, if you want live warnings, <b>Install</b> in the Live warnings box. It is optional. It applies to new sessions.'}],
   settings: [
     {el: 'card:API keys', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor.', get: 'The Billed vs local page, without the terminal.', act: 'Paste a key and press Save key. It is never shown again, only its last four characters.'}],
   cloud: [

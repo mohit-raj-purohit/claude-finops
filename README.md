@@ -217,15 +217,20 @@ billed at another model's rate.
 }
 ```
 
-The **Budgets** view edits limits, budgets and thresholds from the browser and saves them to
-your `~/.claude-finops/settings.local.json` (the shipped `config/settings.json` stays as the
-defaults). Each amount has suggestions from your own last 30 days and session sizes, accepts
-shorthand (`20M`, `500k`, `$3,000`), and says what is wrong with a value before saving it.
+The **Budgets** page has three numbered blocks (① money, ② tokens, ③ one conversation) and an
+Advanced section, folded away, for plan limits and alert thresholds. **How does this work?** (and
+the small **?** on each block) opens a short picture guide; it also opens by itself the first
+time. Values are saved to `~/.claude-finops/settings.local.json`. Each amount suggests values
+from your own last 30 days, accepts shorthand (`20M`, `500k`, `$3,000`), and explains a bad
+value before saving.
 
-Its **API keys** section stores the optional provider keys used by **Billed vs local**
-(the same file `--set-key` writes, `~/.claude-finops/secrets.local.json`, mode 0600). The
-page only ever gets back whether a key is set, where from, and its last four characters. An
-environment variable (`ANTHROPIC_ADMIN_KEY`, `CURSOR_API_KEY`) takes priority over a stored key.
+**Live warnings** (inside block ③) is the optional session guard hook. Your budgets work
+without it; it only adds the warning and "continue?" prompt inside Claude Code.
+
+**Settings** (sidebar, Setup) stores the optional API keys used by **Billed vs local**, in
+`~/.claude-finops/secrets.local.json` (0600, the same file `--set-key` writes). The page only
+ever gets back whether a key is set, where from, and its last four characters. An environment
+variable (`ANTHROPIC_ADMIN_KEY`, `CURSOR_API_KEY`) takes priority over a stored key.
 
 ### Per-session token budget and the session guard
 
@@ -240,7 +245,7 @@ budget and how many sessions went over, and the dots in **Sessions** mark sessio
 (amber) and 100% (red) of theirs.
 
 The **session guard** is an opt-in Claude Code `PreToolUse` hook (`--install-guard`, or
-**Install guard** on the Budgets page). Before each tool call it counts the session's tokens
+**Install** under Live warnings on the Budgets page, block ③). Before each tool call it counts the session's tokens
 from its transcript (only the lines added since the last call), and:
 
 - below the budget, warns you once at each `warn_pct` and suggests `/compact` to Claude;
@@ -372,7 +377,7 @@ The app makes exactly one outbound request of its own: once a day it asks
 you when an upgrade is out (npm has no way to push one at you). It sends nothing
 about you or your usage. Turn it off with `NO_UPDATE_NOTIFIER=1` or
 `CLAUDE_FINOPS_NO_UPDATE_CHECK=1`. Provider cost APIs are called only if you
-configure a key (with `--set-key` or under API keys on the Budgets page), and only
+configure a key (with `--set-key` or on the Settings page), and only
 when you click Refresh on Billed vs local.
 
 ---
@@ -435,7 +440,7 @@ files on Windows.
 - **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
   already have.
-- **Install guard** (Budgets, or `--install-guard`) adds one `PreToolUse` hook entry to
+- **Install** under Live warnings (Budgets, block ③, or `--install-guard`) adds one `PreToolUse` hook entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. Your other hooks are left
   alone, and uninstalling removes only that entry.
 
