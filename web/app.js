@@ -2503,6 +2503,95 @@ async function drawKeys(page) {
   });
 }
 
+/* ---------- guides: picture slides that explain a page ---------- */
+const GUIDES = {};
+let GUIDE = null;          // {name, i, opener, el}
+const guideSeenKey = name => `finops.guide.${name}.seen`;
+
+function openGuide(name, slideId, opener) {
+  const slides = GUIDES[name];
+  if (!slides || !slides.length) return;
+  closeGuide();
+  const el = document.createElement('div');
+  el.className = 'guide-layer';
+  el.innerHTML = `<div class="guide" role="dialog" aria-modal="true" aria-labelledby="guide-title" tabindex="-1"></div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', e => { if (e.target === el) closeGuide(); });
+  GUIDE = {name, i: Math.max(0, slides.findIndex(s => s.id === slideId)), opener: opener || document.activeElement, el};
+  document.addEventListener('keydown', guideKeys, true);
+  try { localStorage.setItem(guideSeenKey(name), '1'); } catch (_) {}
+  drawGuide();
+}
+function closeGuide() {
+  if (!GUIDE) return;
+  const {el, opener} = GUIDE;
+  GUIDE = null;
+  document.removeEventListener('keydown', guideKeys, true);
+  el.remove();
+  if (opener && opener.isConnected && opener.focus) opener.focus();
+}
+function guideKeys(e) {
+  if (!GUIDE) return;
+  const slides = GUIDES[GUIDE.name];
+  if (e.key === 'Escape') { e.preventDefault(); closeGuide(); }
+  else if (e.key === 'ArrowRight' && GUIDE.i < slides.length - 1) { e.preventDefault(); GUIDE.i++; drawGuide(); }
+  else if (e.key === 'ArrowLeft' && GUIDE.i > 0) { e.preventDefault(); GUIDE.i--; drawGuide(); }
+  else if (e.key === 'Tab') {                       // keep focus inside the dialog
+    const f = [...GUIDE.el.querySelectorAll('button:not([disabled]), a[href]')];
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+}
+function drawGuide() {
+  const slides = GUIDES[GUIDE.name], s = slides[GUIDE.i], n = slides.length, last = GUIDE.i === n - 1;
+  const box = GUIDE.el.querySelector('.guide');
+  box.innerHTML = `
+    <header><span class="g-step">${GUIDE.i + 1} of ${n}</span>
+      <h2 id="guide-title">${esc(s.title)}</h2>
+      <button class="act g-x" data-g="close" aria-label="Close guide">${I('x')}</button></header>
+    <div class="g-pic">${s.img ? `<img src="${esc(s.img)}" alt="">` : '<div class="g-live"></div>'}
+      ${(s.marks || []).map(m => `<span class="g-mark" style="left:${m.x}%;top:${m.y}%">${m.n}</span>`).join('')}</div>
+    <div class="g-text">${s.text.map(t => `<p>${t}</p>`).join('')}</div>
+    <footer>
+      <div class="g-dots" aria-hidden="true">${slides.map((_, i) => `<i class="${i === GUIDE.i ? 'on' : ''}"></i>`).join('')}</div>
+      <span class="spacer"></span>
+      ${s.target ? '<button class="act" data-g="show">Show me on the page</button>' : ''}
+      <button class="act" data-g="back" ${GUIDE.i ? '' : 'disabled'}>Back</button>
+      <button class="chip on" data-g="${last ? 'close' : 'next'}">${last ? 'Done' : 'Next'}</button>
+    </footer>`;
+  if (s.live) s.live(box.querySelector('.g-live'));
+  box.querySelectorAll('[data-g]').forEach(b => b.onclick = () => {
+    const a = b.dataset.g;
+    if (a === 'close') closeGuide();
+    else if (a === 'next') { GUIDE.i++; drawGuide(); }
+    else if (a === 'back') { GUIDE.i--; drawGuide(); }
+    else if (a === 'show') { const t = s.target; closeGuide(); showMe(t); }
+  });
+  (box.querySelector('[data-g="next"], [data-g="close"]:not(.g-x)') || box).focus();
+}
+function showMe(selector) {
+  const t = $(selector);
+  if (!t) return;
+  if (t.tagName === 'DETAILS') t.open = true;
+  t.scrollIntoView({block: 'center', behavior: 'smooth'});
+  t.classList.remove('pulse'); void t.offsetWidth; t.classList.add('pulse');
+  setTimeout(() => t.classList.remove('pulse'), 2200);
+}
+// First visit to a page with a guide: open it once. Never on top of the welcome tour.
+function maybeGuide(name) {
+  let seen = true;
+  try { seen = localStorage.getItem(guideSeenKey(name)) === '1'; } catch (_) {}
+  if (seen || !GUIDES[name]) return;
+  const tryOpen = () => {
+    if (S.view !== name || GUIDE) return;
+    if (TOUR) return setTimeout(tryOpen, 800);     // wait for the welcome tour to finish
+    openGuide(name);
+  };
+  setTimeout(tryOpen, 400);
+}
+
 VIEWS.budgets = async (page) => {
   const b = await api('budgets');
   const st = S.opts.settings;
@@ -2789,6 +2878,12 @@ VIEWS.budgets = async (page) => {
     rows: bl, label: l => l.name, value: l => 100 * l.actual / l.budget, fmt: v => fmtPct(v), max: 100,
     color: l => l.actual >= l.budget ? 'var(--critical)' : l.actual >= 0.75 * l.budget ? 'var(--warning)' : seriesVar(2)}),
     {badge: BADGE.estimated, after: '.nothing'});
+  $('#guide-open', page).onclick = e => openGuide('budgets', null, e.currentTarget);
+  page.querySelectorAll('[data-guide]').forEach(b => b.onclick = e => {
+    e.preventDefault(); e.stopPropagation();          // inside <summary>: don't toggle Advanced
+    openGuide('budgets', b.dataset.guide, b);
+  });
+  maybeGuide('budgets');
 };
 
 /* ---------- settings ---------- */

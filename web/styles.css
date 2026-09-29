@@ -645,3 +645,29 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .cfg .lb-state { font-size:12px; color:var(--muted); }
 .cfg .lb-state.on { color:var(--good-ink); }
 .cfg .lb-state.warn { color:var(--warning-ink); font-weight:550; }
+
+/* ---------- guide popup ---------- */
+.guide-layer { position:fixed; inset:0; z-index:200; background:rgba(0,0,0,.45);
+  display:flex; align-items:center; justify-content:center; padding:16px; }
+.guide { width:min(760px, 100%); max-height:calc(100vh - 32px); overflow:auto; background:var(--surface);
+  border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow); outline:none; }
+.guide header { display:flex; align-items:center; gap:10px; padding:14px 16px 6px; }
+.guide h2 { margin:0; font-size:18px; }
+.guide .g-step { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; }
+.guide .g-x { margin-left:auto; }
+.guide .g-pic { position:relative; margin:6px 16px; border:1px solid var(--border); border-radius:10px;
+  overflow:hidden; background:var(--bg, var(--surface-2)); }
+.guide .g-pic img { display:block; width:100%; height:auto; }
+.guide .g-live { padding:12px; pointer-events:none; user-select:none; }
+.guide .g-mark { position:absolute; transform:translate(-50%,-50%); width:26px; height:26px; border-radius:50%;
+  background:var(--s1); color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center;
+  justify-content:center; box-shadow:0 0 0 3px var(--surface); }
+.guide .g-text { padding:4px 18px 2px; font-size:15px; line-height:1.5; }
+.guide .g-text p { margin:6px 0; }
+.guide footer { display:flex; align-items:center; gap:8px; padding:10px 16px 14px; flex-wrap:wrap; }
+.guide .g-dots { display:flex; gap:5px; }
+.guide .g-dots i { width:7px; height:7px; border-radius:50%; background:var(--border-strong); }
+.guide .g-dots i.on { background:var(--s1); }
+.pulse { animation: guide-pulse 1s ease-in-out 2; border-radius:10px; }
+@keyframes guide-pulse { 50% { box-shadow:0 0 0 4px color-mix(in srgb, var(--s1) 55%, transparent); } }
+@media (max-width: 600px) { .guide .g-text { font-size:14px; } .guide footer .spacer { display:none; } }
