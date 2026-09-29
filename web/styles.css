@@ -657,7 +657,9 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .guide .g-x { margin-left:auto; }
 .guide .g-pic { position:relative; margin:6px 16px; border:1px solid var(--border); border-radius:10px;
   overflow:hidden; background:var(--bg, var(--surface-2)); }
-.guide .g-pic img { display:block; width:100%; height:auto; }
+.guide .g-pic { text-align:center; }
+.guide .g-fig { position:relative; display:inline-block; max-width:100%; line-height:0; }
+.guide .g-fig img { display:block; max-width:100%; max-height:45vh; width:auto; height:auto; }
 .guide .g-live { padding:12px; pointer-events:none; user-select:none; }
 .guide .g-mark { position:absolute; transform:translate(-50%,-50%); width:26px; height:26px; border-radius:50%;
   background:var(--s1); color:#fff; font-weight:700; font-size:14px; display:flex; align-items:center;

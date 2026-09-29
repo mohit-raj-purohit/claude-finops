@@ -2551,8 +2551,10 @@ function drawGuide() {
     <header><span class="g-step">${GUIDE.i + 1} of ${n}</span>
       <h2 id="guide-title">${esc(s.title)}</h2>
       <button class="act g-x" data-g="close" aria-label="Close guide">${I('x')}</button></header>
-    <div class="g-pic">${s.img ? `<img src="${esc(s.img)}" alt="">` : '<div class="g-live"></div>'}
-      ${(s.marks || []).map(m => `<span class="g-mark" style="left:${m.x}%;top:${m.y}%">${m.n}</span>`).join('')}</div>
+    <div class="g-pic">${s.img
+      ? `<span class="g-fig"><img src="${esc(s.img)}" alt="${esc(s.alt || '')}">${(s.marks || []).map(m =>
+          `<span class="g-mark" style="left:${m.x}%;top:${m.y}%">${m.n}</span>`).join('')}</span>`
+      : '<div class="g-live"></div>'}</div>
     <div class="g-text">${s.text.map(t => `<p>${t}</p>`).join('')}</div>
     <footer>
       <div class="g-dots" aria-hidden="true">${slides.map((_, i) => `<i class="${i === GUIDE.i ? 'on' : ''}"></i>`).join('')}</div>
@@ -2605,9 +2607,10 @@ const DEMO = {spend: 312, day: 14, busy: 29, tokens: 7.4e8, typical: 8.5e6, larg
 
 GUIDES.budgets = [
   {id: 'overview', title: 'What is this page?', img: 'guide/budgets.png',
-   marks: [{n: 1, x: 95, y: 11}, {n: 2, x: 95, y: 62}, {n: 3, x: 95, y: 77}],
+   alt: 'The Budgets page: your results on one side, your limits on the other',
+   marks: [{n: 1, x: 30, y: 8.5}, {n: 2, x: 96, y: 26}, {n: 3, x: 94, y: 51.5}],
    text: ['This page helps you stop spending too much on AI.',
-          '<b>①</b> The top shows how you are doing. <b>②</b> Below it you set your limits. <b>③</b> Session limits stop one conversation from getting too big.',
+          '<b>①</b> The results show how you are doing so far. <b>②</b> Here you set your money and token limits. <b>③</b> The session limit stops one conversation from getting too big. (On the real page the results are at the top and the limits are below them.)',
           'You only need to fill in what you care about. Everything else can stay empty.'],
    target: '[data-blk="money"]'},
   {id: 'money', title: '① Money limits', target: '[data-blk="money"]',
