@@ -2,6 +2,41 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.14.0 — Limits for one conversation, a simpler Budgets page, Jev
+
+**A token limit for each Claude Code conversation.** Set a per-session token budget on the
+Budgets page (block ③). It counts everything a conversation uses, including re-reading its
+context, the same figure as the Tokens column in Sessions. You can give a big project its own
+limit, or turn it off for a project. The Budgets page shows the largest conversation against its
+limit, and Sessions marks conversations near (amber) or over (red) theirs.
+
+**Live warnings inside Claude Code (optional).** Your limits work without this. Install it (Budgets,
+block ③, or `claude-finops --install-guard`) and Claude Code warns you at your warn percentages
+and asks "continue?" before the next step once a conversation reaches its limit. After you say
+yes it asks again every +25% (or never, your choice). It can't end a conversation, and if it
+ever fails it lets Claude carry on.
+
+**Set a limit on a conversation that is already running.** On Running sessions, **Set limit**
+shows what that conversation has used so far, suggests +10%, +25%, +50% or double, and applies
+from its next step.
+
+**A Budgets page anyone can use.** The settings are now three numbered blocks: ① money,
+② tokens, ③ one conversation, with advanced settings folded away. Every amount suggests values
+from your own last 30 days, accepts shorthand like `20M`, `500k` or `$3,000`, and tells you what
+is wrong before you save. **How does this work?** opens a short picture guide, and each block has
+its own **?**.
+
+**Settings page.** The optional API keys for Billed vs local (Anthropic Admin, Cursor) now live on
+their own Settings page, where you can add or remove them without the terminal. The page only
+ever shows a key's last four characters.
+
+**Jev (fast decisions).** A new page for TypeSafe's Jev, a very fast, very cheap AI that only
+makes decisions. Install its Claude Code plugin in one click, add your Jev API key, and see how
+much of your own work was really just a decision. Jev makes the apps you build cheaper; it does
+not make Claude Code itself cheaper, and the page says so.
+
+**Fixes.** The Custom date range picker opens in the right place and closes on a second click.
+
 ## 0.13.0 — Flat icons everywhere, the dashboard opens itself
 
 **Opens in your browser.** Run `claude-finops` and the dashboard opens in your default
