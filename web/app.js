@@ -1368,6 +1368,15 @@ VIEWS.projects = async (page) => {
 };
 
 /* ---------- sessions ---------- */
+// With a session token budget the dot follows it (whole-session tokens); without one,
+// it keeps flagging rows far above the loaded average.
+function sessFlag(r, avgTok) {
+  if (!r.budget_tokens) return r.tokens > avgTok * 3 ? dot('red') + ' ' : '';
+  const pct = 100 * (r.session_tokens || 0) / r.budget_tokens;
+  if (pct < 75) return '';
+  return `<span title="${fmtPct(pct)} of your ${fmtNum(r.budget_tokens)}-token session budget">${
+    dot(pct >= 100 ? 'red' : 'yellow')}</span> `;
+}
 VIEWS.sessions = async (page) => {
   const order = S.sessOrder || 'cost';
   const sp = S.sessPage;
@@ -1389,7 +1398,9 @@ VIEWS.sessions = async (page) => {
            ['prompts', 'Most prompts'], ['recent', 'Most recent']].map(([k, l]) =>
           `<button class="chip ${order === k ? 'on' : ''}" data-so="${k}">${l}</button>`).join('')}
         <span class="spacer"></span>
-        <span class="note">rows above ${fmtNum(avgTok * 3)} tokens are unusually expensive</span>
+        <span class="note">${rows.some(r => r.budget_tokens)
+          ? 'dots mark sessions at 75% (amber) and 100% (red) of your session token budget'
+          : `rows above ${fmtNum(avgTok * 3)} tokens are unusually expensive`}</span>
       </div><div id="st"></div>
       <div class="filters" style="margin-top:8px">
         <span class="note">Showing ${fmtInt(Math.min(rows.length, total))} of ${fmtInt(total)}</span>
@@ -1416,7 +1427,7 @@ VIEWS.sessions = async (page) => {
   if (sessMore) sessMore.onclick = () => { sp.offset += sp.limit; bust(); render(); };
   $('#st', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
-     f: r => `${r.tokens > avgTok * 3 ? dot('red') + ' ' : ''}${esc(stitle(r))}
+     f: r => `${sessFlag(r, avgTok)}${esc(stitle(r))}
        <div class="sub mono">${esc(shortId(r.session_id))}</div>`},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
@@ -2330,6 +2341,7 @@ VIEWS.forecast = async (page) => {
 VIEWS.budgets = async (page) => {
   const b = await api('budgets');
   const st = S.opts.settings;
+  const sg = st.guard || {};
   page.innerHTML = `
     ${card('Budget vs actual vs forecast', `<div class="stack">${b.lines.map(l => l.configured ? `
       <div class="item">
@@ -2338,11 +2350,12 @@ VIEWS.budgets = async (page) => {
           ${kpi('Budget', l.unit === 'tokens' ? fmtNum(l.budget) : fmtUSD(l.budget), null, {small: 1})}
           ${kpi('Actual', l.unit === 'tokens' ? fmtNum(l.actual) : fmtUSD(l.actual),
             fmtPct(l.used_pct) + ' used', {small: 1, badge: BADGE.estimated})}
-          ${kpi('Forecast', l.forecast == null ? null
+          ${kpi('Forecast', l.sessions_over != null ? '—' : l.forecast == null ? null
             : (l.unit === 'tokens' ? fmtNum(l.forecast) : fmtUSD(l.forecast)),
-            l.forecast_pct == null ? '' : fmtPct(l.forecast_pct) + ' of budget',
+            l.sessions_over != null ? 'not forecast per session'
+              : l.forecast_pct == null ? '' : fmtPct(l.forecast_pct) + ' of budget',
             {small: 1, badge: BADGE.forecast})}
-          ${kpi('Variance', l.variance == null ? null
+          ${kpi('Variance', l.sessions_over != null ? '—' : l.variance == null ? null
             : (l.variance >= 0 ? '+' : '') + (l.unit === 'tokens' ? fmtNum(l.variance) : fmtUSD(l.variance)),
             l.variance == null ? '' : (l.variance > 0 ? 'over budget' : 'under budget'), {small: 1})}
         </div>
@@ -2351,6 +2364,9 @@ VIEWS.budgets = async (page) => {
           ${l.thresholds_breached.length ? `<span>${I('alert')} breached ${l.thresholds_breached.join('%, ')}%</span>` : '<span>No threshold breached</span>'}
           ${l.thresholds_forecast_breach.length
             ? `<span style="color:var(--serious-ink)">forecast to breach ${l.thresholds_forecast_breach.join('%, ')}%</span>` : ''}
+          ${l.sessions_over == null ? '' : `<span title="Most of a long session's tokens are cache reads, priced at about a tenth of the input rate.">
+            ${l.sessions_over ? `<a href="#" data-over="1">${fmtInt(l.sessions_over)} session${l.sessions_over === 1 ? '' : 's'} over budget this period</a>`
+              : 'No session over budget this period'} · largest session shown</span>`}
         </div></div>`
       : `<div class="item"><div class="hd">${esc(l.name)}<span class="spacer"></span>
           <span class="badge na">not configured</span></div>
@@ -2391,16 +2407,103 @@ VIEWS.budgets = async (page) => {
           Leave a field blank to keep it unconfigured — the dashboard will report it as unavailable
           rather than inventing a value.</div>
         </div>
-      </div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
+      </div>
+      <div class="hd" style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;font-weight:620;margin:16px 0 6px">Session guard</div>
+      <div class="grid g3">
+        <label class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
+          <div class="hd">Per-session token budget</div>
+          <input type="number" step="100000" id="g-tokens" value="${sg.session_tokens ?? ''}" placeholder="not set">
+          <div class="hd">Warn at % (comma-separated)</div>
+          <input type="text" id="g-warn" value="${(sg.warn_pct || []).join(',')}"
+            style="width:100%;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
+        </label>
+        <div class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
+          <div class="hd">After you approve at 100%</div>
+          <label style="display:flex;gap:6px;align-items:center;margin:6px 0">
+            <input type="radio" name="g-after" value="step" ${sg.after_approval !== 'once' ? 'checked' : ''}>
+            Ask again every +<input type="number" id="g-step" min="1" value="${sg.step_pct ?? 25}" style="width:64px;flex:none">%</label>
+          <label style="display:flex;gap:6px;align-items:center;margin:6px 0">
+            <input type="radio" name="g-after" value="once" ${sg.after_approval === 'once' ? 'checked' : ''}>
+            Once per session</label>
+          <div class="hd" style="margin-top:10px">Hook</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="badge ${S.opts.guard_installed ? '' : 'na'}">${S.opts.guard_installed ? 'installed' : 'not installed'}</span>
+            <button class="act" id="g-install">${S.opts.guard_installed ? 'Uninstall guard' : 'Install guard'}</button>
+          </div>
+          <div class="note" id="g-msg" style="margin-top:6px"></div>
+        </div>
+        <div class="pop" style="position:static;display:block;border:none;box-shadow:none;padding:0">
+          <div class="hd">Project overrides</div>
+          <div id="g-projects"></div>
+          <button class="act" id="g-add" style="margin-top:6px">${I('plus')} Add override</button>
+        </div>
+      </div>
+      <div class="note" style="margin-top:8px">Counts billable tokens (including cache reads), like the Tokens
+        column in Sessions. With the guard installed, Claude Code warns you at each % above and asks before the
+        next tool call once a session reaches its budget. It cannot end a session, and if it fails it lets the
+        call through.</div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
+  // project overrides: [{path, off, tokens}], edited in place, saved with the rest
+  const gp = Object.entries(sg.projects || {}).map(([path, o]) =>
+    ({path, off: !!o.off, tokens: o.session_tokens ?? ''}));
+  const known = [...new Map((S.opts.projects || [])
+    .filter(p => p.path && (p.agent || 'claude') === 'claude' && !p.is_sandbox)
+    .map(p => [p.path, p])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  const drawProjects = () => {
+    $('#g-projects', page).innerHTML = gp.length ? gp.map((o, i) => `
+      <div style="display:flex;gap:6px;align-items:center;margin:4px 0">
+        <select data-gp="${i}" data-k="path" style="flex:1;min-width:0;padding:5px 7px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2)">
+          <option value="">choose a project</option>
+          ${[...new Set([o.path, ...known.map(p => p.path)].filter(Boolean))].map(path => {
+            const p = known.find(k => k.path === path);
+            return `<option value="${esc(path)}" ${path === o.path ? 'selected' : ''} title="${esc(path)}">${esc(p ? p.name : path)}</option>`;
+          }).join('')}
+        </select>
+        <input type="number" step="100000" data-gp="${i}" data-k="tokens" value="${o.tokens}" placeholder="budget"
+          style="width:110px;flex:none" ${o.off ? 'disabled' : ''}>
+        <label style="display:flex;gap:3px;align-items:center"><input type="checkbox" data-gp="${i}" data-k="off" ${o.off ? 'checked' : ''}>off</label>
+        <button class="act" data-gp-rm="${i}" title="Remove override" aria-label="Remove override">${I('x')}</button>
+      </div>`).join('') : '<div class="note">None: every project uses the budget on the left.</div>';
+    page.querySelectorAll('[data-gp]').forEach(el => el.onchange = () => {
+      const o = gp[+el.dataset.gp], k = el.dataset.k;
+      o[k] = k === 'off' ? el.checked : el.value;
+      if (k === 'off') drawProjects();
+    });
+    page.querySelectorAll('[data-gp-rm]').forEach(b => b.onclick = () => { gp.splice(+b.dataset.gpRm, 1); drawProjects(); });
+  };
+  drawProjects();
+  $('#g-add', page).onclick = () => { gp.push({path: '', off: false, tokens: ''}); drawProjects(); };
+  $('#g-install', page).onclick = async () => {
+    const msg = $('#g-msg', page);
+    try {
+      const r = await doAction('guard', {remove: !!S.opts.guard_installed});
+      S.opts = await fetch('/api/options').then(r => r.json());
+      bust(); await render();
+      const m = $('#g-msg'); if (m) m.textContent = r.message;
+    } catch (e) { msg.textContent = e.message; }
+  };
+  page.querySelectorAll('[data-over]').forEach(a => a.onclick = e => {
+    e.preventDefault(); S.sessOrder = 'tokens'; S.sessPage.offset = 0; bust(); go('sessions'); });
   $('#savecfg', page).onclick = async () => {
     const v = id => { const x = $('#' + id, page).value.trim(); return x === '' ? null : +x; };
-    await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-FinOps-Action': '1'},
+    const projects = {};
+    gp.filter(o => o.path && (o.off || +o.tokens > 0)).forEach(o =>
+      projects[o.path] = o.off ? {off: true} : {session_tokens: +o.tokens});
+    const guard = {
+      session_tokens: v('g-tokens'),
+      warn_pct: $('#g-warn', page).value.split(',').map(x => +x.trim()).filter(Boolean),
+      after_approval: (page.querySelector('[name=g-after]:checked') || {}).value || 'step',
+      step_pct: v('g-step') || 25,
+      projects,
+    };
+    const res = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-FinOps-Action': '1'},
       body: JSON.stringify({
         budgets: {monthly_usd: v('b-monthly'), daily_usd: v('b-daily'), monthly_tokens: v('b-tokens')},
         limits: {monthly_cost_allowance_usd: v('l-cost'), monthly_token_allowance: v('l-tok'),
                  monthly_request_allowance: v('l-req'), remaining_credits_usd: v('l-cred')},
         alert_thresholds_pct: $('#t-thr', page).value.split(',').map(x => +x.trim()).filter(Boolean),
+        guard,
       })}).then(r => r.json());
+    if (res.error) { $('#g-msg', page).textContent = res.error; return; }
     S.opts = await fetch('/api/options').then(r => r.json());
     bust(); render();
   };
@@ -3520,7 +3623,8 @@ const TOURS = {
     {el: 'card:Scenarios', t: 'Scenarios', see: 'Optimistic, expected and pessimistic end-of-period totals.', get: 'A best and worst case to plan against.', act: 'Budget against the pessimistic number.'}],
   budgets: [
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
-    {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'}],
+    {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
+    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
   cloud: [
     {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
     {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Run claude-finops --set-key, or set the environment variable, then restart.'},

@@ -30,6 +30,14 @@
     90,
     100
   ],
+  "guard": {
+    "_comment": "Per-session token budget (billable tokens) and the opt-in session guard hook (claude-finops --install-guard). session_tokens null => no per-session budget and the guard allows everything. projects maps an absolute project path to {\"session_tokens\": n} or {\"off\": true}.",
+    "session_tokens": null,
+    "warn_pct": [75, 80],
+    "after_approval": "step",
+    "step_pct": 25,
+    "projects": {}
+  },
   "waste_rules": {
     "long_prompt_chars": 6000,
     "large_context_tokens": 150000,

@@ -38,7 +38,7 @@ def _int(qs, key, default, lo=0, hi=1_000_000):
 
 SETTINGS_SHAPE = {
     "budgets": dict, "limits": dict, "alert_thresholds_pct": list, "waste_rules": dict,
-    "anomaly": dict, "scorecard": dict, "account": dict, "billing_period": dict,
+    "anomaly": dict, "scorecard": dict, "account": dict, "billing_period": dict, "guard": dict,
 }
 
 
@@ -61,6 +61,14 @@ def _validate_numeric_section(name, v):
 def _validate_thresholds(v):
     if not all(_is_num(x) and 0 <= x <= 1000 for x in v):
         raise BadRequest("alert_thresholds_pct must be a list of numbers 0..1000")
+
+def _validate_guard(v):
+    from .guard import validate_guard
+    _, bad = validate_guard(v, {})
+    if bad:
+        raise BadRequest(f"invalid {', '.join(bad)}: session_tokens > 0 or null, warn_pct "
+                         "numbers between 0 and 100, after_approval step|once, step_pct 1..1000, "
+                         "projects {path: {session_tokens: n} | {off: true}}")
 
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json",
@@ -218,6 +226,8 @@ class Handler(BaseHTTPRequestHandler):
                         _validate_numeric_section(section, payload[section])
                 if "alert_thresholds_pct" in payload:
                     _validate_thresholds(payload["alert_thresholds_pct"])
+                if "guard" in payload:
+                    _validate_guard(payload["guard"])
                 # UI edits go to the gitignored per-machine file, never the shared defaults
                 local = {}
                 if os.path.exists(LOCAL_SETTINGS_PATH):
@@ -225,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                         local = json.load(fh)
                 for k, v in payload.items():
                     if k in ("budgets", "limits", "alert_thresholds_pct", "waste_rules",
-                             "anomaly", "scorecard", "account", "billing_period"):
+                             "anomaly", "scorecard", "account", "billing_period", "guard"):
                         if isinstance(v, dict) and isinstance(local.get(k), dict):
                             local[k].update(v)
                         else:
@@ -273,6 +283,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["statusline"]:
             from .integrate import install_statusline
             return self.send_json(install_statusline())
+        if parts == ["guard"]:
+            from .integrate import install_guard
+            return self.send_json(install_guard(remove=bool(payload.get("remove"))))
         if len(parts) == 2 and parts[0] == "mcp":
             return self.send_json(X.add_mcp(parts[1], payload))
         return self.send_json({"error": "unknown action"}, 404)
@@ -382,6 +395,11 @@ class Handler(BaseHTTPRequestHandler):
             from .cloud import configured
             o = a.options()
             o["cloud"] = configured()          # nav hides "Billed vs local" until a key exists
+            from .integrate import guard_state
+            try:
+                o["guard_installed"] = guard_state() == "installed"
+            except Exception:
+                o["guard_installed"] = False
             return self.send_json(o)
         if route == "by_agent":
             return self.send_json(a.by_agent(f))

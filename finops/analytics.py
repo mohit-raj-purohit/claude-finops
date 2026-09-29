@@ -124,6 +124,9 @@ def _validate_settings(cur, defaults):
         if pct is not None:
             bad.append("alert_thresholds_pct")
         cur["alert_thresholds_pct"] = defaults.get("alert_thresholds_pct", [])
+    from .guard import validate_guard
+    cur["guard"], guard_bad = validate_guard(cur.get("guard"), defaults.get("guard"))
+    bad += guard_bad
     for path in bad:
         print(f"finops: settings.local.json has an invalid '{path}'; using the shipped default",
               file=sys.stderr)
@@ -571,7 +574,8 @@ class Analytics:
         rows = self.q(f"""
           SELECT s.id session_id, s.title, s.git_branch, s.cli_version, s.started_at,
                  s.ended_at, s.duration_s, s.files_touched, pr.name project, pr.id project_id,
-                 s.agent, s.source_file,
+                 s.agent, s.source_file, pr.path project_path,
+                 s.billable_tokens session_tokens,
                  COUNT(DISTINCT r.prompt_id) prompts, COUNT(*) requests,
                  SUM(r.tool_call_count) tool_calls,
                  SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,
@@ -590,8 +594,20 @@ class Analytics:
             r["output_ratio"] = (r["output_tokens"] or 0) / r["tokens"] if r["tokens"] else 0
             cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
             r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
+            r["budget_tokens"] = self.session_budget(r["agent"], r.pop("project_path"))
             r["resume"] = resume_command(r["session_id"], r.pop("agent"), r.pop("source_file"))
         return rows
+
+    def session_budget(self, agent, project_path):
+        """The per-session token budget that applies to a session, or None.
+
+        Claude Code sessions only: the guard hook runs there, and other agents'
+        sessions are not what the budget was set for.
+        """
+        if agent != "claude":
+            return None
+        from .guard import budget_for
+        return budget_for(self.settings.get("guard") or {}, project_path)
 
     def sessions_total(self, f=None):
         w, p = self.where(f)
@@ -1580,6 +1596,12 @@ class Analytics:
         out["lines"].append(line("Daily spend", b.get("daily_usd"), today["c"], today["c"]))
         out["lines"].append(line("Monthly tokens", b.get("monthly_tokens"), period["t"],
                                  fc.get("end_of_period_tokens"), unit="tokens"))
+        g = self.settings.get("guard") or {}
+        if g.get("session_tokens") or any(o.get("session_tokens")
+                                          for o in (g.get("projects") or {}).values()):
+            out["lines"].append(self._session_budget_line(f, bp, line))
+        else:
+            out["lines"].append(line("Per-session tokens", None, 0, None, unit="tokens"))
         for proj, bud in (b.get("per_project_usd") or {}).items():
             act = self.one("""SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
                               JOIN projects pr ON pr.id=r.project_id
@@ -1592,6 +1614,33 @@ class Analytics:
                            (model, bp["start"], bp["end"]))["c"]
             out["lines"].append(line(f"Model: {self.pricing.display_name(model)}", bud, act, None))
         return out
+
+    def _session_budget_line(self, f, bp, line):
+        """Largest Claude Code session this period against its own budget, and who went over."""
+        w, p = self.where(f)
+        rows = self.q(f"""SELECT s.id session_id, s.title, pr.name project, pr.path path,
+                                 s.billable_tokens tokens
+                          FROM sessions s JOIN projects pr ON pr.id = s.project_id
+                          WHERE s.agent = 'claude' AND s.id IN (
+                            SELECT r.session_id FROM requests r
+                            WHERE {w} AND r.day >= ? AND r.day <= ?)""",
+                      p + [bp["start"], bp["end"]])
+        scored = []
+        for r in rows:
+            bud = self.session_budget("claude", r.pop("path"))
+            if bud:
+                r["budget"], r["pct"] = bud, round(100.0 * (r["tokens"] or 0) / bud, 1)
+                scored.append(r)
+        scored.sort(key=lambda r: r["pct"], reverse=True)
+        top = scored[0] if scored else None
+        g = self.settings.get("guard") or {}
+        ln = line("Per-session tokens", top["budget"] if top else g.get("session_tokens"),
+                  top["tokens"] if top else 0, None, unit="tokens")
+        over = [r for r in scored if r["pct"] >= 100]
+        ln["sessions_over"] = len(over)
+        ln["top_over"] = over[:5]
+        ln["basis"] = "largest session this period vs its budget"
+        return ln
 
     # ---------------- anomalies ----------------
     def anomalies(self, f=None):
@@ -1891,7 +1940,7 @@ class Analytics:
         return {
             "agents": self.agents(),
             "models": self.q("SELECT model, agent, COUNT(*) n FROM requests GROUP BY 1 ORDER BY 3 DESC"),
-            "projects": self.q("SELECT pr.id project_id, pr.name, pr.is_sandbox, pr.agent, COUNT(r.id) n"
+            "projects": self.q("SELECT pr.id project_id, pr.name, pr.path, pr.is_sandbox, pr.agent, COUNT(r.id) n"
                                " FROM projects pr LEFT JOIN requests r ON r.project_id=pr.id"
                                " GROUP BY pr.id HAVING n>0 ORDER BY n DESC"),
             "categories": self.q("SELECT category, COUNT(*) n FROM prompts GROUP BY 1 ORDER BY 2 DESC"),

@@ -138,6 +138,22 @@ class TestHardening(ServerFixture):
             on_disk = json.load(fh)
         self.assertEqual(on_disk["budgets"]["monthly_usd"], 500)
 
+    def test_settings_accepts_and_persists_guard(self):
+        g = {"session_tokens": 2000000, "warn_pct": [80, 75], "after_approval": "once",
+             "step_pct": 50, "projects": {"/repo": {"off": True}}}
+        code, body = self.post("/api/settings", {"guard": g}, headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 200)
+        self.assertEqual(body["settings"]["guard"]["warn_pct"], [75, 80])
+        self.assertEqual(body["settings"]["guard"]["projects"], {"/repo": {"off": True}})
+        with open(self.local_settings_path) as fh:
+            self.assertEqual(json.load(fh)["guard"]["session_tokens"], 2000000)
+
+    def test_settings_rejects_bad_guard(self):
+        for bad in ({"warn_pct": [120]}, {"after_approval": "sometimes"}, {"step_pct": 0},
+                    {"session_tokens": "x"}, {"projects": {"/a": {"session_tokens": "x"}}}):
+            code, _ = self.post("/api/settings", {"guard": bad}, headers={"X-FinOps-Action": "1"})
+            self.assertEqual(code, 400, bad)
+
     def test_malformed_start_date_is_400(self):
         self.assertEqual(self.get("/api/overview?start=not-a-date")[0], 400)
 

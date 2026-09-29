@@ -154,6 +154,8 @@ HELP = """Claude FinOps Command Center
   claude-finops --no-update-check   skip the once-a-day npm version check
   claude-finops --install-hook  retired no-op (prints a message, changes nothing)
   claude-finops --install-statusline   show model, context % and 5-hour limit in your statusline
+  claude-finops --install-guard warn near, and ask at, your per-session token budget
+  claude-finops --uninstall-guard      remove the session guard hook
   claude-finops --help          this message
 
 Environment:
@@ -273,6 +275,10 @@ def set_key(pid=None):
 
 def main():
     args = sys.argv[1:]
+    # Runs before every tool call in Claude Code: skip setup, print only its JSON answer.
+    if "--guard" in args:
+        from finops.guard import main as guard
+        return sys.exit(guard())
     os.chdir(ROOT)
     ensure_dirs()
     migrate()
@@ -294,6 +300,11 @@ def main():
     if "--install-hook" in args or "--uninstall-hook" in args:
         from finops.integrate import install_hook
         return install_hook(remove="--uninstall-hook" in args)
+    if "--install-guard" in args or "--uninstall-guard" in args:
+        from finops.integrate import install_guard
+        r = install_guard(remove="--uninstall-guard" in args)
+        print(r["message"])
+        return sys.exit(0 if r["ok"] else 1)
     if "--install-statusline" in args or "--uninstall-statusline" in args:
         from finops.integrate import install_statusline
         r = install_statusline(remove="--uninstall-statusline" in args)

@@ -4,6 +4,7 @@
   claude-finops --install-statusline   wire it into settings
   claude-finops --hook          retired no-op, kept so existing installs do not error
   claude-finops --install-hook  prints that the hook is retired and does nothing else
+  claude-finops --install-guard wire the session guard (finops/guard.py) into settings
 
 The prompt hook that used to "suggest a cheaper model" is retired: that
 suggestion had no basis — it would have meant repricing work that never ran.
@@ -146,3 +147,69 @@ def install_statusline(remove=False):
     return {"ok": True, "message": f"Installed the statusline in {SETTINGS}. It shows the model, "
                                    "context % and 5-hour limit % under every prompt. "
                                    "Undo: claude-finops --uninstall-statusline"}
+
+
+# ------------------------------------------------------------------- guard ----
+
+def _is_guard(h):
+    cmd = h.get("command") if isinstance(h, dict) else None
+    return isinstance(cmd, str) and cmd.rstrip().endswith("--guard") and "finops" in cmd
+
+
+def guard_state():
+    """"installed" when our PreToolUse guard hook is in settings, else None."""
+    groups = ((_load_settings().get("hooks") or {}).get("PreToolUse")) or []
+    for g in groups if isinstance(groups, list) else []:
+        if isinstance(g, dict) and any(_is_guard(h) for h in g.get("hooks") or []):
+            return "installed"
+    return None
+
+
+def install_guard(remove=False):
+    """Add (or remove) our PreToolUse hook. Returns {"ok", "message"}.
+
+    Only our own entry is ever touched: other PreToolUse hooks, and other hook
+    events, are left exactly as they were.
+    """
+    s = _load_settings()
+    hooks = s.get("hooks") if isinstance(s.get("hooks"), dict) else {}
+    groups = hooks.get("PreToolUse") if isinstance(hooks.get("PreToolUse"), list) else []
+    if remove:
+        if guard_state() is None:
+            return {"ok": True, "message": "The session guard is not installed; nothing changed."}
+        kept = []
+        for g in groups:
+            if isinstance(g, dict) and isinstance(g.get("hooks"), list):
+                g = dict(g, hooks=[h for h in g["hooks"] if not _is_guard(h)])
+                if not g["hooks"]:
+                    continue
+            kept.append(g)
+        if kept:
+            hooks["PreToolUse"] = kept
+        else:
+            hooks.pop("PreToolUse", None)
+        if hooks:
+            s["hooks"] = hooks
+        else:
+            s.pop("hooks", None)
+        _save_settings(s)
+        return {"ok": True, "message": f"Removed the session guard from {SETTINGS}"}
+    if guard_state() == "installed":
+        return {"ok": True, "message": "The session guard is already installed."}
+    groups.append({"matcher": "", "hooks": [
+        {"type": "command", "command": f"{_command()} --guard", "timeout": 10}]})
+    hooks["PreToolUse"] = groups
+    s["hooks"] = hooks
+    _save_settings(s)
+    msg = (f"Installed the session guard in {SETTINGS}. It applies to new Claude Code sessions. "
+           "Undo: claude-finops --uninstall-guard")
+    try:
+        from .guard import load_guard_settings
+        cfg = load_guard_settings()
+        if not cfg.get("session_tokens") and not any(
+                o.get("session_tokens") for o in (cfg.get("projects") or {}).values()):
+            msg += (" It stays inactive until you set a per-session token budget "
+                    "(Budgets page, or guard.session_tokens in settings.local.json).")
+    except Exception:
+        pass
+    return {"ok": True, "message": msg}

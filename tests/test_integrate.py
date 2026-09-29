@@ -64,3 +64,49 @@ class TestInstall(unittest.TestCase):
         integrate.install_statusline(remove=True)
         self.assertNotIn("statusLine", self.read())
         self.assertIsNone(integrate.statusline_state())
+
+
+class TestGuardInstall(unittest.TestCase):
+    setUp, tearDown, read = TestInstall.setUp, TestInstall.tearDown, TestInstall.read
+    MINE = {"matcher": "Bash", "hooks": [{"type": "command", "command": "~/.claude/check.sh"}]}
+
+    def seed(self):
+        with open(self.path, "w") as fh:
+            json.dump({"hooks": {"PreToolUse": [self.MINE],
+                                 "Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]},
+                       "model": "opus"}, fh)
+
+    def test_install_adds_one_entry_and_keeps_other_hooks(self):
+        self.seed()
+        self.assertTrue(integrate.install_guard()["ok"])
+        s = self.read()
+        pre = s["hooks"]["PreToolUse"]
+        self.assertEqual(pre[0], self.MINE)
+        self.assertEqual(len(pre), 2)
+        ours = pre[1]["hooks"][0]
+        self.assertTrue(ours["command"].endswith("--guard"))
+        self.assertEqual(ours["timeout"], 10)
+        self.assertEqual(pre[1]["matcher"], "")
+        self.assertIn("Stop", s["hooks"])
+        self.assertEqual(s["model"], "opus")
+        self.assertTrue(os.path.exists(self.path + ".finops-backup"))
+        self.assertEqual(integrate.guard_state(), "installed")
+
+    def test_second_install_is_a_no_op(self):
+        integrate.install_guard()
+        integrate.install_guard()
+        self.assertEqual(len(self.read()["hooks"]["PreToolUse"]), 1)
+
+    def test_uninstall_removes_only_ours(self):
+        self.seed()
+        integrate.install_guard()
+        integrate.install_guard(remove=True)
+        s = self.read()
+        self.assertEqual(s["hooks"]["PreToolUse"], [self.MINE])
+        self.assertIn("Stop", s["hooks"])
+        self.assertIsNone(integrate.guard_state())
+
+    def test_uninstall_cleans_up_empty_sections(self):
+        integrate.install_guard()
+        integrate.install_guard(remove=True)
+        self.assertNotIn("hooks", self.read())
