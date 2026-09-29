@@ -143,5 +143,50 @@ class TestPlugin(unittest.TestCase):
                 jev.install(lambda line: None)
 
 
+class TestFit(unittest.TestCase):
+    """Where Jev fits: short, tool-free prompts worded as a decision."""
+
+    def make(self, prompts):
+        path = tempfile.mktemp(suffix=".db", prefix="finops-jev-")
+        db = sqlite3.connect(path)
+        db.executescript(SCHEMA)
+        db.execute("INSERT INTO meta VALUES ('built_at','test')")
+        db.execute("INSERT INTO projects (id, slug, path, name) VALUES (1,'p','/p','proj')")
+        db.execute("INSERT INTO sessions (id, project_id) VALUES ('s', 1)")
+        for i, (text, reqs, tools, out, cost) in enumerate(prompts, 1):
+            db.execute("""INSERT INTO prompts (id, uuid, session_id, project_id, text, request_count,
+                          tool_calls, output_tokens, input_tokens, cache_read_tokens, cache_write_tokens,
+                          est_cost_usd, agent, norm_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       (i, f"u{i}", "s", 1, text, reqs, tools, out, 1000, 9000, 0, cost, "claude", f"h{i}"))
+            db.execute("""INSERT INTO requests (uuid, session_id, project_id, prompt_id, ts, day, model,
+                          est_cost_usd, billable_tokens, agent) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                       (f"r{i}", "s", 1, i, "2026-09-01T00:00:00Z", "2026-09-01", "m", cost, 10000, "claude"))
+        db.commit(); db.close()
+        return Analytics(path)
+
+    def test_counts_decisions_only(self):
+        a = self.make([
+            ("Is this a bug or a feature request? yes or no", 1, 0, 5, 0.20),
+            ("classify this ticket as billing, auth or other: /Users/me/x.txt", 1, 0, 3, 0.10),
+            ("write a function that classifies tickets", 1, 0, 200, 0.50),     # a build request
+            ("which one of these files is relevant?", 4, 6, 80, 0.90),          # used tools
+            ("refactor the parser", 9, 20, 900, 1.30),
+            ("This session is being continued from a previous conversation. Is it a bug? yes or no", 1, 0, 9, 0.0),
+        ])
+        f = jev.fit(a, {})
+        self.assertEqual(f["prompts"], 2)
+        self.assertAlmostEqual(f["claude_cost"], 0.30)
+        self.assertAlmostEqual(f["jev_cost"], 2 * 10000 * jev.JEV_USD_PER_INPUT_TOKEN)
+        self.assertAlmostEqual(f["share_pct"], 100 * 0.30 / 3.00, places=3)
+        self.assertEqual(f["total_prompts"], 6)
+
+    def test_examples_are_masked(self):
+        a = self.make([("classify mail from bob@example.com in /Users/me/proj/file.py ticket 123456", 1, 0, 3, 0.1)])
+        ex = jev.fit(a, {})["examples"][0]["text"]
+        self.assertNotIn("bob@example.com", ex)
+        self.assertNotIn("/Users/me", ex)
+        self.assertNotIn("123456", ex)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -132,3 +132,44 @@ def remove_key():
     else:
         s.pop("env", None)
     integrate._save_settings(s)
+
+
+# --------------------------------------------------------------- where it fits ----
+# A prompt Jev could have answered: short (at most two model calls), no tools, a short
+# reply, and worded as a decision rather than a request to build something.
+DECIDE = re.compile(r"\b(classify|categori[sz]e|category|label|which (one|of)|yes or no|true or false|"
+                    r"is (this|it) (a|an)\b|extract|score|rate this|triage|route|detect|decide|pick one|"
+                    r"choose|prioriti[sz]e|sentiment|is it valid|should (i|we)\b|does (this|it)\b)", re.I)
+BUILD = re.compile(r"\b(write|implement|build|create|fix|refactor|add|update|change|make|generate|"
+                   r"design|explain|debug)\b", re.I)
+# Claude Code's own summary after a context compaction is stored like a prompt; it is not yours.
+NOT_YOURS = ("This session is being continued from a previous conversation",)
+_MASK = re.compile(r"\S+@\S+|(?:~|\.{0,2})?/[\w.\-/]+|\d{3,}")
+
+
+def _mask(text):
+    return _MASK.sub("…", re.sub(r"\s+", " ", text or "")).strip()[:140]
+
+
+def fit(a, f=None):
+    """How much of the filtered Claude Code work was decision-shaped, and what it would cost on Jev."""
+    w, p = a.where(f)
+    total = a.one(f"SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r "
+                  f"WHERE {w} AND r.agent='claude'", p)["c"]
+    rows = a.q(f"""SELECT pr.text, pr.request_count, pr.output_tokens, pr.est_cost_usd cost,
+                          COALESCE(pr.input_tokens,0) + COALESCE(pr.cache_read_tokens,0)
+                            + COALESCE(pr.cache_write_tokens,0) ctx
+                   FROM prompts pr WHERE pr.agent='claude' AND pr.id IN (
+                     SELECT r.prompt_id FROM requests r WHERE {w} AND r.agent='claude')
+                     AND COALESCE(pr.request_count,0) <= 2 AND COALESCE(pr.tool_calls,0) = 0
+                     AND COALESCE(pr.output_tokens,0) <= 300""", p)
+    hits = [r for r in rows if DECIDE.search(r["text"] or "") and not BUILD.search((r["text"] or "")[:200])
+            and not (r["text"] or "").lstrip().startswith(NOT_YOURS)]
+    n_all = a.one(f"SELECT COUNT(DISTINCT r.prompt_id) n FROM requests r "
+                  f"WHERE {w} AND r.agent='claude' AND r.prompt_id IS NOT NULL", p)["n"]
+    cost = sum(r["cost"] or 0 for r in hits)
+    return {"prompts": len(hits), "total_prompts": n_all, "claude_cost": cost,
+            "jev_cost": sum(r["ctx"] or 0 for r in hits) * JEV_USD_PER_INPUT_TOKEN,
+            "share_pct": 100.0 * cost / total if total else 0.0, "total_cost": total,
+            "examples": [{"text": _mask(r["text"]), "cost": r["cost"] or 0}
+                         for r in sorted(hits, key=lambda r: -(r["cost"] or 0))[:5]]}
