@@ -2,7 +2,7 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
-## Unreleased
+## 0.11.0 — Hide prompts, Recent panel
 
 **Hide prompts.** A new top-bar button hides prompt text and session titles as dots
 everywhere in the dashboard: tables, prompt details, chart labels, tooltips and the
