@@ -276,3 +276,54 @@ class TestBudgetSuggestions(ServerFixture):
         for k in ("spend_30d", "tokens_30d", "daily_avg", "daily_p90", "session_tokens"):
             self.assertIn(k, sg)
         self.assertEqual(sg["session_tokens"], sorted(sg["session_tokens"]))
+
+
+class TestJevApi(ServerFixture):
+    def setUp(self):
+        from unittest import mock
+        from finops import integrate, jev
+        self.settings = os.path.join(tempfile.mkdtemp(prefix="finops-jevapi-"), "settings.json")
+        self.p = [mock.patch.object(integrate, "SETTINGS", self.settings),
+                  mock.patch.object(jev, "status", return_value={"claude": True, "installed": False,
+                                                                 "version": None, "enabled": None}),
+                  mock.patch.object(jev, "install", return_value={"installed": True}),
+                  mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""})]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+
+    def test_page_data(self):
+        code, body = self.get("/api/jev")
+        self.assertEqual(code, 200)
+        self.assertEqual(set(body), {"status", "key", "fit"})
+        self.assertFalse(body["status"]["installed"])
+        self.assertIsNone(body["key"]["source"])
+        self.assertIn("prompts", body["fit"])
+
+    def test_key_save_remove_and_never_returned(self):
+        key = "ts-" + "q" * 30 + "LAST"
+        code, body = self.post("/api/do/jev/key", {"value": key}, headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 200)
+        self.assertEqual(body["key"]["last4"], "LAST")
+        self.assertNotIn(key, json.dumps(body))
+        self.assertNotIn(key, json.dumps(self.get("/api/jev")[1]))
+        with open(self.settings) as fh:
+            self.assertEqual(json.load(fh)["env"]["TYPESAFE_API_KEY"], key)
+        code, body = self.post("/api/do/jev/key", {"remove": True}, headers={"X-FinOps-Action": "1"})
+        self.assertIsNone(body["key"]["source"])
+
+    def test_bad_key_and_cross_origin(self):
+        self.assertEqual(self.post("/api/do/jev/key", {"value": "short"},
+                                   headers={"X-FinOps-Action": "1"})[0], 400)
+        code, _ = self.post("/api/do/jev/key", {"value": "ts-" + "q" * 30},
+                            headers={"X-FinOps-Action": "1", "Origin": "http://evil.example"})
+        self.assertEqual(code, 403)
+        self.assertFalse(os.path.exists(self.settings))
+
+    def test_install_starts_a_job(self):
+        code, body = self.post("/api/do/jev/install", {}, headers={"X-FinOps-Action": "1"})
+        self.assertEqual(code, 200)
+        self.assertIn("job", body)
