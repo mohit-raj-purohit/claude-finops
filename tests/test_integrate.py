@@ -84,7 +84,8 @@ class TestGuardInstall(unittest.TestCase):
         self.assertEqual(pre[0], self.MINE)
         self.assertEqual(len(pre), 2)
         ours = pre[1]["hooks"][0]
-        self.assertTrue(ours["command"].endswith("--guard"))
+        self.assertIn("--guard", ours["command"].split())
+        self.assertTrue(ours["command"].endswith("|| true"))
         self.assertEqual(ours["timeout"], 10)
         self.assertEqual(pre[1]["matcher"], "")
         self.assertIn("Stop", s["hooks"])
@@ -108,5 +109,38 @@ class TestGuardInstall(unittest.TestCase):
 
     def test_uninstall_cleans_up_empty_sections(self):
         integrate.install_guard()
+        integrate.install_guard(remove=True)
+        self.assertNotIn("hooks", self.read())
+
+
+class TestGuardCommand(unittest.TestCase):
+    """The hook must run this installation's code, and must never block a tool call."""
+    setUp, tearDown, read = TestInstall.setUp, TestInstall.tearDown, TestInstall.read
+
+    def installed_command(self):
+        integrate.install_guard()
+        return self.read()["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+    def test_runs_this_installation_not_whatever_is_on_path(self):
+        # an older claude-finops on PATH does not know --guard (it exits 2, which
+        # Claude Code treats as "block this tool call")
+        with mock.patch.object(integrate.shutil, "which", return_value="/usr/local/bin/claude-finops"):
+            cmd = self.installed_command()
+        self.assertNotIn("/usr/local/bin/claude-finops", cmd)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(integrate.__file__)))
+        self.assertIn(os.path.join(root, "run.py"), cmd)
+
+    def test_command_can_never_exit_with_the_blocking_code(self):
+        import subprocess
+        cmd = self.installed_command().replace("--guard", "--no-such-flag-xyz")
+        env = dict(os.environ, CLAUDE_FINOPS_HOME=tempfile.mkdtemp(prefix="finops-cmd-"))
+        r = subprocess.run(cmd, shell=True, input="{}", capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual(r.returncode, 0)
+
+    def test_old_style_entry_is_still_recognised_and_removed(self):
+        with open(self.path, "w") as fh:
+            json.dump({"hooks": {"PreToolUse": [{"matcher": "", "hooks": [
+                {"type": "command", "command": "/x/bin/claude-finops --guard", "timeout": 10}]}]}}, fh)
+        self.assertEqual(integrate.guard_state(), "installed")
         integrate.install_guard(remove=True)
         self.assertNotIn("hooks", self.read())

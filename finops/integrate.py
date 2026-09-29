@@ -90,6 +90,19 @@ def _command():
     return f"{shlex.quote(sys.executable)} {shlex.quote(os.path.join(root, 'run.py'))}"
 
 
+def _guard_command():
+    """The hook command: this installation's own code, and never a blocking exit.
+
+    Not the claude-finops on PATH: that can be an older release without --guard,
+    and its "unknown option" exit code 2 is what Claude Code reads as "block this
+    tool call". `|| true` keeps any failure (missing Python, a moved install) from
+    ever blocking; a successful run's JSON on stdout passes through unchanged.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    run = f"{shlex.quote(sys.executable)} {shlex.quote(os.path.join(root, 'run.py'))}"
+    return f"{run} --guard || true"
+
+
 def _load_settings():
     try:
         with open(SETTINGS) as fh:
@@ -153,7 +166,7 @@ def install_statusline(remove=False):
 
 def _is_guard(h):
     cmd = h.get("command") if isinstance(h, dict) else None
-    return isinstance(cmd, str) and cmd.rstrip().endswith("--guard") and "finops" in cmd
+    return isinstance(cmd, str) and "--guard" in cmd.split() and "finops" in cmd
 
 
 def guard_state():
@@ -197,7 +210,7 @@ def install_guard(remove=False):
     if guard_state() == "installed":
         return {"ok": True, "message": "The session guard is already installed."}
     groups.append({"matcher": "", "hooks": [
-        {"type": "command", "command": f"{_command()} --guard", "timeout": 10}]})
+        {"type": "command", "command": _guard_command(), "timeout": 10}]})
     hooks["PreToolUse"] = groups
     s["hooks"] = hooks
     _save_settings(s)
