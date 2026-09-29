@@ -624,3 +624,24 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .cfg .save-row .chip { padding:6px 18px; }
 .cfg .ok, .cfg #cfg-msg.ok { color:var(--good-ink); font-size:12px; }
 .cfg #cfg-msg.err { color:var(--critical-ink); font-size:12px; font-weight:550; }
+
+/* ---------- budgets: numbered blocks ---------- */
+.cfg .blk { border:1px solid var(--border); border-radius:10px; padding:12px 14px 4px; margin:0 0 12px; }
+.cfg .blk h4 { display:flex; align-items:center; gap:8px; margin:0 0 2px; font-size:14px; }
+.cfg .blk .num { color:var(--s1); font-size:16px; }
+.cfg .blk-intro { margin:0 0 8px; color:var(--text); font-size:12.5px; }
+.cfg .blk-sub { color:var(--muted); font-weight:450; font-size:12px; }
+.cfg .blk-help { width:20px; height:20px; border-radius:50%; border:1px solid var(--border);
+  background:var(--surface-2); color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; line-height:1; }
+.cfg .blk-help:hover, .cfg .blk-help:focus-visible { color:var(--text); border-color:var(--border-strong); }
+.cfg details.adv > summary { cursor:pointer; list-style:none; padding-bottom:8px; }
+.cfg details.adv > summary::-webkit-details-marker { display:none; }
+.cfg details.adv > summary h4::before { content:'▸'; color:var(--muted); }
+.cfg details.adv[open] > summary h4::before { content:'▾'; }
+.cfg .livebox { border:1px dashed var(--border-strong); border-radius:8px; padding:10px 12px; margin:4px 0 10px;
+  background:var(--surface-2); }
+.cfg .livebox p { margin:6px 0 0; font-size:12.5px; }
+.cfg .lb-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.cfg .lb-state { font-size:12px; color:var(--muted); }
+.cfg .lb-state.on { color:var(--good-ink); }
+.cfg .lb-state.warn { color:var(--warning-ink); font-weight:550; }

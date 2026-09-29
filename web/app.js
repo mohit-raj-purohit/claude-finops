@@ -197,6 +197,7 @@ const IP = {
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   handover: '<path d="m15 17 5-5-5-5"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17h.01"/>',
   pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
   stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
   play: '<path d="M7 4v16l13-8z"/>',
@@ -2526,8 +2527,25 @@ VIEWS.budgets = async (page) => {
   };
   const planHint = `Your own figure, from your plan or invoice. ${esc(agentWord())} data does not include it.`;
   const stepVal = sg.step_pct ?? 25;
+  // Does any per-session budget exist (global or a project override)? The hook needs one.
+  const anyBudget = !!sg.session_tokens || Object.values(sg.projects || {}).some(o => o.session_tokens);
+  const liveBox = () => {
+    const on = !!S.opts.guard_installed;
+    const state = !on ? `<span class="lb-state">○ Not installed</span>`
+      : anyBudget ? `<span class="lb-state on">● Installed · works in new Claude Code sessions</span>`
+      : `<span class="lb-state warn">Installed, but it does nothing until you set a per-session token budget above.</span>`;
+    return `<div class="livebox" id="livebox">
+      <div class="lb-head"><b>Live warnings in Claude Code</b> <span class="blk-sub">(optional)</span>
+        <span class="spacer"></span>${state}
+        <button class="act" id="g-install">${on ? 'Uninstall' : 'Install'}</button></div>
+      <p>Your limits above already work without this. Install it if you want Claude Code itself to warn
+        you at your warn percentages, and ask "continue?" when a conversation reaches its limit.</p>
+      <p class="blk-sub">It is a small helper that runs inside Claude Code. Needs: a per-session token budget.
+        It cannot end a conversation, and if it ever fails it lets Claude carry on. Undo any time.</p>
+      <div class="fld-hint" id="g-msg" role="status"></div></div>`;
+  };
   page.innerHTML = `
-    ${card('Budget vs actual vs forecast', `<div class="stack">${b.lines.map(l => l.configured ? `
+    ${card('Budget vs actual vs forecast', `<p class="blk-intro" style="margin-top:0">How you're doing against your limits. Set your limits below.</p><div class="stack">${b.lines.map(l => l.configured ? `
       <div class="item">
         <div class="hd">${esc(l.name)}<span class="spacer"></span>${statusChip(l.status)}</div>
         <div class="grid g4" style="gap:8px;margin:4px 0">
@@ -2558,9 +2576,11 @@ VIEWS.budgets = async (page) => {
             (estimated). Set a budget below to track variance and get threshold warnings.</div></div>`
       ).join('')}</div>`, {badge: BADGE.estimated,
       hint: `alert thresholds: ${b.thresholds_pct.join('%, ')}%`})}
-    ${card('Configure budgets, limits and thresholds', `<div class="cfg">
-      <div class="grid g3">
-        <div><div class="sec">Budgets</div>
+    ${card('Set your limits', `<div class="cfg">
+      <section class="blk" data-blk="money">
+        <h4><span class="num">①</span> Money limits <button type="button" class="blk-help" data-guide="money" aria-label="Help: money limits">?</button></h4>
+        <p class="blk-intro">Set the most money you want to spend. We warn you before you go over.</p>
+        <div class="grid g2">
           ${amountField({id: 'b-monthly', label: 'Monthly budget (USD)', kind: 'usd', value: st.budgets.monthly_usd,
             chips: usdChips([[SG.spend_30d, 'Last 30 days', 'Your estimated spend over the last 30 days, rounded up'],
                              [SG.spend_30d * 1.1, 'Last 30 days +10%', 'Some headroom over your recent spend'],
@@ -2568,38 +2588,32 @@ VIEWS.budgets = async (page) => {
           ${amountField({id: 'b-daily', label: 'Daily budget (USD)', kind: 'usd', value: st.budgets.daily_usd,
             chips: usdChips([[SG.daily_avg, 'Average day', 'Your average day over the last 30 days, rounded up'],
                              [SG.daily_p90, 'Busy day', '1 day in 10 costs more than this'], 50, 100, 250])})}
+        </div>
+      </section>
+      <section class="blk" data-blk="tokens">
+        <h4><span class="num">②</span> Token limits <button type="button" class="blk-help" data-guide="tokens" aria-label="Help: token limits">?</button></h4>
+        <p class="blk-intro">Tokens are the small pieces of text Claude reads and writes (about ¾ of a word).
+          Set how many you want to use in a month.</p>
+        <div class="grid g2">
           ${amountField({id: 'b-tokens', label: 'Monthly token budget', kind: 'tokens', value: st.budgets.monthly_tokens,
             chips: tokChips([[SG.tokens_30d, 'Last 30 days', 'Billable tokens over the last 30 days, rounded up'],
                              1e9, 5e9, 10e9])})}
+          <div></div>
         </div>
-        <div><div class="sec">Plan limits</div>
-          <div class="fld-hint" style="margin:-2px 2px 6px">${planHint}</div>
-          ${amountField({id: 'l-cost', label: 'Monthly cost allowance (USD)', kind: 'usd', zero: 1,
-            value: st.limits.monthly_cost_allowance_usd})}
-          ${amountField({id: 'l-tok', label: 'Monthly token allowance', kind: 'tokens', zero: 1,
-            value: st.limits.monthly_token_allowance})}
-          ${amountField({id: 'l-req', label: 'Monthly request allowance', kind: 'count', zero: 1,
-            value: st.limits.monthly_request_allowance})}
-          ${amountField({id: 'l-cred', label: 'Remaining credits (USD)', kind: 'usd', zero: 1,
-            value: st.limits.remaining_credits_usd})}
-        </div>
-        <div><div class="sec">Alert thresholds</div>
-          ${pctField({id: 't-thr', label: 'Warn when a budget reaches', values: st.alert_thresholds_pct,
-            presets: [25, 50, 75, 90, 100, 110], max: 1000})}
-          <div class="fld-hint">Applies to every budget line above. Click to turn a percentage on or off.</div>
-        </div>
-      </div>
-      <div class="sec" style="margin-top:16px">Session guard</div>
-      <div class="grid g3">
+      </section>
+      <section class="blk" data-blk="session">
+        <h4><span class="num">③</span> Session limit <button type="button" class="blk-help" data-guide="session" aria-label="Help: session limit">?</button></h4>
+        <p class="blk-intro">A session is one Claude Code conversation. Stop one conversation from getting too big.</p>
+        <div class="grid g3">
         <div>
           ${amountField({id: 'g-tokens', label: 'Per-session token budget', kind: 'tokens', value: sg.session_tokens,
             chips: tokChips([[pctile(.75), 'Typical', '3 in 4 of your sessions stay under this'],
                              [pctile(.9), 'Large', '9 in 10 of your sessions stay under this'],
                              5e6, 10e6, 25e6, 50e6])})}
-          ${pctField({id: 'g-warn', label: 'Warn at', values: sg.warn_pct || [], presets: [50, 60, 70, 75, 80, 90], max: 99})}
+          ${pctField({id: 'g-warn', label: 'Warn me at', values: sg.warn_pct || [], presets: [50, 60, 70, 75, 80, 90], max: 99})}
         </div>
         <div>
-          <div class="fld"><div class="hd">After you approve at 100%</div>
+          <div class="fld"><div class="hd">After I say "continue"</div>
             <label style="display:flex;gap:6px;align-items:center;margin:6px 0;flex-wrap:wrap">
               <input type="radio" name="g-after" value="step" ${sg.after_approval !== 'once' ? 'checked' : ''}>
               Ask again every
@@ -2614,35 +2628,46 @@ VIEWS.budgets = async (page) => {
               Once per session</label>
             <div class="fld-err" id="g-step-err" role="alert"></div>
           </div>
-          <div class="fld"><div class="hd">Hook</div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <span class="badge ${S.opts.guard_installed ? '' : 'na'}">${S.opts.guard_installed ? 'installed' : 'not installed'}</span>
-              <button class="act" id="g-install">${S.opts.guard_installed ? 'Uninstall guard' : 'Install guard'}</button>
-            </div>
-            <div class="fld-hint" id="g-msg"></div>
-          </div>
         </div>
         <div>
-          <div class="fld"><div class="hd">Project overrides</div>
+          <div class="fld"><div class="hd">Different limit for a project</div>
             <div id="g-projects"></div>
             <datalist id="gtok-list">${[pctile(.75), pctile(.9), 5e6, 10e6, 25e6, 50e6].filter(v => v > 0)
               .map(v => `<option value="${shortAmount(niceUp(v))}">`).join('')}</datalist>
             <button class="act" id="g-add" style="margin-top:6px">${I('plus')} Add override</button>
           </div>
         </div>
-      </div>
-      <div class="fld-hint">Counts billable tokens (including cache reads), like the Tokens column in Sessions.
-        With the guard installed, Claude Code warns you at each % above and asks before the next tool call once a
-        session reaches its budget. It cannot end a session, and if it fails it lets the call through.</div>
+        </div>
+        ${liveBox()}
+      </section>
+      <details class="blk adv" data-blk="advanced">
+        <summary><h4>Advanced: plan limits and alert thresholds <span class="blk-sub">(most people can skip this)</span>
+          <button type="button" class="blk-help" data-guide="advanced" aria-label="Help: advanced">?</button></h4></summary>
+        <div class="grid g2">
+          <div><div class="sec">Plan limits</div>
+          <div class="fld-hint" style="margin:-2px 2px 6px">${planHint}</div>
+          ${amountField({id: 'l-cost', label: 'Monthly cost allowance (USD)', kind: 'usd', zero: 1,
+            value: st.limits.monthly_cost_allowance_usd})}
+          ${amountField({id: 'l-tok', label: 'Monthly token allowance', kind: 'tokens', zero: 1,
+            value: st.limits.monthly_token_allowance})}
+          ${amountField({id: 'l-req', label: 'Monthly request allowance', kind: 'count', zero: 1,
+            value: st.limits.monthly_request_allowance})}
+          ${amountField({id: 'l-cred', label: 'Remaining credits (USD)', kind: 'usd', zero: 1,
+            value: st.limits.remaining_credits_usd})}
+          </div>
+          <div><div class="sec">Alert thresholds</div>
+            <p class="blk-intro">When a money or token limit reaches these percentages, the dashboard marks it.</p>
+          ${pctField({id: 't-thr', label: 'Warn when a budget reaches', values: st.alert_thresholds_pct,
+            presets: [25, 50, 75, 90, 100, 110], max: 1000})}
+          </div>
+        </div>
+      </details>
       <div class="save-row">
-        <button class="chip on" id="savecfg">Save configuration</button>
-        <span id="cfg-msg" role="status"></span>
+        <button class="chip on" id="savecfg">Save</button><span id="cfg-msg" role="status"></span>
+        <span class="fld-hint">Saved on this computer only. Amounts take shorthand: 20M, 500k, $3,000.</span>
       </div>
-      <div class="fld-hint">Saved to <span class="mono">~/.claude-finops/settings.local.json</span>. Amounts take
-        shorthand: <span class="mono">20M</span>, <span class="mono">500k</span>, <span class="mono">$3,000</span>.
-        Leave a field blank to keep it unconfigured; the dashboard then reports it as unavailable rather than
-        inventing a value.</div>
-    </div>`, {footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure, used only to compute usage-vs-limit and days-until-limit.`})}`;
+    </div>`, {actions: `<button class="act" id="guide-open">${I('help')} How does this work?</button>`,
+              footer: `Plan allowances are NOT available from ${agentWord()} data. Anything you enter here is your own declared figure.`})}`;
   // amounts: chips fill the field; hints follow what is typed; errors clear as you edit
   page.querySelectorAll('.cfg [data-fill]').forEach(c => c.onclick = () => {
     const el = $('#' + c.dataset.fill, page);
@@ -3887,9 +3912,9 @@ const TOURS = {
     {el: 'card:Scenarios', t: 'Scenarios', see: 'Optimistic, expected and pessimistic end-of-period totals.', get: 'A best and worst case to plan against.', act: 'Budget against the pessimistic number.'}],
   budgets: [
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
-    {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
-    {el: 'card:Configure budgets', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save configuration.'},
-    {el: 'card:Configure budgets', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, and per-project overrides.', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
+    {el: 'card:Set your limits', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'},
+    {el: 'card:Set your limits', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save configuration.'},
+    {el: 'card:Set your limits', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, per-project overrides, and the Live warnings box (optional).', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then <b>Install guard</b>. It applies to new sessions.'}],
   settings: [
     {el: 'card:API keys', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor.', get: 'The Billed vs local page, without the terminal.', act: 'Paste a key and press Save key. It is never shown again, only its last four characters.'}],
   cloud: [
