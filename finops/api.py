@@ -575,6 +575,15 @@ def _notify_update():
     notify()
 
 
+def _open_browser(url):
+    # A headless box or SSH session has no browser to open; the printed URL is enough there.
+    import webbrowser
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def serve(port=8787, db=DB_PATH, background=None):
     global A
     ensure_dirs()
@@ -602,6 +611,9 @@ def serve(port=8787, db=DB_PATH, background=None):
     from .update import disabled
     if not disabled():
         threading.Thread(target=_notify_update, daemon=True).start()
+    # The socket is already listening, so the page's first request just waits for
+    # serve_forever. Off the main thread: some platforms block while the browser starts.
+    threading.Thread(target=_open_browser, args=(f"http://127.0.0.1:{port}",), daemon=True).start()
     with open(PIDFILE, "w") as fh:
         fh.write(str(os.getpid()))
     try:

@@ -61,7 +61,7 @@ const BADGE = {actual: '<span class="badge">Actual</span>',
   estimated: '<span class="badge est">Estimated</span>',
   forecast: '<span class="badge fc">Forecast</span>',
   recommendation: '<span class="badge rec">Recommendation</span>'};
-const statusGlyph = s => ({healthy: '🟢', high: '🟡', approaching: '🟠', critical: '🔴'}[s] || '⚪');
+const statusGlyph = s => dot({healthy: 'green', high: 'yellow', approaching: 'orange', critical: 'red'}[s] || 'grey');
 const statusChip = (s, txt) => `<span class="status ${s}"><span class="glyph">${statusGlyph(s)}</span>${esc(txt || s)}</span>`;
 const modelColor = m => {
   const list = (S.opts?.models || []).map(x => x.model);
@@ -82,12 +82,12 @@ const dur = s => s == null ? '—' : s < 60 ? `${Math.round(s)}s`
 const shortDay = d => (d || '').slice(5);
 const shortId = s => (s || '').slice(0, 8);
 
-// "(▲12% vs yesterday)"; nothing when yesterday had no spend to compare against.
+// "(up 12% vs yesterday)", with a small up/down triangle icon; nothing when yesterday had no spend to compare against.
 const vsYesterday = o => {
   const y = o.cost_yesterday?.c, t = o.cost_today?.c;
   if (!y || t == null) return '';
   const d = (t - y) / y * 100;
-  return ` (${d >= 0 ? '▲' : '▼'}${Math.abs(d).toFixed(0)}% vs yesterday)`;
+  return ` (${I(d >= 0 ? 'triUp' : 'triDown')}${Math.abs(d).toFixed(0)}% vs yesterday)`;
 };
 function kpi(label, value, detail, opts = {}) {
   const na = value == null;
@@ -98,7 +98,7 @@ function kpi(label, value, detail, opts = {}) {
 }
 function card(title, bodyHtml, opts = {}) {
   return `<section class="card"${opts.style ? ` style="${opts.style}"` : ''}>
-    <header><h3>${esc(title)}</h3>${opts.badge || ''}
+    <header><h3>${opts.icon || ''}${esc(title)}</h3>${opts.badge || ''}
       ${opts.hint ? `<span class="hint">${esc(opts.hint)}</span>` : ''}
       <span class="spacer"></span>${opts.actions || ''}</header>
     <div class="body${opts.flush ? ' flush' : ''}">${bodyHtml}</div>
@@ -122,42 +122,42 @@ function wireTable(host, rows, onRow) {
 /* ============================ chrome ============================ */
 const NAV = [
   ['Command center', [
-    ['hygiene', '◫', 'Context hygiene'],
-    ['overview', '◧', 'Executive overview'],
-    ['advisor', '✦', 'What should I do?'],
-    ['agents', '◎', 'Agents'],
-    ['live', '⏻', 'Running sessions'],
-    ['scorecard', '◉', 'FinOps scorecard'],
+    ['hygiene', 'gauge', 'Context hygiene'],
+    ['overview', 'dashboard', 'Executive overview'],
+    ['advisor', 'bulb', 'What should I do?'],
+    ['agents', 'bot', 'Agents'],
+    ['live', 'activity', 'Running sessions'],
+    ['scorecard', 'award', 'FinOps scorecard'],
   ]],
   ['Usage', [
-    ['usage', '▤', 'Usage timeline'],
-    ['burn', '◑', 'Burn rate & limits', 'priced'],
-    ['models', '◈', 'Model analysis'],
-    ['context', '▭', 'Context & cache'],
+    ['usage', 'barChart', 'Usage timeline'],
+    ['burn', 'flame', 'Burn rate & limits', 'priced'],
+    ['models', 'cpu', 'Model analysis'],
+    ['context', 'layers', 'Context & cache'],
   ]],
   ['Drill-down', [
-    ['projects', '▣', 'Projects'],
-    ['sessions', '▦', 'Sessions'],
-    ['prompts', '☰', 'Prompt explorer'],
-    ['rankings', '↕', 'Cost rankings'],
-    ['categories', '◐', 'Prompt intelligence'],
-    ['developer', '⌘', 'Developer activity', 'priced'],
+    ['projects', 'folder', 'Projects'],
+    ['sessions', 'terminal', 'Sessions'],
+    ['prompts', 'message', 'Prompt explorer'],
+    ['rankings', 'sortDesc', 'Cost rankings'],
+    ['categories', 'tag', 'Prompt intelligence'],
+    ['developer', 'code', 'Developer activity', 'priced'],
   ]],
   ['Optimize', [
-    ['diagnose', '✚', 'Why so many tokens?', 'priced'],
-    ['attribution', '⧉', 'Who used the tokens', 'priced'],
-    ['waste', '⚠', 'Waste detection'],
-    ['freemodels', '◇', 'Free models', 'claude'],
-    ['compare', '⚖', 'Compare models', 'priced'],
-    ['toolkit', '✎', 'Skills & MCP', 'claude'],
-    ['recommendations', '↯', 'Recommendations'],
-    ['anomalies', '⚡', 'Anomalies'],
+    ['diagnose', 'scan', 'Why so many tokens?', 'priced'],
+    ['attribution', 'users', 'Who used the tokens', 'priced'],
+    ['waste', 'trash', 'Waste detection'],
+    ['freemodels', 'gift', 'Free models', 'claude'],
+    ['compare', 'scale', 'Compare models', 'priced'],
+    ['toolkit', 'wrench', 'Skills & MCP', 'claude'],
+    ['recommendations', 'listChecks', 'Recommendations'],
+    ['anomalies', 'zap', 'Anomalies'],
   ]],
   ['Plan', [
-    ['forecast', '◭', 'Forecast', 'priced'],
-    ['budgets', '⊞', 'Budgets', 'priced'],
-    ['cloud', '☁', 'Billed vs local', 'cloud'],
-    ['exports', '⇩', 'Export & data'],
+    ['forecast', 'trendUp', 'Forecast', 'priced'],
+    ['budgets', 'wallet', 'Budgets', 'priced'],
+    ['cloud', 'cloud', 'Billed vs local', 'cloud'],
+    ['exports', 'download', 'Export & data'],
   ]],
 ];
 
@@ -174,6 +174,77 @@ const ICON = {
   // Sync pulls transcripts into the warehouse: a database with an arrow going in.
   sync: toolIcon('<ellipse cx="11" cy="5" rx="7" ry="3"/><path d="M4 5v6c0 1.66 3.13 3 7 3"/><path d="M4 11v6c0 1.66 3.13 3 7 3"/><path d="M18 5v5"/><path d="M19 13v8"/><path d="m16 18 3 3 3-3"/>'),
 };
+
+// Every other icon in the app: flat 24px line icons in the same style, drawn in
+// currentColor so they follow the theme and whatever tone they sit in.
+const IP = {
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chevDown: '<path d="m6 9 6 6 6-6"/>',
+  chevRight: '<path d="m9 6 6 6-6 6"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  checkCircle: '<circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/>',
+  xCircle: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/>',
+  circle: '<circle cx="12" cy="12" r="9"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  siren: '<path d="M7.9 2h8.2L22 7.9v8.2L16.1 22H7.9L2 16.1V7.9z"/><path d="M12 8v4M12 16h.01"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  sparkles: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M17 5h4M5 17v4M3 19h4"/>',
+  compact: '<path d="m15 15 6 6M15 21v-6h6M9 9 3 3M9 3v6H3M15 9l6-6M15 3v6h6M9 15l-6 6M9 21v-6H3"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+  handover: '<path d="m15 17 5-5-5-5"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  play: '<path d="M7 4v16l13-8z"/>',
+  cloudDown: '<path d="M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.2"/><path d="M12 12v9M8 17l4 4 4-4"/>',
+  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  triUp: '<path d="M12 6l7 11H5z"/>',
+  triDown: '<path d="M12 18 5 7h14z"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  star: '<path d="m12 2.5 2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.4l-5.9 3.1 1.2-6.5-4.8-4.6 6.6-.9z"/>',
+  starHalf: '<path d="M12 2.5v14.9l-5.9 3.1 1.2-6.5-4.8-4.6 6.6-.9z"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  note: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  // sidebar
+  gauge: '<path d="m12 14 4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/>',
+  dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  bulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6M10 22h4"/>',
+  bot: '<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4H8M2 14h2M20 14h2M9 13v2M15 13v2"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  award: '<circle cx="12" cy="8" r="6"/><path d="M15.5 12.9 17 22l-5-3-5 3 1.5-9.1"/>',
+  barChart: '<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-8"/>',
+  flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.4-.5-2-1-3-1.1-2.1-.2-4 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.2.4-2.3 1-3.3.2 1.7 1.2 2.8 2.5 2.8z"/>',
+  cpu: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/>',
+  folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
+  terminal: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M12 15h6"/>',
+  message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  sortDesc: '<path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/>',
+  tag: '<path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="m17 17-3-3"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+  trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C10 3 12 8 12 8s2-5 4.5-5a2.5 2.5 0 0 1 0 5"/>',
+  scale: '<path d="M12 3v18M7 21h10M3 7h18"/><path d="m6 7-3 7a3 3 0 0 0 6 0zM18 7l-3 7a3 3 0 0 0 6 0z"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/>',
+  listChecks: '<path d="m3 7 2 2 4-4M3 17l2 2 4-4M13 6h8M13 12h8M13 18h8"/>',
+  trendUp: '<path d="m22 7-8.5 8.5-5-5L2 17"/><path d="M16 7h6v6"/>',
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+};
+const FILLED = new Set(['play', 'triUp', 'triDown', 'star', 'starHalf']);
+// I('name'): the icon as inline SVG. Toolbar icons are shared from ICON above.
+const I = n => ICON[n] ? ICON[n].replace('<svg ', '<svg class="i" ')
+  : `<svg class="i${FILLED.has(n) ? ' fill' : ''}" viewBox="0 0 24 24" aria-hidden="true">${IP[n]}</svg>`;
+// Status and severity: a flat filled dot in the matching tone.
+const dot = tone => `<svg class="i dot ${tone}" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg>`;
 
 // The theme button shows the theme it switches to: a moon in light mode, a sun in dark.
 function themeLabel() {
@@ -194,7 +265,7 @@ function shell() {
         <div class="sub">Command Center</div></div>
       <nav class="nav">${NAV.map(([g, items], gi) => `<div class="group g${gi}">${g}</div>` +
         items.map(([id, ic, label]) =>
-          `<a data-view="${id}" class="g${gi}${id === 'diagnose' ? ' start' : ''}"><span class="ic">${ic}</span>${label}<span class="nb" data-nb="${id}"></span></a>`).join('')).join('')}
+          `<a data-view="${id}" class="g${gi}${id === 'diagnose' ? ' start' : ''}"><span class="ic">${I(ic)}</span>${label}<span class="nb" data-nb="${id}"></span></a>`).join('')).join('')}
       </nav>
       <div class="who" id="who"></div></aside>
     <div class="main">
@@ -204,7 +275,7 @@ function shell() {
             <div class="crumbs" id="crumbs"></div></div>
           <div class="scope" id="scope" aria-label="Totals for the current filters"></div>
           <span class="spacer"></span>
-          <div class="search"><span class="mag">⌕</span>
+          <div class="search"><span class="mag">${I('search')}</span>
             <input id="gsearch" placeholder="Search prompts, sessions, models…"></div>
           <button class="iconbtn upd" id="upd" hidden></button>
           <div class="tools">
@@ -334,13 +405,13 @@ async function updateChip() {
   try { u = await fetch('/api/update').then(r => r.json()); } catch { return; }
   if (!u || !u.update_available) return;
   el.hidden = false;
-  el.textContent = `↑ v${u.latest} available`;
+  el.innerHTML = `${I('arrowUp')} v${u.latest} available`;
   el.title = `You are on ${u.current}. Click to copy:  ${u.command}`;
   el.onclick = async () => {
     try {
       await navigator.clipboard.writeText(u.command);
-      el.textContent = '✓ command copied';
-      setTimeout(() => { el.textContent = `↑ v${u.latest} available`; }, 2200);
+      el.innerHTML = `${I('check')} command copied`;
+      setTimeout(() => { el.innerHTML = `${I('arrowUp')} v${u.latest} available`; }, 2200);
     } catch { prompt('Run this to upgrade:', u.command); }
   };
 }
@@ -375,18 +446,18 @@ function filterBar() {
     ${RANGES.map(([k, l]) => `<button class="${S.range === k ? 'on' : ''}"
       data-range="${k}">${l}</button>`).join('')}</div>
     <div class="chipsel"><button class="chip ${f.models.length ? 'on' : ''}" data-pop="models">
-      Model ${nSel(f.models)} ▾</button></div>
+      Model ${nSel(f.models)} ${I('chevDown')}</button></div>
     <div class="chipsel"><button class="chip ${f.projects.length ? 'on' : ''}" data-pop="projects">
-      Project ${nSel(f.projects)} ▾</button></div>
+      Project ${nSel(f.projects)} ${I('chevDown')}</button></div>
     <div class="chipsel"><button class="chip ${f.categories.length ? 'on' : ''}" data-pop="categories">
-      Category ${nSel(f.categories)} ▾</button></div>
+      Category ${nSel(f.categories)} ${I('chevDown')}</button></div>
     <div class="chipsel"><button class="chip ${(f.min_cost || f.min_tokens) ? 'on' : ''}"
-      data-pop="thresholds">Thresholds ▾</button></div>
+      data-pop="thresholds">Thresholds ${I('chevDown')}</button></div>
     <button class="chip toggle ${f.include_sandbox ? '' : 'on'}" id="sbx" role="switch" aria-checked="${!f.include_sandbox}"
       title="Sandbox agents are throwaway projects. ${f.include_sandbox ? 'They are included; click to leave them out' : 'They are left out; click to include them'}">
       <i></i>Hide sandbox</button>
     ${(f.models.length || f.projects.length || f.categories.length || f.min_cost || f.min_tokens)
-      ? '<button class="chip clr" id="clr">Clear filters ✕</button>' : ''}
+      ? `<button class="chip clr" id="clr">Clear filters ${I('x')}</button>` : ''}
     <span class="spacer"></span>
     <span class="coverage" title="Data in the warehouse · last rebuilt ${esc((o.meta.built_at||'').slice(0,16).replace('T',' '))}">
       ${esc(o.meta.transcript_files)} transcripts · since ${esc(o.date_range.first)}</span>`;
@@ -480,7 +551,7 @@ function drawer(title, bodyHtml, sub) {
   const d = h(`<aside class="drawer"><header>
       <h2>${esc(title)}</h2>${sub ? `<span class="crumbs">${sub}</span>` : ''}
       <span class="spacer"></span>
-      <button class="iconbtn" data-x>Close ✕</button></header>
+      <button class="iconbtn" data-x>Close ${I('x')}</button></header>
     <div class="content">${bodyHtml}</div></aside>`);
   scrim.onclick = closeDrawer;
   d.querySelector('[data-x]').onclick = closeDrawer;
@@ -824,19 +895,19 @@ VIEWS.overview = async (page) => {
 };
 
 /* ---------- act now: one-click actions, on the page everyone opens first ---------- */
-const ACT_ICON = {session: '🗜', skill: '⚙', memory: '📝', statusline: '▭'};
+const ACT_ICON = {session: 'compact', skill: 'cog', memory: 'note', statusline: 'panel'};
 const codeTicks = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
 function actNowStrip(items) {
   const btn = it => it.kind === 'session'
-    ? '<button class="act" data-do="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>'
-      + '<button class="act ghost" data-do="handover">⇢ Hand over</button>'
-    : it.kind === 'skill' ? '<button class="act" data-do="skill">＋ Create skill</button>'
+    ? '<button class="act" data-do="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>'
+      + '<button class="act ghost" data-do="handover">' + I('handover') + ' Hand over</button>'
+    : it.kind === 'skill' ? '<button class="act" data-do="skill">' + I('plus') + ' Create skill</button>'
     : it.kind === 'memory' ? '<button class="act ghost" data-do="memory">Show examples</button>'
     : '<button class="act" data-do="statusline">Install statusline</button>';
-  return `<section class="actnow"><div class="focus-hd">⚡ Act now
+  return `<section class="actnow"><div class="focus-hd">${I('zap')} Act now
       <span class="note">one click each · nothing changes until you click</span></div>
     ${items.map((it, i) => `<div class="actnow-it" data-i="${i}">
-      <span class="ai">${ACT_ICON[it.kind] || '•'}</span>
+      <span class="ai">${ACT_ICON[it.kind] ? I(ACT_ICON[it.kind]) : '•'}</span>
       <div class="ft"><b>${codeTicks(MASKED && it.private ? it.title.split(it.private).join(pt(it.private)) : it.title)}</b><div class="note">${esc(it.detail)}</div></div>
       <div class="live-actions">${btn(it)}<span class="live-msg"></span></div></div>`).join('')}</section>`;
 }
@@ -892,16 +963,16 @@ async function liveSessions() {
 const rowActs = (r, live) => {
   const pid = live && live.get(r.session_id);
   return `<span class="row-acts">${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}"
-    title="Copy: ${esc(r.resume)}">⧉ Resume</button>` : ''}${pid ? ` <button class="act" data-compact="${pid}"
-    title="Running now: types /compact into its terminal">🗜 Compact</button>` : ''}</span>`;
+    title="Copy: ${esc(r.resume)}">${I('copy')} Resume</button>` : ''}${pid ? ` <button class="act" data-compact="${pid}"
+    title="Running now: types /compact into its terminal">${I('compact')} Compact</button>` : ''}</span>`;
 };
 function wireRowActs(host) {
   if (!host) return;
   host.querySelectorAll('[data-resume]').forEach(b => b.onclick = async e => {
     e.stopPropagation();
-    try { await navigator.clipboard.writeText(b.dataset.resume); b.textContent = '✓ Copied'; }
+    try { await navigator.clipboard.writeText(b.dataset.resume); b.innerHTML = `${I('check')} Copied`; }
     catch { b.textContent = b.dataset.resume; }
-    setTimeout(() => { b.textContent = '⧉ Resume'; }, 1800);
+    setTimeout(() => { b.innerHTML = `${I('copy')} Resume`; }, 1800);
   });
   host.querySelectorAll('[data-compact]').forEach(b => b.onclick = async e => {
     e.stopPropagation();
@@ -910,15 +981,15 @@ function wireRowActs(host) {
     try {
       const r = await sessionAction(+b.dataset.compact, 'compact', {agent: 'claude'});
       if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
-      b.textContent = r.ok ? '✓ Sent' : 'Failed'; b.title = r.ok ? r.message : r.error;
+      b.innerHTML = r.ok ? `${I('check')} Sent` : 'Failed'; b.title = r.ok ? r.message : r.error;
     } catch (err) { b.textContent = 'Failed'; b.title = err.message; }
-    setTimeout(() => { b.disabled = false; b.textContent = '🗜 Compact'; }, 2500);
+    setTimeout(() => { b.disabled = false; b.innerHTML = `${I('compact')} Compact`; }, 2500);
   });
 }
 
 function renderAdvisorHero(page, advisor) {
   if (!page || !advisor || !Array.isArray(advisor.actions)) return;
-  const hero = h(`<div class="hero"><h3>✦ AI FinOps Advisor — ${esc(advisor.question)}
+  const hero = h(`<div class="hero"><h3>${I('sparkles')} AI FinOps Advisor — ${esc(advisor.question)}
     <span class="spacer"></span>
     <span class="note" style="font-weight:400">${esc(advisor.generated_from)}</span></h3>
     <div class="advisor-list">${advisor.actions.length ? advisor.actions.map((a, i) =>
@@ -975,7 +1046,7 @@ VIEWS.advisor = async (page) => {
        footer: 'These are observations from your own usage. No dollar saving is attached unless the method can support one — a guessed percentage of spend is not a saving.'})}
     ${card('Anomalies to inspect', `<div class="stack" id="anolist">${anos.anomalies.map((a, i) =>
       `<div class="item sev-${a.severity} clickable" data-i="${i}"><div class="hd">
-        ${a.severity === 'high' ? '🚨' : '⚠️'} ${esc(a.title)}</div>
+        ${I(a.severity === 'high' ? 'siren' : 'alert')} ${esc(a.title)}</div>
         <div class="dt">${esc(a.detail)}</div>
         <div class="mt"><span>ratio ${a.ratio}×</span><span>click to inspect</span></div></div>`).join('')
       || '<div class="empty">No anomalies detected</div>'}</div>`, {badge: BADGE.estimated})}`;
@@ -1183,7 +1254,7 @@ VIEWS.models = async (page) => {
   const find = k => rows.find(r => r.model === sup[k]);
   page.innerHTML = `
     ${lc.unpriced_requests ? `<div class="hero">
-      <h3>⚠️ Some long-context requests are priced low</h3>
+      <h3>${I('alert')} Some long-context requests are priced low</h3>
       <div class="stack">
         <div class="item sev-high">
           <div class="hd">${fmtInt(lc.unpriced_requests)} requests sent more context than their
@@ -1345,7 +1416,7 @@ VIEWS.sessions = async (page) => {
   if (sessMore) sessMore.onclick = () => { sp.offset += sp.limit; bust(); render(); };
   $('#st', page).innerHTML = table([
     {h: 'Session', trunc: 1, title: r => r.session_id,
-     f: r => `${r.tokens > avgTok * 3 ? '🔴 ' : ''}${esc(stitle(r))}
+     f: r => `${r.tokens > avgTok * 3 ? dot('red') + ' ' : ''}${esc(stitle(r))}
        <div class="sub mono">${esc(shortId(r.session_id))}</div>`},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
@@ -1393,7 +1464,7 @@ VIEWS.prompts = async (page) => {
   page.innerHTML = `
     ${card('Prompt explorer', `
       <div class="filters" style="margin:0 0 8px">
-        <div class="search"><span class="mag">⌕</span>
+        <div class="search"><span class="mag">${I('search')}</span>
           <input id="pq" value="${esc(q)}" placeholder="Search prompt text…"></div>
         <span class="divider"></span>
         ${[['cost', 'Most expensive'], ['tokens', 'Most tokens'], ['length', 'Longest'],
@@ -1686,7 +1757,7 @@ VIEWS.context = async (page) => {
         footer: 'Component costs are re-derived per model from config/pricing.json, since a request stores one blended cost.'});
     })()}
     ${ctx.large_context_cost_pct > 0 ? `<div class="hero">
-      <h3>⚠️ Context warnings</h3>
+      <h3>${I('alert')} Context warnings</h3>
       <div class="stack">
         <div class="item sev-${ctx.large_context_cost_pct > 30 ? 'high' : 'medium'}">
           <div class="hd">${fmtPct(ctx.large_context_cost_pct)} of your estimated spend came from
@@ -1765,8 +1836,9 @@ VIEWS.waste = async (page) => {
     ${['high', 'medium', 'low'].map(sev => {
       const list = w.findings.filter(f => f.severity === sev);
       if (!list.length) return '';
-      const title = sev === 'high' ? '🔴 High waste'
-        : sev === 'medium' ? '🟡 Optimization opportunities' : '⚪ Low-priority observations';
+      const title = sev === 'high' ? 'High waste'
+        : sev === 'medium' ? 'Optimization opportunities' : 'Low-priority observations';
+      const icon = dot(sev === 'high' ? 'red' : sev === 'medium' ? 'yellow' : 'grey');
       return card(title, `<div class="stack">${list.map((f, i) => `
         <div class="item sev-${sev}">
           <div class="hd">${esc(f.title)}<span class="spacer"></span>
@@ -1778,7 +1850,7 @@ VIEWS.waste = async (page) => {
           <details style="margin-top:5px"><summary style="cursor:pointer;font-size:11.5px;color:var(--s1)">
             Show ${f.evidence.length} flagged items</summary>
             <div class="ev" data-kind="${esc(f.kind)}" style="margin-top:6px"></div></details>
-        </div>`).join('')}</div>`, {badge: BADGE.estimated});
+        </div>`).join('')}</div>`, {badge: BADGE.estimated, icon});
     }).join('')}
     <div class="note">${esc(w.note)}</div>`;
   // fill evidence tables
@@ -1936,7 +2008,7 @@ VIEWS.live = async (page) => {
   page.innerHTML = `
     ${card('Plan usage right now', `<div id="live-usage">${usageBody(usage0)}</div>`,
       {badge: BADGE.actual, hint: 'Claude Code\'s own /usage: plan limits, not cost. Costs no tokens.',
-       actions: '<button class="btn pb-copy" id="usage-refresh">↻ Refresh usage</button>'})}
+       actions: `<button class="btn pb-copy" id="usage-refresh">${I('reload')} Refresh usage</button>`})}
     <div class="grid g4">
       ${kpi('Running sessions', fmtInt(list.length), `${busy.length} working right now`, {badge: BADGE.actual})}
       ${kpi('Working (spending now)', fmtInt(busy.length), 'Only these consume tokens right now')}
@@ -1951,7 +2023,7 @@ VIEWS.live = async (page) => {
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
       Codex, Gemini and Cursor keep no session registry, so they count as running when their transcript was
       written in the last 20 minutes. Cursor sessions live inside the IDE and can't be stopped from here.
-      <span class="spacer"></span><button class="btn pb-copy" id="live-refresh">↻ Refresh</button></div>
+      <span class="spacer"></span><button class="btn pb-copy" id="live-refresh">${I('reload')} Refresh</button></div>
     <div class="stack">${list.map((x, i) => `
       <div class="item sev-${sevOf(x)}" data-i="${i}">
         <div class="hd">${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
@@ -1967,12 +2039,12 @@ VIEWS.live = async (page) => {
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}
         <div class="live-actions">
-          ${x.signalable ? `${canInterrupt ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>⏸ Interrupt</button>` : ''}
-          ${x.agent === 'claude' ? '<button class="act" data-a="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>' : ''}
-          <button class="act warn" data-a="close">⏹ Close session</button>
-          <button class="act danger" data-a="kill">✖ Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}
+          ${x.signalable ? `${canInterrupt ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>${I('pause')} Interrupt</button>` : ''}
+          ${x.agent === 'claude' ? '<button class="act" data-a="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>' : ''}
+          <button class="act warn" data-a="close">${I('stop')} Close session</button>
+          <button class="act danger" data-a="kill">${I('x')} Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}
           ${x.resume ? `<button class="act ghost" data-copy="${esc(x.resume)}">Copy resume command</button>` : ''}
-          ${x.agent === 'claude' ? '<button class="act ghost" data-ho="1">⇢ Hand over / split</button>' : ''}
+          ${x.agent === 'claude' ? '<button class="act ghost" data-ho="1">' + I('handover') + ' Hand over / split</button>' : ''}
           <span class="live-msg"></span>
         </div>
         ${x.agent !== 'claude' ? '' : `<div class="handover" hidden>
@@ -1996,7 +2068,7 @@ VIEWS.live = async (page) => {
       const u = await fetch('/api/usage?refresh=1').then(r => r.json());
       $('#live-usage', page).innerHTML = usageBody(u);
     } catch (e) { $('#live-usage', page).innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-    ub.disabled = false; ub.textContent = '↻ Refresh usage';
+    ub.disabled = false; ub.innerHTML = `${I('reload')} Refresh usage`;
   };
   page.querySelectorAll('.item[data-i]').forEach(row => {
     const x = list[+row.dataset.i], pid = x.pid, msg = row.querySelector('.live-msg');
@@ -2010,7 +2082,7 @@ VIEWS.live = async (page) => {
         const r = await sessionAction(pid, 'handover', {tasks: ta.value.split('\n'), launch,
           close: launch && ho.querySelector('.ho-close').checked});
         hoOut.innerHTML = r.ok ? `<div class="live-msg ok">${esc(r.message)}</div>` + r.sessions.map(s =>
-          `<div>${s.launched ? '▶' : '•'} ${esc(s.task || 'Continue the same work')} — <code>${esc(s.brief)}</code>${s.error ? ` <span class="live-msg err">${esc(s.error)}</span>` : ''}</div>`).join('')
+          `<div>${s.launched ? I('play') : '•'} ${esc(s.task || 'Continue the same work')} — <code>${esc(s.brief)}</code>${s.error ? ` <span class="live-msg err">${esc(s.error)}</span>` : ''}</div>`).join('')
           : `<div class="live-msg err">Failed: ${esc(r.error)}</div>`;
         if (r.ok && r.closed && r.closed.exited) { row.classList.add('gone'); setTimeout(() => render(), 2500); }
       } catch (e) { hoOut.innerHTML = `<div class="live-msg err">Failed: ${esc(e.message)}</div>`; }
@@ -2064,12 +2136,12 @@ const pb = x => {
     <ol>${x.steps.map(t => `<li>${esc(t)}</li>`).join('')}</ol>${promptHtml}</details>`;
 };
 const wirePB = page => page.querySelectorAll('.pb-copy').forEach(b => b.onclick = async () => {
-  try { await navigator.clipboard.writeText(PB[+b.dataset.pb]); b.textContent = 'Copied ✓'; }
+  try { await navigator.clipboard.writeText(PB[+b.dataset.pb]); b.innerHTML = `Copied ${I('check')}`; }
   catch { b.textContent = 'Copy failed'; }
   setTimeout(() => b.textContent = 'Copy', 1500);
 });
-const HARNESS = {needed: ['🔴 Needed', 'high'], partial: ['🟡 Partial', 'medium'],
-  in_place: ['✅ In place', 'low'], not_needed: ['⚪ Not needed', 'low'], unknown: ['— Unknown', 'low']};
+const HARNESS = {needed: [dot('red') + ' Needed', 'high'], partial: [dot('yellow') + ' Partial', 'medium'],
+  in_place: [I('checkCircle') + ' In place', 'low'], not_needed: [dot('grey') + ' Not needed', 'low'], unknown: ['— Unknown', 'low']};
 const harnessChip = h => h ? `<b>${HARNESS[h.verdict][0]}</b>` : '—';
 
 VIEWS.diagnose = async (page) => {
@@ -2078,7 +2150,7 @@ VIEWS.diagnose = async (page) => {
   const gdir = {claude: '~/.claude', codex: '~/.codex', gemini: '~/.gemini'}[d.agent || 'claude'];
   PB.length = 0;
   const t = d.total || {}, tr = d.trend || {};
-  const sevChip = s => s === 'high' ? '🔴' : s === 'medium' ? '🟡' : '⚪';
+  const sevChip = s => dot(s === 'high' ? 'red' : s === 'medium' ? 'yellow' : 'grey');
   page.innerHTML = `${focusStrip(d)}
     <div class="note" style="font-size:14px"><b>${esc(d.headline)}</b>
       ${tr.explanation ? `<br>${esc(tr.explanation)}` : ''}</div>
@@ -2091,7 +2163,7 @@ VIEWS.diagnose = async (page) => {
     </div>
     <div id="dx-live"></div>${card('Running now', d.live_sessions.length ? `<div class="stack">${d.live_sessions.map(x => `
       <div class="item sev-${x.severity === 'ok' ? 'low' : x.severity}">
-        <div class="hd">${x.severity === 'high' ? '🔴' : x.severity === 'medium' ? '🟡' : '🟢'}
+        <div class="hd">${dot(x.severity === 'high' ? 'red' : x.severity === 'medium' ? 'yellow' : 'green')}
           ${esc(stitle(x))} <span class="note">· ${esc(x.project)}</span><span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">${fmtNum(x.context)} context · ${fmtInt(x.steps)} steps</span></div>
         <div class="dt">${esc(x.advice)} <span class="note">Last write ${x.idle_min} min ago; context grew
@@ -2109,7 +2181,7 @@ VIEWS.diagnose = async (page) => {
       {badge: BADGE.recommendation, hint: '"Above baseline" = context re-read beyond 100K'})}
     <div id="dx-mem"></div>${card(`Add to ${md}${isCl ? ' / memory' : ''} (from your past prompts)`, `<div class="stack">${d.memory_suggestions.map(x => `
       <div class="item sev-${x.kind === 'security' ? 'high' : x.already_saved ? 'low' : 'medium'}">
-        <div class="hd">${x.kind === 'security' ? '🔐' : x.kind === 'template' ? '⚙' : x.kind === 'reference' ? '🔗' : '📝'}
+        <div class="hd">${I(x.kind === 'security' ? 'lock' : x.kind === 'template' ? 'cog' : x.kind === 'reference' ? 'link' : 'note')}
           ${esc(pt(x.text.slice(0, 140)))}${x.already_saved ? ' <span class="na">already saved</span>' : ''}
           <span class="spacer"></span><span class="note">${fmtInt(x.sessions)} sessions</span></div>
         <div class="dt">${esc(x.why)}</div>
@@ -2152,7 +2224,7 @@ VIEWS.diagnose = async (page) => {
     ...(isCl ? [{h: 'Memory', num: 1, f: r => r.memory_tokens == null ? '—' : `~${fmtInt(r.memory_tokens)}`}] : []),
     {h: 'Explore %', num: 1, f: r => fmtPct(r.explore_pct)},
     ...(isCl ? [{h: 'Harness', f: r => harnessChip(r.harness)}] : []),
-    {h: 'Needs update', f: r => r.issues.length ? r.issues.map(i => sevChip(i.severity) + ' ' + esc(i.title)).join('<br>') : '✓'},
+    {h: 'Needs update', f: r => r.issues.length ? r.issues.map(i => sevChip(i.severity) + ' ' + esc(i.title)).join('<br>') : I('check')},
   ];
   page.querySelectorAll('.sess-link').forEach(l => l.onclick = e => { e.preventDefault(); openSession(l.dataset.sess); });
   $('#dx-proj', page).innerHTML = table(cols, d.projects);
@@ -2191,7 +2263,7 @@ VIEWS.anomalies = async (page) => {
       '<div class="legend" id="anl"></div>', {badge: BADGE.estimated})}
     ${card('Detected anomalies', `<div class="stack" id="anolist">${a.anomalies.length
       ? a.anomalies.map((x, i) => `<div class="item sev-${x.severity} clickable" data-i="${i}">
-        <div class="hd">${x.severity === 'high' ? '🚨' : '⚠️'} ${esc(x.title)}
+        <div class="hd">${I(x.severity === 'high' ? 'siren' : 'alert')} ${esc(x.title)}
           <span class="spacer"></span><span class="pill">${esc(x.type)}</span></div>
         <div class="dt">${esc(x.detail)}</div>
         <div class="mt"><span>observed ${fmtNum(x.metric_value)}</span>
@@ -2208,7 +2280,7 @@ VIEWS.anomalies = async (page) => {
   const bars = $('#an', page).querySelectorAll('rect');
   tl.forEach((r, i) => { if (dates.has(r.bucket) && bars[i]) bars[i].setAttribute('fill', 'var(--critical)'); });
   $('#anl', page).innerHTML = `<span class="it"><span class="swatch" style="background:${seriesVar(0)}"></span>Normal day</span>
-    <span class="it"><span class="swatch" style="background:var(--critical)"></span>🚨 Anomalous day</span>`;
+    <span class="it"><span class="swatch" style="background:var(--critical)"></span>${I('siren')} Anomalous day</span>`;
   wireAnomalies(page, a.anomalies);
 };
 
@@ -2230,7 +2302,7 @@ VIEWS.forecast = async (page) => {
       ${f.limit_exhaustion_date === S.opts.unavailable_label
         ? kpi('Limit exhaustion date', null, 'Requires a configured allowance')
         : kpi('Limit exhaustion date', esc(f.limit_exhaustion_date),
-            f.will_exceed ? '🔴 forecast exceeds allowance' : '🟢 within allowance', {badge: BADGE.forecast})}
+            f.will_exceed ? dot('red') + ' forecast exceeds allowance' : dot('green') + ' within allowance', {badge: BADGE.forecast})}
     </div>
     ${card('Cumulative spend and forecast fan', f.insufficient_history
         ? '<div class="empty">Fewer than 7 priced days in the window: bands not shown.</div>'
@@ -2276,7 +2348,7 @@ VIEWS.budgets = async (page) => {
         </div>
         <div class="meter ${l.status}"><i style="width:${Math.min(l.used_pct, 100)}%"></i></div>
         <div class="mt">
-          ${l.thresholds_breached.length ? `<span>⚠️ breached ${l.thresholds_breached.join('%, ')}%</span>` : '<span>No threshold breached</span>'}
+          ${l.thresholds_breached.length ? `<span>${I('alert')} breached ${l.thresholds_breached.join('%, ')}%</span>` : '<span>No threshold breached</span>'}
           ${l.thresholds_forecast_breach.length
             ? `<span style="color:var(--serious-ink)">forecast to breach ${l.thresholds_forecast_breach.join('%, ')}%</span>` : ''}
         </div></div>`
@@ -2358,13 +2430,13 @@ VIEWS.scorecard = async (page) => {
       </div></div>`, {badge: BADGE.estimated,
       footer: 'Each dimension is measured from your transcripts; budget adherence needs a budget in Settings.'})}
     <div class="grid g3">
-      ${card('✅ What is good', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
+      ${card('What is good', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
         sc.what_is_good.map(x => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')
-        || '<li class="na">Nothing scored above 60 in this range</li>'}</ul>`)}
-      ${card('⚠️ Needs attention', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
+        || '<li class="na">Nothing scored above 60 in this range</li>'}</ul>`, {icon: I('checkCircle')})}
+      ${card('Needs attention', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
         sc.needs_attention.map(x => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')
-        || '<li class="na">Nothing scored below 70</li>'}</ul>`)}
-      ${card('🎯 Biggest opportunity', sc.biggest_opportunity ? `
+        || '<li class="na">Nothing scored below 70</li>'}</ul>`, {icon: I('alert')})}
+      ${card('Biggest opportunity', sc.biggest_opportunity ? `
         <div class="item sev-high"><div class="hd">${esc(sc.biggest_opportunity.title)}</div>
           <div class="dt">${esc(sc.biggest_opportunity.detail)}</div>
           <div class="mt"><span>Estimated excess ${fmtUSD(sc.biggest_opportunity.estimated_excess_usd)}</span>
@@ -2584,14 +2656,14 @@ function focusStrip(d, n = 5) {
   const nHidden = all.length - items.length;
   if (!all.length) return '';
   const fixes = items.filter(i => i.kind === 'fix').length, habits = items.filter(i => i.kind === 'habit').length;
-  return `<section class="focus"><div class="focus-hd">🎯 What to change
+  return `<section class="focus"><div class="focus-hd">${I('target')} What to change
       <span class="note">${fixes} to fix once · ${habits} habit${habits === 1 ? '' : 's'} from your past sessions</span>
       <span class="spacer"></span>${nHidden ? `<button class="act ghost" data-unhide="1">Show ${nHidden} hidden</button>` : ''}</div>
     ${items.slice(0, n).map((it, k) => `<div class="focus-it l${it.lvl === 1 ? 1 : 2}" data-go="${it.view}" data-anchor="${it.anchor}" data-key="${esc(it.key)}">
       <span class="fn">${k + 1}</span>
       <span class="ft"><span class="fx">${esc(it.text)}</span><span class="fw">${esc(it.why || '')}</span></span>
       <span class="fl">${it.kind === 'habit' ? 'Habit' : 'Fix once'}</span>
-      <button class="fd" title="Hide this until its evidence changes" aria-label="Hide">✕</button></div>`).join('')
+      <button class="fd" title="Hide this until its evidence changes" aria-label="Hide">${I('x')}</button></div>`).join('')
       || '<div class="note">Everything here is hidden. Nice.</div>'}</section>`;
 }
 function wireFocus(root) {
@@ -2739,8 +2811,8 @@ function toggleRecent(force) {
   const scrim = h('<div class="recent-scrim"></div>');
   const p = h(`<aside class="recent" aria-label="Recent sessions"><header>
       <h2>Recent</h2><span class="note">all time · agent &amp; project filters apply</span>
-      <span class="spacer"></span><button class="iconbtn" data-x>Close ✕</button></header>
-    <div class="recent-search"><span class="mag">⌕</span>
+      <span class="spacer"></span><button class="iconbtn" data-x>Close ${I('x')}</button></header>
+    <div class="recent-search"><span class="mag">${I('search')}</span>
       <input id="recent-q" placeholder="Search your prompts…" value="${esc(RECENT.q)}"></div>
     <div class="content"><div class="loading">Loading…</div></div></aside>`);
   scrim.onclick = () => toggleRecent(false);
@@ -2779,7 +2851,7 @@ async function renderRecent() {
 }
 
 const recentLive = list => !list.length ? '' : `<div class="recent-hd">Running now
-    <span class="spacer"></span><a href="#" data-go-live>Close or kill ›</a></div>
+    <span class="spacer"></span><a href="#" data-go-live>Close or kill ${I('chevRight')}</a></div>
   ${list.map((x, i) => `<div class="item recent-it sev-${x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low'}" data-live="${i}">
     <div class="hd"><span class="live-dot ${x.status === 'busy' ? 'busy' : ''}" title="${esc(x.status)}"></span>
       <span class="recent-title">${esc((!MASKED && x.name) || shortId(x.session_id))}</span>
@@ -2788,9 +2860,9 @@ const recentLive = list => !list.length ? '' : `<div class="recent-hd">Running n
       ${x.context ? `<span>${fmtNum(x.context)} context</span>` : ''}
       ${x.est_cost_usd != null ? `<span>${fmtUSD(x.est_cost_usd)}</span>` : ''}</div>
     <div class="live-actions">
-      ${x.resume ? `<button class="act ghost" data-resume="${esc(x.resume)}" title="Copy: ${esc(x.resume)}">⧉ Resume</button>` : ''}
-      ${x.signalable && x.agent === 'claude' ? '<button class="act" data-la="compact" title="Types /compact into that session\'s terminal">🗜 Compact</button>' : ''}
-      ${x.signalable ? `<button class="act warn" data-la="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : 'title="Stops the current turn, like pressing Esc"'}>⏸ Stop</button>` : ''}
+      ${x.resume ? `<button class="act ghost" data-resume="${esc(x.resume)}" title="Copy: ${esc(x.resume)}">${I('copy')} Resume</button>` : ''}
+      ${x.signalable && x.agent === 'claude' ? '<button class="act" data-la="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>' : ''}
+      ${x.signalable ? `<button class="act warn" data-la="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : 'title="Stops the current turn, like pressing Esc"'}>${I('pause')} Stop</button>` : ''}
       ${x.session_id ? `<button class="act ghost" data-open-sess="${esc(x.session_id)}">Details</button>` : ''}
       <span class="live-msg"></span></div></div>`).join('')}
   <div class="recent-hd">Past sessions</div>`;
@@ -2803,9 +2875,9 @@ const recentSessions = (rows, liveIds) => rows.map(r => `
     <div class="mt"><span>${esc(r.project || '')}</span><span>${fmtInt(r.prompts)} prompts</span>
       <span>${fmtWhen(r.started_at)}</span></div>
     <div class="live-actions">
-      ${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}" title="Copy: ${esc(r.resume)}">⧉ Resume</button>` : ''}
+      ${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}" title="Copy: ${esc(r.resume)}">${I('copy')} Resume</button>` : ''}
       <button class="act ghost" data-open-sess="${esc(r.session_id)}">Details</button>
-      <span class="spacer"></span><span class="note recent-caret">${RECENT.open_ids.has(r.session_id) ? '▾' : '▸'} prompts</span></div>
+      <span class="spacer"></span><span class="note recent-caret">${I(RECENT.open_ids.has(r.session_id) ? 'chevDown' : 'chevRight')} prompts</span></div>
     <div class="recent-prompts"${RECENT.open_ids.has(r.session_id) ? '' : ' hidden'}></div></div>`).join('')
   || '<div class="empty">No sessions for these filters</div>';
 
@@ -2818,7 +2890,7 @@ const recentPrompts = rows => rows.map(x => `<div class="item recent-it">
     ${promptLine(x)}
     <div class="mt"><span>${esc((!MASKED && x.session_title) || shortId(x.session_id))}</span>
       <span>${esc(x.project || '')}</span>
-      <a href="#" data-open-sess="${esc(x.session_id)}">Session ›</a></div></div>`).join('');
+      <a href="#" data-open-sess="${esc(x.session_id)}">Session ${I('chevRight')}</a></div></div>`).join('');
 
 async function loadSessionPrompts(host, sid) {
   host.innerHTML = '<div class="note">Loading…</div>';
@@ -2847,7 +2919,7 @@ function wireRecent(root) {
       if (e.target.closest('button, a, .recent-prompts')) return;
       host.hidden = !host.hidden;
       it.classList.toggle('open', !host.hidden);
-      it.querySelector('.recent-caret').textContent = (host.hidden ? '▸' : '▾') + ' prompts';
+      it.querySelector('.recent-caret').innerHTML = I(host.hidden ? 'chevRight' : 'chevDown') + ' prompts';
       host.hidden ? RECENT.open_ids.delete(sid) : RECENT.open_ids.add(sid);
       if (!host.hidden && !host.childElementCount) loadSessionPrompts(host, sid);
     };
@@ -3019,7 +3091,7 @@ VIEWS.freemodels = async (page) => {
     ${!d.bin_on_path ? `<div class="item sev-medium"><div class="dt">${esc(d.bin_dir)} is not on your PATH, so the new commands
       won't run by name. Add <code>export PATH="$HOME/.local/bin:$PATH"</code> to ~/.zshrc.</div></div>` : ''}
     ${card('How to use and test a free model', `<div class="stack">
-      <div class="dt"><b>1. Test:</b> click <b>▶ Test it</b> on an added model. It asks the model directly, then runs a real one-line Claude Code session through the new command.</div>
+      <div class="dt"><b>1. Test:</b> click <b>${I('play')} Test it</b> on an added model. It asks the model directly, then runs a real one-line Claude Code session through the new command.</div>
       <div class="dt"><b>2. Use:</b> open a terminal in any project and run the command, e.g. <code>claude-qwen-coder</code>. It's normal Claude Code, running on the free model.</div>
       <div class="dt"><b>3. Check which model is on:</b> type <code>/model</code> or <code>/status</code> inside that session. It shows the Qwen model.</div>
       <div class="dt"><b>Will it appear in /model in my normal <code>claude</code>?</b> No. Normal <code>claude</code> talks only to Anthropic, which doesn't serve Qwen. Each free model lives behind its own command, so your Claude sessions stay unchanged. Inside a free-model session, <code>/model</code> can't switch to Opus/Sonnet either; exit and run <code>claude</code> for that.</div>
@@ -3032,11 +3104,11 @@ VIEWS.freemodels = async (page) => {
         ? `Runs on this machine · ~${m.download_gb} GB download · wants ${m.min_ram_gb} GB RAM (you have ${m.ram_gb} GB)`
         : 'Runs in the cloud via OpenRouter · no download'}</div>
       ${m.installed
-        ? `<div class="dt">✅ Added. Run <code>${esc(m.command)}</code> in any project.</div>
-           <div><button class="act" data-test="${esc(m.id)}">▶ Test it</button>
+        ? `<div class="dt">${I('checkCircle')} Added. Run <code>${esc(m.command)}</code> in any project.</div>
+           <div><button class="act" data-test="${esc(m.id)}">${I('play')} Test it</button>
              <button class="act ghost" data-rm="${esc(m.id)}">Remove</button></div>
            <div data-testlog="${esc(m.id)}"></div>`
-        : `<div><button class="act" data-add="${esc(m.id)}" ${m.fits_ram ? '' : 'title="Less RAM than recommended"'}>＋ Add ${esc(m.command)}</button></div>`}
+        : `<div><button class="act" data-add="${esc(m.id)}" ${m.fits_ram ? '' : 'title="Less RAM than recommended"'}>${I('plus')} Add ${esc(m.command)}</button></div>`}
     </div>`, {badge: m.installed ? '<span class="badge">Added</span>' : ''})).join('')}</div>`;
   page.querySelectorAll('[data-go]').forEach(a => a.onclick = () => go(a.dataset.go));
   page.querySelectorAll('[data-add]').forEach(b => b.onclick = () => addFreeModel(b.dataset.add));
@@ -3053,7 +3125,7 @@ async function testFreeModel(id, host, btn) {
     const {job} = await doAction(`free_model/${id}/test`);
     const j = await followJob(job, host);
     host.insertAdjacentHTML('beforeend', j.state === 'done'
-      ? '<div class="item sev-low"><div class="dt">✅ Working end to end.</div></div>'
+      ? '<div class="item sev-low"><div class="dt">' + I('checkCircle') + ' Working end to end.</div></div>'
       : '<div class="item sev-high"><div class="dt">Test failed. See the log above.</div></div>');
   } catch (e) { host.innerHTML = `<div class="item sev-high"><div class="dt">${esc(e.message)}</div></div>`; }
   btn.disabled = false;
@@ -3069,10 +3141,10 @@ async function addFreeModel(id) {
     <h3>${esc(plan.model.name)}</h3>
     <div class="dt">This will:</div>
     <div class="stack">${plan.steps.map((s, i) => `<div class="item ${s.warn ? 'sev-medium' : ''}"><div class="dt">
-      ${s.warn ? '⚠' : `${i + 1}.`} ${esc(s.do)}${s.consent ? ' <span class="pill">needs your OK</span>' : ''}</div></div>`).join('')}</div>
+      ${s.warn ? I('alert') : `${i + 1}.`} ${esc(s.do)}${s.consent ? ' <span class="pill">needs your OK</span>' : ''}</div></div>`).join('')}</div>
     ${plan.needs.map(n => `${n.steps ? `<div class="item"><div class="hd">How to get your ${esc(n.label)}</div>
       <ol class="dt" style="margin:6px 0 8px 18px;padding:0;line-height:1.7">${n.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>
-      ${n.url ? `<a class="act" href="${esc(n.url)}" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open ${esc(new URL(n.url).host)} ↗</a>` : ''}</div>` : ''}
+      ${n.url ? `<a class="act" href="${esc(n.url)}" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open ${esc(new URL(n.url).host)} ${I('external')}</a>` : ''}</div>` : ''}
       <label class="dt"><b>${esc(n.label)}</b><br>
       <input type="password" data-need="${esc(n.field)}" autocomplete="off" style="width:100%;margin-top:6px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)">
       <span class="note">${esc(n.help)}</span></label>`).join('')}
@@ -3094,8 +3166,8 @@ async function addFreeModel(id) {
       const {job} = await doAction(`free_model/${id}/install`, body);
       const j = await followJob(job, $('#fm-log', c));
       if (j.state === 'done') { $('#fm-log', c).insertAdjacentHTML('beforeend',
-        `<div class="item sev-low"><div class="dt">✅ Added. Open a terminal in any project and run <code>${esc(j.result.command)}</code>. Inside it, <code>/model</code> shows the Qwen model; your normal <code>claude</code> is unchanged.</div>
-         <div><button class="act" id="fm-test">▶ Test it now</button></div><div id="fm-testlog"></div></div>`);
+        `<div class="item sev-low"><div class="dt">${I('checkCircle')} Added. Open a terminal in any project and run <code>${esc(j.result.command)}</code>. Inside it, <code>/model</code> shows the Qwen model; your normal <code>claude</code> is unchanged.</div>
+         <div><button class="act" id="fm-test">${I('play')} Test it now</button></div><div id="fm-testlog"></div></div>`);
         $('#fm-test', c).onclick = e => testFreeModel(id, $('#fm-testlog', c), e.target);
         if (S.view === 'freemodels') render(); }
       else $('#fm-go', c).disabled = false;
@@ -3108,12 +3180,12 @@ VIEWS.compare = async (page) => {
   const d = await fetch('/api/compare?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json());
   if (d.error) throw new Error(d.error);
   const hasFree = d.rows.some(r => r.kind === 'free');
-  const stars = n => n == null ? '<span class="na">—</span>' : '★'.repeat(Math.floor(n)) + (n % 1 ? '½' : '') +
-    `<span style="opacity:.25">${'★'.repeat(5 - Math.ceil(n))}</span>`;
+  const stars = n => n == null ? '<span class="na">—</span>' : I('star').repeat(Math.floor(n)) + (n % 1 ? I('starHalf') : '') +
+    `<span style="opacity:.25">${I('star').repeat(5 - Math.ceil(n))}</span>`;
   const price = r => r.kind === 'free' ? '<b>$0</b>' : `${fmtUSD(r.price_in)} / ${fmtUSD(r.price_out)}`;
   const status = r => r.kind !== 'free'
     ? (r.requests ? `${fmtInt(r.requests)} req · ${fmtUSD(r.cost)}` : '<span class="na">not used</span>')
-    : !r.fits ? `❌ needs ${r.min_ram_gb} GB RAM` : r.installed ? `✅ <code>${esc(r.command)}</code>` : `<a data-go="freemodels">＋ Add</a>`;
+    : !r.fits ? `${I('xCircle')} needs ${r.min_ram_gb} GB RAM` : r.installed ? `${I('checkCircle')} <code>${esc(r.command)}</code>` : `<a data-go="freemodels">${I('plus')} Add</a>`;
   page.innerHTML = `
     ${card(hasFree ? 'Claude vs free models' : `${esc(agentWord())} models side by side`, `<div id="cmp"></div>`, {flush: 1, badge: BADGE.recommendation,
       hint: hasFree ? `This machine: ${esc(d.os)}, ${d.ram_gb} GB RAM` : 'List prices, your usage in range', footer: esc(d.note)})}
@@ -3154,9 +3226,9 @@ VIEWS.toolkit = async (page) => {
         <span class="spacer"></span><span class="note">${fmtInt(m.sessions)} sessions · ${esc(m.projects.join(', '))}</span></div>
         <div class="dt">${esc(m.what)}</div>
         ${m.evidence.length ? `<div class="dt note">Seen: ${ev(m.evidence)}</div>` : ''}
-        ${m.installed ? '<div class="dt">✅ Already connected</div>' : `
+        ${m.installed ? '<div class="dt">' + I('checkCircle') + ' Already connected</div>' : `
         <div class="dt"><code>${esc(m.command)}</code></div>
-        <div><button class="act" data-mcp="${esc(m.id)}">＋ Add to Claude</button><span class="mcp-out"></span></div>`}
+        <div><button class="act" data-mcp="${esc(m.id)}">${I('plus')} Add to Claude</button><span class="mcp-out"></span></div>`}
       </div>`).join('') || '<div class="empty">No recurring pattern points to an MCP server</div>'}</div>`,
       {badge: BADGE.recommendation})}
     ${card('Skills from what you repeat', `<div class="stack">${d.skills.map((s, i) => `
@@ -3164,13 +3236,13 @@ VIEWS.toolkit = async (page) => {
         <span class="spacer"></span><span class="note">${fmtInt(s.sessions)} sessions · ${fmtInt(s.runs)} runs · ${esc(s.projects.join(', '))}</span></div>
         <div class="dt">${esc(s.what)}</div>
         <div class="dt note">Examples: ${ev(s.examples.slice(0, 2))}</div>
-        ${s.installed ? '<div class="dt">✅ Skill exists</div>' : `<div><button class="act" data-skill="${i}">＋ Create skill</button><span class="sk-out"></span></div>`}
+        ${s.installed ? '<div class="dt">' + I('checkCircle') + ' Skill exists</div>' : `<div><button class="act" data-skill="${i}">${I('plus')} Create skill</button><span class="sk-out"></span></div>`}
       </div>`).join('') || '<div class="empty">Nothing repeats often enough yet</div>'}</div>`,
       {badge: BADGE.recommendation, hint: `Created in ${d.skills_dir}; edit the SKILL.md afterwards`})}`;
   page.querySelectorAll('[data-skill]').forEach(b => b.onclick = async () => {
     const out = b.nextElementSibling; b.disabled = true;
     try { const r = await doAction('skill', d.skills[+b.dataset.skill]);
-      out.innerHTML = ` ✅ Created <code>${esc(r.path)}</code>. Use it with <code>${esc(r.use)}</code>.`; }
+      out.innerHTML = ` ${I('checkCircle')} Created <code>${esc(r.path)}</code>. Use it with <code>${esc(r.use)}</code>.`; }
     catch (e) { out.textContent = ' ' + e.message; b.disabled = false; }
   });
   page.querySelectorAll('[data-mcp]').forEach(b => b.onclick = async () => {
@@ -3184,7 +3256,7 @@ VIEWS.toolkit = async (page) => {
       body[n.field] = out.querySelector(`[data-need="${n.field}"]`).value;
     }
     b.disabled = true;
-    try { const r = await doAction(`mcp/${m.id}`, body); out.innerHTML = ` ✅ Added. ${esc(r.next)}`; }
+    try { const r = await doAction(`mcp/${m.id}`, body); out.innerHTML = ` ${I('checkCircle')} Added. ${esc(r.next)}`; }
     catch (e) { out.textContent = ' ' + e.message; b.disabled = false; }
   });
 };
@@ -3197,7 +3269,7 @@ VIEWS.cloud = async (page) => {
   const gap = (t.billed_claude_cost || 0) - (t.local_claude_cost || 0);
   const setup = Object.entries(pv).map(([k, p]) => `
     <div class="item sev-${cfg[k] ? 'low' : 'medium'}">
-      <div class="hd">${cfg[k] ? '✓' : '○'} ${esc(p.name)}<span class="spacer"></span>
+      <div class="hd">${I(cfg[k] ? 'check' : 'circle')} ${esc(p.name)}<span class="spacer"></span>
         <span class="note">${cfg[k] ? 'key found' : 'no key'}</span></div>
       <div class="dt"><b>Gives you:</b> ${esc(p.covers)}</div>
       <div class="dt"><b>Get a key:</b> ${esc(p.how)}</div>
@@ -3210,7 +3282,7 @@ VIEWS.cloud = async (page) => {
       Nothing is fetched until you click Refresh.
       <span class="spacer"></span>
       <span class="note">Last fetched: ${esc(d.fetched_at || 'never')}</span>
-      <button class="act" id="cl-sync" ${none ? 'disabled title="Add a key first"' : ''}>↯ Refresh from APIs</button></div>
+      <button class="act" id="cl-sync" ${none ? 'disabled title="Add a key first"' : ''}>${I('cloudDown')} Refresh from APIs</button></div>
     <div id="cl-log"></div>
     ${Object.keys(d.errors).length ? `<div class="note sev-high">${Object.entries(d.errors)
       .map(([k, v]) => `<div><b>${esc(k)}</b>: ${esc(v)}</div>`).join('')}</div>` : ''}
@@ -3273,7 +3345,7 @@ VIEWS.cloud = async (page) => {
       render();
     } catch (e) {
       $('#cl-log', page).innerHTML = `<div class="note sev-high">Failed: ${esc(e.message)}</div>`;
-      btn.disabled = false; btn.textContent = '↯ Refresh from APIs';
+      btn.disabled = false; btn.innerHTML = `${I('cloudDown')} Refresh from APIs`;
     }
   };
 };
@@ -3295,11 +3367,11 @@ const TOUR_WELCOME = [
     act: 'Click <b>Codex</b> or <b>All</b> to switch.'},
   {el: '[data-range]', t: 'Date range & filters', see: 'Range chips, plus Model, Project, Category and Threshold filters.',
     get: 'Narrow any dashboard to a period, a model or a project.',
-    act: 'Try <b>7 days</b>, then open <b>Project ▾</b> to focus on one repo.'},
+    act: `Try <b>7 days</b>, then open <b>Project ${I('chevDown')}</b> to focus on one repo.`},
   {el: '#gsearch', t: 'Search', see: 'Search across prompts, sessions, models and dates.',
     get: 'Jump straight to the prompt or session you remember.', act: 'Type a word from a recent prompt and press Enter.'},
   {el: '#sync', t: 'Keep it current', see: 'Sync re-reads every agent\'s local data.',
-    get: 'Fresh numbers after you\'ve been working.', act: 'Click <b>⟳ Sync</b> whenever the numbers look stale.'},
+    get: 'Fresh numbers after you\'ve been working.', act: `Click <b>${I('sync')} Sync</b> whenever the numbers look stale.`},
   {el: '#tour-btn', t: 'Tour any dashboard', see: 'This button starts a tour of the dashboard you\'re on.',
     get: 'A short explanation of each section: what it shows, what you get, what you can do.',
     act: 'Open any dashboard and click <b>? Tour</b> to replay it. Next: this dashboard.'},
@@ -3332,13 +3404,13 @@ const TOURS = {
     {el: 'card:What each agent records', t: 'What each agent records', see: 'Which fields each agent writes to disk on this machine.', get: 'Why some dashboards are hidden for some agents: the data simply isn\'t recorded.', act: 'Check here first when a number reads "not recorded".'}],
   live: [
     {el: 'kpis', t: 'Running now', see: 'Sessions running right now, which are working (spending) at this moment, the largest live context and what live sessions have spent.', get: 'What is costing you money this second.', act: 'Only <b>working</b> sessions consume tokens; idle ones cost again on your next message.'},
-    {el: '#live-refresh', t: 'Refresh & the rules', see: 'The note explains what Interrupt, Close and Force kill do, and how non-Claude agents are detected.', get: 'Confidence before you stop something.', act: 'Click <b>↻ Refresh</b> for the latest state.'},
+    {el: '#live-refresh', t: 'Refresh & the rules', see: 'The note explains what Interrupt, Close and Force kill do, and how non-Claude agents are detected.', get: 'Confidence before you stop something.', act: `Click <b>${I('reload')} Refresh</b> for the latest state.`},
     {el: '.item[data-i]', t: 'A session', see: 'Agent, project, context size, steps, cost and last activity, plus advice when a session gets heavy.', get: 'Control over sessions that are quietly growing expensive.', act: 'Interrupt, Close or Force kill it (each needs two clicks), copy its resume command, or <b>Hand over</b> a Claude session to a fresh one.'}],
   scorecard: [
     {el: 'card:AI FinOps Score', t: 'Your score', see: 'The overall score with a component breakdown: cache use, model mix, waste and budget.', get: 'Where your habits are strong and where they cost money.', act: 'Hover a component to see how it is calculated.'},
-    {el: 'card:✅ What is good', t: 'What is good', see: 'The components you already score well on.', get: 'The habits worth keeping.', act: 'Keep these when you change your setup.'},
-    {el: 'card:⚠️ Needs attention', t: 'Needs attention', see: 'The components dragging the score down.', get: 'A short list of what to fix.', act: 'Start at the top: it carries the most weight.'},
-    {el: 'card:🎯 Biggest opportunity', t: 'Biggest opportunity', see: 'The single change that would move the score most.', get: 'One concrete action grounded in observed spend.', act: 'Apply it, then Sync and re-check the score.'}],
+    {el: 'card:What is good', t: 'What is good', see: 'The components you already score well on.', get: 'The habits worth keeping.', act: 'Keep these when you change your setup.'},
+    {el: 'card:Needs attention', t: 'Needs attention', see: 'The components dragging the score down.', get: 'A short list of what to fix.', act: 'Start at the top: it carries the most weight.'},
+    {el: 'card:Biggest opportunity', t: 'Biggest opportunity', see: 'The single change that would move the score most.', get: 'One concrete action grounded in observed spend.', act: 'Apply it, then Sync and re-check the score.'}],
   usage: [
     {el: 'kpis', t: 'Token breakdown', see: 'Total, input, output, thinking, cache read and cache write tokens, plus requests, sessions, prompts and active days.', get: 'Exactly which kind of token you spend on. Cache read is cheap; uncached input is not.', act: 'Compare cache read against input: a low ratio means context is being re-sent, not reused.'},
     {el: 'card0', t: 'Usage over time', see: 'Tokens or cost per day (or per hour on short ranges).', get: 'Spikes and quiet periods at a glance.', act: 'Hover a bar for the day\'s numbers; narrow the range to zoom in.'},
@@ -3349,7 +3421,7 @@ const TOURS = {
     {el: 'card0', t: 'Allowance gauges', see: 'One gauge per allowance you configured: cost, tokens or requests.', get: 'How much of each limit is gone, and how many days it lasts at this rate.', act: 'Set your limits in config/settings.json to make these exact.'},
     {el: 'card:Daily consumption within the billing period', t: 'Daily consumption', see: 'Each day of the billing period against the pace you\'d need to stay inside the limit.', get: 'Which days pushed you off pace.', act: 'Hover a bar to see that day against the target line.'}],
   models: [
-    {el: 'kpis', t: 'Model headlines', see: 'How many models you used and what the mix costs.', get: 'A first read on whether the mix is right.', act: 'Filter to one model with <b>Model ▾</b> above.'},
+    {el: 'kpis', t: 'Model headlines', see: 'How many models you used and what the mix costs.', get: 'A first read on whether the mix is right.', act: `Filter to one model with <b>Model ${I('chevDown')}</b> above.`},
     {el: 'card:Cost share', t: 'Cost share', see: 'Spend split across models.', get: 'The model that owns your bill.', act: 'Check whether that model is doing work a cheaper one could.'},
     {el: 'card:Token share', t: 'Token share', see: 'The same split by tokens instead of money.', get: 'The gap between the two charts is the price difference at work.', act: 'A model with a small token share but a big cost share is your expensive one.'},
     {el: 'card:Model FinOps table', t: 'Model FinOps table', see: 'Per model: cost, tokens, context, output and cost per 1K output.', get: 'What each model really costs for the work you give it.', act: 'Sort by cost per 1K output, then open <b>Model switch</b>.'},
@@ -3420,12 +3492,12 @@ const TOURS = {
     {el: 'card:Sessions ranked', t: 'Sessions', see: 'Each session\'s context trajectory and what it spent after crossing the threshold.', get: 'The sessions where a fresh start would have mattered most.', act: 'Click a row for its trajectory; alt-click to open the session.'}],
   waste: [
     {el: 'kpis', t: 'Waste headlines', see: 'Estimated excess, exposed spend, and how many prompts, sessions and rules are involved.', get: 'An honest estimate of avoidable spend.', act: '<b>Exposed</b> is what flagged work cost in total; <b>excess</b> is how much more than a fair baseline.'},
-    {el: 'card:🔴 High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},
-    {el: 'card:🟡 Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of opportunities.', act: 'Batch these into one config change.'},
-    {el: 'card:⚪ Low-priority observations', t: 'Low-priority observations', see: 'Small findings, kept for completeness.', get: 'Context for the numbers above.', act: 'Skim them; act only if one matches a habit you want to change.'}],
+    {el: 'card:High waste', t: 'High waste', see: 'The rules that fired hardest: repeated reads, retries, stale sessions.', get: 'The costly patterns, each with the baseline it is measured against.', act: 'Open <b>Show flagged items</b> to see the evidence, then fix these first.'},
+    {el: 'card:Optimization opportunities', t: 'Medium findings', see: 'Patterns worth changing but not urgent.', get: 'The next tier of opportunities.', act: 'Batch these into one config change.'},
+    {el: 'card:Low-priority observations', t: 'Low-priority observations', see: 'Small findings, kept for completeness.', get: 'Context for the numbers above.', act: 'Skim them; act only if one matches a habit you want to change.'}],
   freemodels: [
     {el: 'card:How to use and test a free model', t: 'How it works', see: 'How to plug a local or free cloud model into Claude Code, and how to test it.', get: 'Zero-cost options for simple or private work.', act: 'Read the RAM guidance before you pick a model.'},
-    {el: 'card1', t: 'A model', see: 'Each model with its size, RAM needs, strengths and limits.', get: 'A realistic idea of what runs on your machine.', act: 'Click <b>＋ Add</b> on a model that fits your RAM.'}],
+    {el: 'card1', t: 'A model', see: 'Each model with its size, RAM needs, strengths and limits.', get: 'A realistic idea of what runs on your machine.', act: `Click <b>${I('plus')} Add</b> on a model that fits your RAM.`}],
   compare: [
     {el: 'card0', t: 'Models side by side', see: 'Price, context window, ratings and your own usage per model.', get: 'A clear pick for each kind of work.', act: 'Sort by output price, the one that usually dominates the bill.'},
     {el: 'card:Use Claude for', t: 'Use the big model for', see: 'The work that genuinely needs a top model.', get: 'Where paying more actually pays off.', act: 'Keep multi-file and agentic work here.'},
@@ -3450,7 +3522,7 @@ const TOURS = {
     {el: 'card:Budget vs actual vs forecast', t: 'Budget vs actual', see: 'Each budget line with its budget, actual, forecast and variance.', get: 'A warning before you overspend, not after.', act: 'Watch the variance column: a positive forecast variance means trouble.'},
     {el: 'card:Configure budgets', t: 'Configure budgets', see: 'Your budget lines, limits and alert thresholds.', get: 'Numbers that make the forecast and burn dashboards meaningful.', act: 'Edit a budget and save; every dashboard picks it up.'}],
   cloud: [
-    {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: 'Click <b>↯ Refresh from APIs</b> to fetch — this is the only page that goes online.'},
+    {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
     {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Run claude-finops --set-key, or set the environment variable, then restart.'},
     {el: 'card:Billed vs local', t: 'The comparison', see: 'Billed totals against local totals for the same period.', get: 'Proof of how much of the bill this machine explains.', act: 'A large gap means most spend happens elsewhere: check the user tables.'},
     {el: 'card:Claude Code users', t: 'Users org-wide', see: 'Each Claude Code user in the organisation and their usage.', get: 'Who drives the bill across the team.', act: 'Compare your own row with the team average.'},
@@ -3533,7 +3605,7 @@ function showStep() {
   const last = i === steps.length - 1;
   pop.innerHTML = `
     <div class="tour-hd"><span class="tour-n">${esc(name)} · ${i + 1} / ${steps.length}</span>
-      <button class="tour-x" data-t="skip" title="Close (Esc)">✕</button></div>
+      <button class="tour-x" data-t="skip" title="Close (Esc)">${I('x')}</button></div>
     <h4>${esc(s.t)}</h4>
     ${s.see ? `<div class="tour-row"><b>What you see</b><span>${s.see}</span></div>` : ''}
     ${s.get ? `<div class="tour-row"><b>What you get</b><span>${s.get}</span></div>` : ''}

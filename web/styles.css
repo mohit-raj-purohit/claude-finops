@@ -590,3 +590,18 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .recent-pv { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .live-dot { width:8px; height:8px; border-radius:50%; background:var(--axis); flex:none; }
 .live-dot.busy, .recent-it .hd > .live-dot[title="Running now"] { background:var(--s1); }
+
+/* Flat line icons from I() in app.js, sized to the text they sit beside. */
+.i { width:1.1em; height:1.1em; vertical-align:-.2em; fill:none; stroke:currentColor; stroke-width:1.9;
+     stroke-linecap:round; stroke-linejoin:round; flex:none; }
+.i.fill { fill:currentColor; stroke:none; }
+.i.dot { stroke:none; width:1em; height:1em; vertical-align:-.15em; }
+.i.dot.green { fill:var(--good); } .i.dot.yellow { fill:var(--warning); } .i.dot.orange { fill:var(--serious); }
+.i.dot.red { fill:var(--critical); } .i.dot.grey { fill:var(--muted); }
+.nav a .ic { width:16px; display:inline-flex; justify-content:center; }
+.nav a .ic .i { width:15px; height:15px; }
+.mag .i { display:block; width:14px; height:14px; }
+.card > header h3 .i { margin-right:6px; }
+.actnow-it .ai .i { width:17px; height:17px; vertical-align:middle; }
+.focus-hd .i { align-self:center; }
+.status .glyph .i { display:block; width:10px; height:10px; }
