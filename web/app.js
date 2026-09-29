@@ -91,7 +91,7 @@ const vsYesterday = o => {
 };
 function kpi(label, value, detail, opts = {}) {
   const na = value == null;
-  return `<div class="kpi${na ? ' na' : ''}">
+  return `<div class="kpi${na ? ' na' : ''}${opts.tone && !na ? ' tone-' + opts.tone : ''}"${opts.title ? ` title="${esc(opts.title)}"` : ''}>
     <div class="l">${esc(label)}${opts.badge ? ' ' + opts.badge : ''}</div>
     <div class="v${opts.small ? ' sm' : ''}">${na ? esc(naLabel()) : value}</div>
     ${detail ? `<div class="d">${detail}</div>` : ''}</div>`;
@@ -161,6 +161,31 @@ const NAV = [
   ]],
 ];
 
+// Toolbar icons: 24px line icons drawn in currentColor, so they follow the theme.
+const toolIcon = d => `<svg viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  tour: toolIcon('<circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.1 6.3-6.3 2.1 2.1-6.3z"/>'),
+  recent: toolIcon('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>'),
+  eye: toolIcon('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
+  eyeOff: toolIcon('<path d="M10.7 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a18 18 0 0 1-2.2 3.2"/><path d="M6.6 6.6A17.6 17.6 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m2 2 20 20"/>'),
+  moon: toolIcon('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+  sun: toolIcon('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  reload: toolIcon('<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>'),
+  // Sync pulls transcripts into the warehouse: a database with an arrow going in.
+  sync: toolIcon('<ellipse cx="11" cy="5" rx="7" ry="3"/><path d="M4 5v6c0 1.66 3.13 3 7 3"/><path d="M4 11v6c0 1.66 3.13 3 7 3"/><path d="M18 5v5"/><path d="M19 13v8"/><path d="m16 18 3 3 3-3"/>'),
+};
+
+// The theme button shows the theme it switches to: a moon in light mode, a sun in dark.
+function themeLabel() {
+  const b = $('#theme'); if (!b) return;
+  const cur = document.documentElement.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const to = cur === 'dark' ? 'light' : 'dark';
+  b.innerHTML = to === 'dark' ? ICON.moon : ICON.sun;
+  b.title = `Switch to ${to} theme`;
+  b.setAttribute('aria-label', b.title);
+}
+
 function shell() {
   document.body.innerHTML = `<div class="app">
     <aside class="sidebar">
@@ -175,18 +200,21 @@ function shell() {
     <div class="main">
       <header class="topbar">
         <div class="r1">
-          <h1 id="ttl">Executive overview</h1>
-          <div class="crumbs" id="crumbs"></div>
+          <div class="ttl-block"><h1 id="ttl">Executive overview</h1>
+            <div class="crumbs" id="crumbs"></div></div>
+          <div class="scope" id="scope" aria-label="Totals for the current filters"></div>
           <span class="spacer"></span>
           <div class="search"><span class="mag">⌕</span>
-            <input id="gsearch" placeholder="Search prompts, sessions, models, dates…"></div>
+            <input id="gsearch" placeholder="Search prompts, sessions, models…"></div>
           <button class="iconbtn upd" id="upd" hidden></button>
-          <button class="iconbtn" id="tour-btn" title="Walk through this dashboard">? Tour</button>
-          <button class="iconbtn" id="recent-btn" title="Past sessions and prompts, from any page (R)">☰ Recent</button>
-          <button class="iconbtn" id="mask"></button>
-          <button class="iconbtn" id="theme" title="Toggle theme">◐</button>
-          <button class="iconbtn" id="refresh" title="Reload data">↻</button>
-          <button class="act" id="sync" title="Re-read every agent's local data so the dashboard is current">⟳ Sync</button>
+          <div class="tools">
+            <button class="iconbtn" id="tour-btn" title="Walk through this dashboard">${ICON.tour}Tour</button>
+            <button class="iconbtn sq" id="recent-btn" title="Recent sessions and prompts, from any page (R)" aria-label="Recent">${ICON.recent}</button>
+            <button class="iconbtn sq" id="mask"></button>
+            <button class="iconbtn sq" id="theme"></button>
+            <button class="iconbtn sq" id="refresh" title="Reload this page's numbers from the warehouse. To pick up new sessions, use Sync" aria-label="Reload view">${ICON.reload}</button>
+          </div>
+          <button class="act sync" id="sync" title="Re-read every agent's transcripts from disk into the warehouse">${ICON.sync}Sync</button>
         </div>
         <div class="filters" id="filters"></div>
       </header>
@@ -202,8 +230,10 @@ function shell() {
       : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('finops-theme', next);
+    themeLabel();
     render();
   };
+  themeLabel();
   $('#refresh').onclick = () => { bust(); render(); };
   maskLabel();
   $('#mask').onclick = () => {
@@ -222,11 +252,73 @@ function shell() {
       else if (S.view === 'search') go('overview'); }, 260); };
 }
 
+// The page loader: a skeleton in the shape of a dashboard (KPI row, two charts, a table)
+// so the layout doesn't jump when data lands, plus a status line that says what is
+// happening and, on a slow query, how long it has taken.
+const LOADER_STEPS = ['Reading the warehouse', 'Pricing every request', 'Adding up tokens and cache',
+  'Grouping by session and project', 'Drawing the charts'];
+const LOADER_TIPS = ['Press R anywhere to open Recent sessions.',
+  'Click any row in a table to open its details.',
+  'The eye button hides prompt text before you share your screen.',
+  '"Actual" numbers come from transcripts; "Estimated" ones use list prices.',
+  'Tour walks you through whichever dashboard you are on.'];
+function pageLoader() {
+  const bone = (w, h = 10) => `<i class="bone" style="width:${w};height:${h}px"></i>`;
+  const bars = [38, 62, 45, 80, 56, 90, 70, 48, 66, 84, 58, 74]
+    .map((v, i) => `<i style="height:${v}%;animation-delay:${i * 70}ms"></i>`).join('');
+  return `<div class="pl" role="status" aria-live="polite">
+    <div class="pl-status"><span class="pl-mark"><i></i><i></i><i></i></span>
+      <span class="pl-msg">${LOADER_STEPS[0]}…</span><span class="pl-time"></span></div>
+    <div class="grid g4">${Array.from({length: 4}, () =>
+      `<div class="kpi skel">${bone('55%', 8)}${bone('45%', 22)}${bone('70%', 8)}</div>`).join('')}</div>
+    <div class="grid g2">
+      <div class="card skel"><div class="body">${bone('35%', 10)}<div class="pl-bars">${bars}</div></div></div>
+      <div class="card skel"><div class="body">${bone('30%', 10)}<div class="pl-bars alt">${bars}</div></div></div>
+    </div>
+    <div class="card skel"><div class="body">${bone('25%', 10)}
+      ${Array.from({length: 4}, (_, i) => `<div class="pl-row">${bone(`${60 - i * 8}%`)}${bone('12%')}${bone('9%')}</div>`).join('')}
+    </div></div>
+    <div class="pl-tip">Tip: ${esc(LOADER_TIPS[Math.floor(Math.random() * LOADER_TIPS.length)])}</div>
+  </div>`;
+}
+function loaderTicker(page) {
+  const t0 = Date.now();
+  let i = 0;
+  const id = setInterval(() => {
+    const msg = page.querySelector('.pl-msg');
+    if (!msg || !page.isConnected) return clearInterval(id);   // the view has rendered
+    i = Math.min(i + 1, LOADER_STEPS.length - 1);
+    msg.textContent = LOADER_STEPS[i] + '…';
+    const s = Math.round((Date.now() - t0) / 1000);
+    if (s >= 3) page.querySelector('.pl-time').textContent = `${s}s · large ranges take a little longer`;
+  }, 1100);
+}
+
+// Headline totals for whatever the filters select, on every page, so a number
+// on the page can always be read against the whole it came from.
+async function scopeStrip() {
+  const el = $('#scope'); if (!el) return;
+  const key = qs();
+  el.dataset.key = key;
+  let o;
+  try { o = await api('overview'); } catch { el.innerHTML = ''; return; }
+  if (el.dataset.key !== key) return;   // the filters moved on while this loaded
+  const cell = (l, v, t) => `<div class="sc"${t ? ` title="${esc(t)}"` : ''}><span>${l}</span><b>${v}</b></div>`;
+  el.innerHTML =
+    cell('Est. spend', fmtUSD(o.est_cost_usd), 'Estimated at list prices for the current filters') +
+    cell('Sessions', fmtInt(o.sessions)) +
+    cell('Prompts', fmtInt(o.prompts)) +
+    cell('Requests', fmtNum(o.requests), fmtInt(o.requests) + ' model requests') +
+    cell('Active days', fmtInt(o.active_days));
+}
+
 function maskLabel() {
   const b = $('#mask');
-  b.textContent = MASKED ? '◌ Show prompts' : '◉ Hide prompts';
+  // The icon shows the current state: an open eye while prompts are visible.
+  b.innerHTML = MASKED ? ICON.eyeOff : ICON.eye;
   b.title = MASKED ? 'Prompt text is hidden. Click to show it'
     : 'Hide prompt text and session titles, e.g. before sharing your screen';
+  b.setAttribute('aria-label', MASKED ? 'Show prompts' : 'Hide prompts');
   b.setAttribute('aria-pressed', MASKED);
   b.classList.toggle('on', MASKED);
 }
@@ -275,14 +367,13 @@ function filterBar() {
   const nSel = a => a.length ? `<span class="n">${a.length}</span>` : '';
   const ag = o.agents || [];
   $('#filters').innerHTML = `
-    ${ag.length > 1 ? `<span class="note" style="margin-right:2px">Agent</span>
-      ${ag.map(a => `<button class="chip ${f.agents.includes(a.id) ? 'on' : ''}" data-agent="${esc(a.id)}"
-        title="${esc(a.note)}${a.requests ? '' : ' (no usage recorded)'}">${esc(a.name)}${a.requests ? '' : ' ·'}</button>`).join('')}
-      <button class="chip ${f.agents.length === ag.length ? 'on' : ''}" data-agent="*" title="Every agent together">All</button>
-      <span class="divider"></span>` : ''}
-    ${RANGES.map(([k, l]) => `<button class="chip ${S.range === k ? 'on' : ''}"
-      data-range="${k}">${l}</button>`).join('')}
-    <span class="divider"></span>
+    ${ag.length > 1 ? `<div class="seg" role="group" aria-label="Agent"><span class="seg-l">Agent</span>
+      ${ag.map(a => `<button class="${f.agents.includes(a.id) ? 'on' : ''}" data-agent="${esc(a.id)}"
+        title="${esc(a.note)}${a.requests ? '' : ' (no usage recorded)'}. Cmd/Shift-click to combine">${esc(a.name)}${a.requests ? '' : ' ·'}</button>`).join('')}
+      <button class="${f.agents.length === ag.length ? 'on' : ''}" data-agent="*" title="Every agent together">All</button></div>` : ''}
+    <div class="seg" role="group" aria-label="Date range"><span class="seg-l">Range</span>
+    ${RANGES.map(([k, l]) => `<button class="${S.range === k ? 'on' : ''}"
+      data-range="${k}">${l}</button>`).join('')}</div>
     <div class="chipsel"><button class="chip ${f.models.length ? 'on' : ''}" data-pop="models">
       Model ${nSel(f.models)} ▾</button></div>
     <div class="chipsel"><button class="chip ${f.projects.length ? 'on' : ''}" data-pop="projects">
@@ -291,13 +382,14 @@ function filterBar() {
       Category ${nSel(f.categories)} ▾</button></div>
     <div class="chipsel"><button class="chip ${(f.min_cost || f.min_tokens) ? 'on' : ''}"
       data-pop="thresholds">Thresholds ▾</button></div>
-    <button class="chip ${f.include_sandbox ? '' : 'on'}" id="sbx">
-      ${f.include_sandbox ? 'Including' : 'Excluding'} sandbox agents</button>
+    <button class="chip toggle ${f.include_sandbox ? '' : 'on'}" id="sbx" role="switch" aria-checked="${!f.include_sandbox}"
+      title="Sandbox agents are throwaway projects. ${f.include_sandbox ? 'They are included; click to leave them out' : 'They are left out; click to include them'}">
+      <i></i>Hide sandbox</button>
     ${(f.models.length || f.projects.length || f.categories.length || f.min_cost || f.min_tokens)
-      ? '<button class="chip" id="clr">Clear ✕</button>' : ''}
+      ? '<button class="chip clr" id="clr">Clear filters ✕</button>' : ''}
     <span class="spacer"></span>
-    <span class="note">${o.date_range.first} → ${o.date_range.last} ·
-      ${esc(o.meta.transcript_files)} transcripts · built ${esc((o.meta.built_at||'').slice(0,16).replace('T',' '))}</span>`;
+    <span class="coverage" title="Data in the warehouse · last rebuilt ${esc((o.meta.built_at||'').slice(0,16).replace('T',' '))}">
+      ${esc(o.meta.transcript_files)} transcripts · since ${esc(o.date_range.first)}</span>`;
 
   $('#filters').querySelectorAll('[data-range]').forEach(b =>
     b.onclick = () => { if (b.dataset.range === 'custom') return openCustom(b);
@@ -1450,6 +1542,12 @@ VIEWS.hygiene = async (page) => {
   const T = hy.thresholds.map(String), kT = String(hy.rank_threshold);
   const K = t => `${Math.round(+t / 1000)}K`;
   const ab = t => hy.above[t];
+  // Colour grade by how much of the spend went to re-sending a large prefix. The bands are
+  // a reading aid, not a verdict: long agentic work legitimately runs at high context.
+  const grade = (v, bands) => v == null ? null
+    : v < bands[0] ? 'good' : v < bands[1] ? 'warning' : v < bands[2] ? 'serious' : 'critical';
+  const SHARE = [25, 50, 75], FIT = [5, 15, 30];
+  const bandTip = b => `Green under ${b[0]}%, amber ${b[0]}–${b[1]}%, orange ${b[1]}–${b[2]}%, red ${b[2]}% and up`;
   page.innerHTML = `
     <div class="note" style="margin:0 0 10px">Everything on this page is observed from your transcripts.
       It shows where spend sat while a large prefix was being re-sent on every turn. It does
@@ -1459,16 +1557,18 @@ VIEWS.hygiene = async (page) => {
       recorded and also counts.</div>
     <div class="grid g4">
       ${T.map(t => kpi(`Spend in requests ≥ ${K(t)} context`, fmtPct(ab(t).share_pct),
-        `${fmtUSD(ab(t).cost_usd)} · ${fmtInt(ab(t).requests)} requests`, {badge: BADGE.actual})).join('')}
+        `${fmtUSD(ab(t).cost_usd)} · ${fmtInt(ab(t).requests)} requests`,
+        {badge: BADGE.actual, tone: grade(ab(t).share_pct, SHARE), title: bandTip(SHARE)})).join('')}
       ${T.map(t => kpi(`Spend after a session first crossed ${K(t)}`, fmtPct(ab(t).share_after_first_cross_pct),
-        `${fmtInt(ab(t).sessions)} of ${fmtInt(hy.sessions)} sessions crossed it`, {badge: BADGE.actual})).join('')}
+        `${fmtInt(ab(t).sessions)} of ${fmtInt(hy.sessions)} sessions crossed it`,
+        {badge: BADGE.actual, tone: grade(ab(t).share_after_first_cross_pct, SHARE), title: bandTip(SHARE)})).join('')}
     </div>
     <div class="grid g3">
       ${kpi('Spend near or over the context window', fmtPct(fit.near_or_over_cost_pct),
         `≥ ${fit.threshold_pct}% of the window in use · ${fmtInt(fit.near_requests + fit.over_requests)} requests`,
-        {badge: BADGE.actual})}
-      ${kpi('Sessions in range', fmtInt(hy.sessions), `${fmtInt(hy.requests)} main-thread requests`, {badge: BADGE.actual})}
-      ${kpi('Spend in range', fmtUSD(hy.cost_usd), 'subagent turns excluded (own prefix)', {badge: BADGE.estimated})}
+        {badge: BADGE.actual, tone: grade(fit.near_or_over_cost_pct, FIT), title: bandTip(FIT)})}
+      ${kpi('Sessions in range', fmtInt(hy.sessions), `${fmtInt(hy.requests)} main-thread requests`, {badge: BADGE.actual, tone: 'info'})}
+      ${kpi('Spend in range', fmtUSD(hy.cost_usd), 'subagent turns excluded (own prefix)', {badge: BADGE.estimated, tone: 'info'})}
     </div>
     ${card('Context per request, most expensive session after ' + K(kT), '<div class="chart" id="hy-traj"></div>',
       {badge: BADGE.actual, hint: 'prompt-side tokens on each request, in order · click a row below to change session'})}
@@ -2608,7 +2708,9 @@ async function render() {
   if (!f.include_sandbox) bits.push('excl. sandbox');
   $('#crumbs').innerHTML = bits.join(' <span style="opacity:.4">·</span> ');
   filterBar();
-  page.innerHTML = '<div class="loading">Computing…</div>';
+  scopeStrip();
+  page.innerHTML = pageLoader();
+  loaderTicker(page);
   updateNavBadges();
   try {
     await (VIEWS[S.view] || VIEWS.overview)(page);
@@ -2892,12 +2994,13 @@ async function syncLabel() {
   const b = $('#sync'); if (!b) return;
   const d = await fetch('/api/sync').then(r => r.json()).catch(() => ({}));
   if (d.job && d.job.state === 'running') return runSync();
-  b.title = `Last synced ${ago(d.built_at)}. Re-read every agent's local data so the dashboard is current`;
-  b.textContent = `⟳ Sync · ${ago(d.built_at)}`;
+  b.title = `Last synced ${ago(d.built_at)}. Re-read every agent's transcripts from disk into the warehouse`;
+  b.classList.remove('busy');
+  b.innerHTML = `${ICON.sync}Sync <span class="ago">· ${ago(d.built_at)}</span>`;
 }
 async function runSync() {
   const b = $('#sync');
-  b.disabled = true; b.textContent = '⟳ Syncing…';
+  b.disabled = true; b.classList.add('busy'); b.innerHTML = `${ICON.sync}Syncing…`;
   try {
     const {job} = await doAction('sync');
     const j = await followJob(job);
@@ -3305,7 +3408,15 @@ const TOURS = {
     {el: 'card:MCP servers', t: 'MCP servers', see: 'Each configured server, whether it was ever called, and its context cost.', get: 'Tool definitions loaded on every request for nothing.', act: 'Remove servers that are configured but never called.'},
     {el: 'card:Connectors', t: 'Connectors', see: 'claude.ai connectors and their share of context.', get: 'The same check for connectors as for MCP servers.', act: 'Disconnect what you don\'t use from this machine.'}],
   hygiene: [
-    {el: 'kpis', t: 'Where spend sat', see: 'The share of spend in requests above each context size, and the share that came after a session first crossed it.', get: 'How much of the bill was re-sending a large prefix.', act: 'A high "after crossing" share means the expensive part of a session was its tail.'},
+    {el: 'kpis', t: 'Where spend sat', see: 'Headline shares of your spend, colour-graded: green is low, amber and orange are rising, red means most of the bill sat there. Hover a card for its bands.', get: 'How much of the bill was re-sending a large prefix.', act: 'Walk through each card with Next; the colour is a reading aid, not a verdict.'},
+    {el: 'kpi:Spend in requests ≥ 100K', t: 'Spend in requests ≥ 100K context', see: 'The share of spend on requests whose prompt side (context re-sent to the model) was 100K tokens or more.', get: 'How much you paid while carrying a big conversation. Every turn re-sends it, so large context costs on every request.', act: 'Red here with a red "after crossing" card means sessions keep going long after they got big.'},
+    {el: 'kpi:Spend in requests ≥ 150K', t: 'Spend in requests ≥ 150K context', see: 'The same share, but for requests at 150K tokens or more.', get: 'The heaviest tier: close to where auto-compaction kicks in.', act: 'Compare with the 100K card: a small gap means sessions that pass 100K usually keep growing to 150K.'},
+    {el: 'kpi:Spend after a session first crossed 100K', t: 'Spend after first crossing 100K', see: 'The share of spend that came after a session first reached 100K, even if a later /compact brought it back down. The detail line counts how many sessions ever crossed it.', get: 'How much of your bill is the long tail of big sessions.', act: 'If this is much higher than the "requests ≥ 100K" card, compaction is working but sessions still run long afterwards.'},
+    {el: 'kpi:Spend after a session first crossed 150K', t: 'Spend after first crossing 150K', see: 'The same, measured from the first time a session reached 150K.', get: 'Spend in sessions that went all the way to the heavy end.', act: 'Few sessions but a high share? Open them in the ranked list below.'},
+    {el: 'kpi:Spend near or over the context window', t: 'Near or over the context window', see: 'The share of spend on requests using 90% or more of the model\'s context window, or going over it.', get: 'Turns that risk truncation or a forced compaction mid-task.', act: 'Anything above amber is worth a look: a /compact or fresh session before you hit the wall keeps the answer quality up.'},
+    {el: 'kpi:Sessions in range', t: 'Sessions in range', see: 'How many sessions and main-thread requests the page is based on (blue: context, not graded).', get: 'The sample size behind the percentages.', act: 'Widen the date range if this is small; a handful of sessions makes the shares jumpy.'},
+    {el: 'kpi:Spend in range', t: 'Spend in range', see: 'Total estimated main-thread spend the shares are taken from. Subagent turns are left out because they run on their own prefix.', get: 'The dollar base: multiply any share above by this to get dollars.', act: 'Marked Estimated because it uses list prices, not your invoice.'},
+    {el: 'card:Context per request', t: 'Context per request', see: 'Prompt-side tokens on every request of one session, in order.', get: 'Where a session grew, and where compaction dropped it back.', act: 'Click a row in the ranked list below to switch session.'},
     {el: 'card:Sessions ranked', t: 'Sessions', see: 'Each session\'s context trajectory and what it spent after crossing the threshold.', get: 'The sessions where a fresh start would have mattered most.', act: 'Click a row for its trajectory; alt-click to open the session.'}],
   waste: [
     {el: 'kpis', t: 'Waste headlines', see: 'Estimated excess, exposed spend, and how many prompts, sessions and rules are involved.', get: 'An honest estimate of avoidable spend.', act: '<b>Exposed</b> is what flagged work cost in total; <b>excess</b> is how much more than a fair baseline.'},
@@ -3363,6 +3474,13 @@ function tourTarget(el) {
   const page = $('#page');
   if (!el) return null;
   if (el === 'kpis') return page?.querySelector('.kpi')?.closest('.grid') || null;
+  // 'kpi:Label start' — one KPI card, matched by the start of its label (badge text ignored).
+  if (el.startsWith('kpi:')) {
+    const want = el.slice(4).trim().toLowerCase();
+    for (const k of page?.querySelectorAll('.kpi') || [])
+      if ((k.querySelector('.l')?.firstChild?.textContent || '').trim().toLowerCase().startsWith(want)) return k;
+    return null;
+  }
   const m = /^card(\d+)$/.exec(el);
   if (m) return page?.querySelectorAll('.card')[+m[1]] || null;
   // 'card:Some title' — match a card by the start of its heading, so a step keeps

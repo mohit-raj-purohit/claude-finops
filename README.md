@@ -318,7 +318,7 @@ agents listed under Multi-agent.
 server binds to `127.0.0.1` only, but treat the database and any export you
 generate as sensitive.
 
-**Hide prompts** in the top bar hides prompt text and session titles as dots,
+**Hide prompts** (the eye icon in the top bar) hides prompt text and session titles as dots,
 for when you share your screen. Session titles fall back to their short id. The
 setting is remembered in that browser. It only changes what the page shows: the
 database and exports still contain the full text.
@@ -364,7 +364,8 @@ files on Windows.
 
 ## Actions (these change your machine, and only when you click)
 
-- **⟳ Sync** (top bar) re-reads `~/.claude` and swaps in fresh data without restarting.
+- **Sync** (top bar, database icon) re-reads `~/.claude` and swaps in fresh data without restarting.
+  The circular-arrow **Reload** next to it only redraws the page from the data already loaded.
 - **Free models** adds a launcher such as `claude-qwen` in `~/.local/bin` that runs Claude Code
   on a free model (Ollama locally, or OpenRouter). It lists every step first, and asks before it
   installs Ollama or downloads a model. Your normal `claude` is unchanged. Edit the list in
@@ -378,7 +379,7 @@ files on Windows.
 - **Hand over / split** (Running sessions) writes a brief of the session to
   `~/.claude/finops-handoffs/` and opens fresh session(s) in new terminals, one per sub-task if
   you list them; it can close the old session (resumable).
-- **☰ Recent** (top bar, or press `R`) opens a side panel on any page: running sessions first,
+- **Recent** (clock icon in the top bar, or press `R`) opens a side panel on any page: running sessions first,
   with Resume, Compact and Stop (Interrupt), then past sessions newest first. Click a session to
   list its prompts, and click a prompt for its full details. Search matches your prompt text.
   It covers all dates but keeps the agent and project filters. Close and Force kill stay on
