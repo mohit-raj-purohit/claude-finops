@@ -1,7 +1,7 @@
 # Session token guard — design
 
 Date: 2026-09-29
-Status: approved in chat, pending spec review
+Status: approved; implemented on feat/session-token-guard
 
 ## Goal
 
@@ -41,10 +41,9 @@ the existing monthly/daily budgets, plan limits, waste rules or alert thresholds
   `hookSpecificOutput.additionalContext` adds a note for Claude.
 - A hook that errors, exits non-zero (other than 2) or times out does not block: the
   action proceeds (fail open).
-- In auto mode, `ask` forces a prompt. Behaviour in `bypassPermissions`,
-  `acceptEdits`, and for tools on the allow list is **not documented** and is verified
-  on a real session during implementation (see Verification); the result is recorded
-  in README and the site docs.
+- In auto mode, `ask` forces a prompt. Verified on Claude Code 2.1.284 (see
+  Verification): the prompt also appears in bypass-permissions mode and for
+  allow-listed tools; `claude -p` refuses the call.
 
 ## Settings
 
@@ -173,9 +172,14 @@ in 30 days are deleted (best effort, at most once per hour, tracked by a marker 
 `pct = 100 * total / budget`.
 
 1. No budget (unset, or project `off`) → allow, no output.
-2. If `asked_at` is set: the user must have approved (a declined ask stops Claude, so
-   no further tool call arrives until they continue). Set `approved_pct = asked_at`,
-   clear `asked_at`.
+2. If `asked_at` is set, look for the result of the tool call that was asked about
+   (`asked_tool`, the `tool_use_id` from stdin) in the lines read this time. A result
+   whose `toolUseResult` is "User rejected tool use" (or whose content says "The user
+   doesn't want to proceed with this tool use") means **declined**: clear `asked_at`, so
+   the next call asks again. Any other result means **approved**: set
+   `approved_pct = asked_at`, clear `asked_at`. No result yet: still pending, so the
+   call is asked about again. (Changed during implementation: treating "the next call"
+   as approval would have counted a decline followed by a new prompt as approval.)
 3. Next ask level: `100` if `approved_pct` is null; else if `after_approval == "once"`
    → none; else `approved_pct + step_pct` (100 → 125 → 150 with the default step).
 4. If a next ask level exists and `pct >= level` → set `asked_at = level`, return
@@ -262,6 +266,21 @@ With a tiny budget (e.g. 50k) on a throwaway project with the guard installed:
 - record whether `ask` prompts under `--dangerously-skip-permissions`, `acceptEdits`
   and for an allow-listed tool. Document the outcome in README and the site's
   configuration/features pages.
+
+### Verification results (2026-09-29, Claude Code 2.1.284, Haiku, 40k budget)
+
+- `claude -p`, default mode and `--dangerously-skip-permissions`: calls 1–2 ran,
+  warnings fired (Claude passed on the `/compact` suggestion), call 3 at 130% was
+  refused (no one to ask).
+- Interactive, default mode, `echo` allow-listed: warnings fired, the ask prompt
+  appeared, approving continued, state recorded `approved_pct: 100` from the
+  transcript, and the next ask was scheduled at 125%.
+- Interactive, `--dangerously-skip-permissions`: the ask prompt appeared
+  ("…76.5k tokens, 191% of its 40k budget. Allow this tool call? Approving continues
+  until 125%.").
+- Test harness note: a Claude Code session started from inside another Claude Code
+  session inherits `CLAUDE_CODE_CHILD_SESSION` and friends and writes no transcript,
+  so the guard (correctly) fails open there. Real sessions are unaffected.
 
 ## Docs and release
 

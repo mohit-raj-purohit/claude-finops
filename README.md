@@ -204,6 +204,13 @@ billed at another model's rate.
   },
   "budgets": { "monthly_usd": null, "daily_usd": null, "per_project_usd": {} },
   "alert_thresholds_pct": [50, 75, 90, 100],
+  "guard": {                         // per-session token budget + the session guard hook
+    "session_tokens": null,          // billable tokens per Claude Code session; null => off
+    "warn_pct": [75, 80],            // warn (never block) as a session crosses these
+    "after_approval": "step",        // "step": ask again every step_pct; "once": never again
+    "step_pct": 25,
+    "projects": {}                   // {"/abs/path": {"session_tokens": n} | {"off": true}}
+  },
   "waste_rules": { /* thresholds for each detector */ },
   "anomaly":    { /* z-score and ratio triggers */ },
   "scorecard":  { /* the reference points each dimension is graded against */ }
@@ -212,6 +219,34 @@ billed at another model's rate.
 
 The **Budgets** view edits limits, budgets and thresholds from the browser and writes
 them back to this file.
+
+### Per-session token budget and the session guard
+
+`guard.session_tokens` is a budget for one Claude Code session, in billable tokens (input +
+output + cache read + cache write, the same figure as the Tokens column in Sessions). Cache
+reads dominate long sessions, which is exactly what a session cap is for. A project override
+(matched on the project path; the most specific path wins) sets a different budget or turns
+it off for that project.
+
+With a budget set, **Budgets** shows the largest session this billing period against its
+budget and how many sessions went over, and the dots in **Sessions** mark sessions at 75%
+(amber) and 100% (red) of theirs.
+
+The **session guard** is an opt-in Claude Code `PreToolUse` hook (`--install-guard`, or
+**Install guard** on the Budgets page). Before each tool call it counts the session's tokens
+from its transcript (only the lines added since the last call), and:
+
+- below the budget, warns you once at each `warn_pct` and suggests `/compact` to Claude;
+- at 100%, asks you to approve the next tool call; after you approve, it asks again every
+  `step_pct` (`"step"`) or not at all for that session (`"once"`). If you decline, it asks
+  again on the next tool call.
+
+Checked on Claude Code 2.1.284: the approval prompt appears in the default mode, in
+`--dangerously-skip-permissions` (bypass) mode, and for tools on your allow list. In
+non-interactive `claude -p` there is nobody to ask, so the tool call is refused. A hook cannot
+end a session, and the guard fails open: if it errors or cannot read the transcript, the tool
+call goes ahead. It keeps a small state file per session in `~/.claude-finops/data/guard/`
+(deleted after 30 days).
 
 Note on `waste_rules.low_output_ratio_vs_median`: sessions are flagged relative to
 *your own* median output ratio rather than an absolute number, because a healthy ratio
@@ -277,6 +312,8 @@ claude-finops --set-key       store a provider API key (hidden prompt, 0600)
 claude-finops --keys          which provider keys are configured
 claude-finops --install-statusline    model, context % and 5-hour limit under every prompt
 claude-finops --uninstall-statusline  remove it again
+claude-finops --install-guard         warn near, and ask at, your per-session token budget
+claude-finops --uninstall-guard       remove it again
 claude-finops --help          everything
 ```
 
@@ -390,6 +427,9 @@ files on Windows.
 - **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
   already have.
+- **Install guard** (Budgets, or `--install-guard`) adds one `PreToolUse` hook entry to
+  `~/.claude/settings.json`, keeping a `.finops-backup` copy. Your other hooks are left
+  alone, and uninstalling removes only that entry.
 
 ---
 
