@@ -468,7 +468,7 @@ function filterBar() {
       ${esc(o.meta.transcript_files)} transcripts · since ${esc(o.date_range.first)}</span>`;
 
   $('#filters').querySelectorAll('[data-range]').forEach(b =>
-    b.onclick = () => { if (b.dataset.range === 'custom') return openCustom(b);
+    b.onclick = e => { if (b.dataset.range === 'custom') { e.stopPropagation(); return openCustom(b); }
       applyRange(b.dataset.range); bust(); render(); });
   $('#filters').querySelectorAll('[data-agent]').forEach(b => b.onclick = e => {
     const id = b.dataset.agent;
@@ -530,13 +530,15 @@ function openPop(btn, kind) {
   }
 }
 function openCustom(btn) {
-  closePops();
-  const pop = h(`<div class="pop"><div class="hd">From</div>
+  const open = btn.parentElement.querySelector('.pop');
+  closePops(); if (open) return;
+  const pop = h(`<div class="pop" style="left:auto;right:0"><div class="hd">From</div>
     <input type="date" id="cs" value="${S.filter.start || S.opts.date_range.first}">
     <div class="hd">To</div>
     <input type="date" id="ce" value="${S.filter.end || S.opts.date_range.last}">
     <button class="chip on" id="ca" style="width:100%;justify-content:center">Apply</button></div>`);
-  btn.parentElement.insertBefore(pop, btn.nextSibling);
+  btn.parentElement.style.position = 'relative';
+  btn.parentElement.appendChild(pop);
   pop.onclick = e => e.stopPropagation();
   pop.querySelector('#ca').onclick = () => {
     S.filter.start = pop.querySelector('#cs').value;
