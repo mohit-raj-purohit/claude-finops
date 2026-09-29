@@ -2010,6 +2010,71 @@ const usageBody = u => {
     <div class="note">${esc(u.note || '')}${u.cached ? ` · read ${dur(u.age_s)} ago` : ''}${u.stale
       ? ` · <b>last good read</b> (refresh failed: ${esc(u.error || '')})` : ''}</div>`;
 };
+/* ---------- one running session's own token limit ---------- */
+function limitBadge(sid) {
+  const o = ((S.opts?.settings?.guard || {}).sessions || {})[sid];
+  if (!o) return '';
+  return o.off ? '<span class="pill" title="The session guard is off for this conversation">Guard off</span>'
+    : `<span class="pill" data-limit-badge="${esc(sid)}" title="This conversation's own token limit">Limit ${esc(fmtNum(o.session_tokens))}</span>`;
+}
+// The Set limit panel: tokens used so far (as the guard counts them), the limit box with
+// suggestions from that number, and save / remove / turn off.
+async function drawLimit(box, x, i) {
+  const sid = x.session_id;
+  box.innerHTML = '<div class="note">Counting this conversation\'s tokens…</div>';
+  let d;
+  try {
+    const r = await fetch(`/api/guard/session/${encodeURIComponent(sid)}`);
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Could not read this session.');
+  } catch (e) { box.innerHTML = `<div class="live-msg err">${esc(e.message)}</div>`; return; }
+  const own = d.limit, id = `lim-${i}`, used = d.tokens || 0;
+  const now = own?.off ? 'The guard is off for this conversation.'
+    : own ? `This conversation's limit: <b>${fmtNum(own.session_tokens)}</b> (${fmtPct(100 * used / own.session_tokens, 0)} used).`
+    : d.applies ? `No limit of its own yet. It uses the per-session budget from Budgets: <b>${fmtNum(d.applies)}</b>.`
+    : 'No limit yet.';
+  box.innerHTML = `<div class="cfg">
+    <div class="fld-hint">Used so far: <b>${fmtNum(used)}</b> tokens. This counts everything the conversation has used,
+      including re-reading its context at every step, so it is much bigger than the context size above.</div>
+    ${d.installed ? '' : `<div class="lb-state warn" style="margin-top:6px">Live warnings are not installed, so a limit
+      here won't do anything yet. <button class="act" data-lim-setup>Set up live warnings</button></div>`}
+    <div class="fld-hint" style="margin-top:6px">${now}</div>
+    ${amountField({id, label: 'Token limit for this conversation', kind: 'tokens', value: own?.session_tokens ?? null,
+      chips: tokChips([[used * 1.1, '+10%'], [used * 1.25, '+25%'], [used * 1.5, '+50%'], [used * 2, '2×']], 3)})}
+    <div class="fld-hint">When this conversation reaches its limit, Claude Code asks you "continue?" before its next
+      step. Your warn percentages from Budgets apply too. The limit is forgotten after 30 days.</div>
+    <div class="live-actions">
+      <button class="act" data-lim-save>Save limit</button>
+      ${own ? '<button class="act ghost" data-lim-rm>Remove limit</button>' : ''}
+      ${own?.off ? '' : '<button class="act ghost" data-lim-off>Turn the guard off for this conversation</button>'}
+      <span class="live-msg" role="status"></span>
+    </div></div>`;
+  const inp = $('#' + id, box), msg = box.querySelector('.live-msg');
+  box.querySelectorAll('[data-fill]').forEach(c => c.onclick = () => {
+    inp.value = shortAmount(+c.dataset.v); inp.dispatchEvent(new Event('input')); });
+  inp.addEventListener('input', () => clearErr(box, id));
+  const setup = box.querySelector('[data-lim-setup]');
+  if (setup) setup.onclick = () => go('budgets');
+  const send = async (body, done) => {
+    try {
+      await doAction(`session_limit/${encodeURIComponent(sid)}`, body);
+      S.opts = await fetch('/api/options').then(r => r.json());
+      const hd = box.closest('.item')?.querySelector('.hd');
+      hd?.querySelectorAll('.pill[title]').forEach(p => p.remove());
+      hd?.querySelector('.spacer')?.insertAdjacentHTML('beforebegin', limitBadge(sid));
+      await drawLimit(box, x, i);
+      const m = box.querySelector('.live-msg'); if (m) { m.classList.add('ok'); m.textContent = done; }
+    } catch (e) { msg.classList.add('err'); msg.textContent = e.message; }
+  };
+  box.querySelector('[data-lim-save]').onclick = () => {
+    const e = amountError(inp) || (inp.value.trim() ? '' : 'Type a limit, or tap a suggestion.');
+    if (e) return setErr(box, id, e);
+    send({session_tokens: parseAmount(inp.value, 'tokens').value}, 'Saved. It applies from the next step.');
+  };
+  box.querySelector('[data-lim-rm]')?.addEventListener('click', () => send({remove: true}, 'Removed.'));
+  box.querySelector('[data-lim-off]')?.addEventListener('click', () => send({off: true}, 'The guard is off for this conversation.'));
+}
+
 VIEWS.live = async (page) => {
   const [res, usage0] = await Promise.all([
     fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
@@ -2045,6 +2110,7 @@ VIEWS.live = async (page) => {
           <span class="pill">${esc(agentName(x.agent))}</span>
           ${esc((!MASKED && x.name) || shortId(x.session_id))} <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
           ${x.hosts_dashboard ? '<span class="status high">runs this dashboard</span>' : ''}
+          ${x.agent === 'claude' ? limitBadge(x.session_id) : ''}
           <span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">${x.context == null ? 'context not recorded' : fmtNum(x.context) + ' context'} · ${fmtInt(x.steps)} steps${x.est_cost_usd == null ? '' : ' · ' + fmtUSD(x.est_cost_usd)}</span></div>
         <div class="dt">${x.status === 'busy' ? '<b>Working now</b>' : 'Idle'}${x.uptime ? ` · up ${esc(x.uptime)}` : ''} ·
@@ -2060,6 +2126,7 @@ VIEWS.live = async (page) => {
           <button class="act danger" data-a="kill">${I('x')} Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}
           ${x.resume ? `<button class="act ghost" data-copy="${esc(x.resume)}">Copy resume command</button>` : ''}
           ${x.agent === 'claude' ? '<button class="act ghost" data-ho="1">' + I('handover') + ' Hand over / split</button>' : ''}
+          ${x.agent === 'claude' && x.session_id ? '<button class="act ghost" data-lim="1">' + I('gauge') + ' Set limit</button>' : ''}
           <span class="live-msg"></span>
         </div>
         ${x.agent !== 'claude' ? '' : `<div class="handover" hidden>
@@ -2074,6 +2141,7 @@ VIEWS.live = async (page) => {
           </div>
           <div class="ho-out note"></div>
         </div>`}
+        ${x.agent === 'claude' && x.session_id ? `<div class="handover limitbox" hidden></div>` : ''}
       </div>`).join('') || `<div class="empty">No ${esc(agentWord())} sessions are running</div>`}</div>`;
   $('#live-refresh', page).onclick = () => render();
   const ub = $('#usage-refresh', page);
@@ -2109,6 +2177,11 @@ VIEWS.live = async (page) => {
     }
     row.querySelectorAll('button.act:not(.ho-go):not(.ho-brief)').forEach(b => {
       if (b.dataset.ho) { b.onclick = () => { ho.hidden = !ho.hidden; if (!ho.hidden) ta.focus(); }; return; }
+      if (b.dataset.lim) {
+        const box = row.querySelector('.limitbox');
+        b.onclick = () => { box.hidden = !box.hidden; if (!box.hidden) drawLimit(box, x, +row.dataset.i); };
+        return;
+      }
       if (b.dataset.copy) { b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); msg.textContent = 'Copied'; } catch { msg.textContent = b.dataset.copy; } }; return; }
       const label = b.textContent;
       b.onclick = async () => {
@@ -2353,10 +2426,10 @@ function parseAmount(raw, kind) {
   const v = parseFloat(m[1]) * ({k: 1e3, m: 1e6, b: 1e9}[(m[2] || '').toLowerCase()] || 1);
   return {value: kind === 'usd' ? Math.round(v * 100) / 100 : Math.round(v)};
 }
-// Round up to two significant figures, so suggestions are round numbers.
-const niceUp = v => {
+// Round up to `sig` significant figures (two by default), so suggestions are round numbers.
+const niceUp = (v, sig = 2) => {
   if (!(v > 0)) return 0;
-  const p = 10 ** (Math.floor(Math.log10(v)) - 1);
+  const p = 10 ** (Math.floor(Math.log10(v)) - sig + 1);
   return Math.ceil(v / p - 1e-9) * p;
 };
 // 8400000 -> "8.4M": compact, and parseAmount reads it back exactly for round numbers.
@@ -2365,14 +2438,14 @@ function shortAmount(v) {
   return u ? +(v / u[0]).toFixed(2) + u[1] : String(Math.round(v));
 }
 // items: a number, or [value, label, title]; data-driven ones are rounded up, zeros dropped
-function suggChips(items, fmt) {
+function suggChips(items, fmt, sig = 2) {
   const seen = new Set();
-  return items.map(it => Array.isArray(it) ? {v: niceUp(it[0]), l: it[1], t: it[2]} : {v: it})
+  return items.map(it => Array.isArray(it) ? {v: niceUp(it[0], sig), l: it[1], t: it[2]} : {v: it})
     .filter(c => c.v > 0 && !seen.has(c.v) && seen.add(c.v))
     .map(c => ({...c, l: c.l ? `${c.l} · ${fmt(c.v)}` : fmt(c.v)}));
 }
 const usdChips = items => suggChips(items, v => '$' + shortAmount(v));
-const tokChips = items => suggChips(items, shortAmount);
+const tokChips = (items, sig) => suggChips(items, shortAmount, sig);
 
 function amountField({id, label, value, kind, zero, chips = [], hint = ''}) {
   const shown = value == null ? '' : kind === 'usd' ? String(value) : Number(value).toLocaleString('en-US');
@@ -2701,7 +2774,7 @@ VIEWS.budgets = async (page) => {
   const planHint = `Your own figure, from your plan or invoice. ${esc(agentWord())} data does not include it.`;
   const stepVal = sg.step_pct ?? 25;
   // Does any per-session budget exist (global or a project override)? The hook needs one.
-  const anyBudget = !!sg.session_tokens || Object.values(sg.projects || {}).some(o => o.session_tokens);
+  const anyBudget = !!sg.session_tokens || [sg.projects, sg.sessions].some(m => Object.values(m || {}).some(o => o.session_tokens));
   const liveBox = () => {
     const on = !!S.opts.guard_installed;
     const state = !on ? `<span class="lb-state">○ Not installed</span>`

@@ -594,11 +594,11 @@ class Analytics:
             r["output_ratio"] = (r["output_tokens"] or 0) / r["tokens"] if r["tokens"] else 0
             cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
             r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
-            r["budget_tokens"] = self.session_budget(r["agent"], r.pop("project_path"))
+            r["budget_tokens"] = self.session_budget(r["agent"], r.pop("project_path"), r["session_id"])
             r["resume"] = resume_command(r["session_id"], r.pop("agent"), r.pop("source_file"))
         return rows
 
-    def session_budget(self, agent, project_path):
+    def session_budget(self, agent, project_path, session_id=None):
         """The per-session token budget that applies to a session, or None.
 
         Claude Code sessions only: the guard hook runs there, and other agents'
@@ -607,7 +607,7 @@ class Analytics:
         if agent != "claude":
             return None
         from .guard import budget_for
-        return budget_for(self.settings.get("guard") or {}, project_path)
+        return budget_for(self.settings.get("guard") or {}, project_path, session_id)
 
     def sessions_total(self, f=None):
         w, p = self.where(f)
@@ -1598,8 +1598,8 @@ class Analytics:
         out["lines"].append(line("Monthly tokens", b.get("monthly_tokens"), period["t"],
                                  fc.get("end_of_period_tokens"), unit="tokens"))
         g = self.settings.get("guard") or {}
-        if g.get("session_tokens") or any(o.get("session_tokens")
-                                          for o in (g.get("projects") or {}).values()):
+        from .guard import has_any_budget
+        if has_any_budget(g):
             out["lines"].append(self._session_budget_line(f, bp, line))
         else:
             out["lines"].append(line("Per-session tokens", None, 0, None, unit="tokens"))
@@ -1654,7 +1654,7 @@ class Analytics:
                       p + [bp["start"], bp["end"]])
         scored = []
         for r in rows:
-            bud = self.session_budget("claude", r.pop("path"))
+            bud = self.session_budget("claude", r.pop("path"), r["session_id"])
             if bud:
                 r["budget"], r["pct"] = bud, round(100.0 * (r["tokens"] or 0) / bud, 1)
                 scored.append(r)

@@ -195,6 +195,58 @@ class TestOverrides(unittest.TestCase):
         self.assertEqual(len(bad), 5)
 
 
+class TestSessionLimit(Base):
+    """A limit set for one running session, from the Running sessions page."""
+
+    def test_session_limit_beats_project_and_global(self):
+        cfg = dict(CFG, projects={"/repo": {"session_tokens": 5000}},
+                   sessions={"s1": {"session_tokens": 300}})
+        self.assertEqual(guard.budget_for(cfg, "/repo", "s1"), 300)
+        self.assertEqual(guard.budget_for(cfg, "/repo", "other"), 5000)
+        self.assertEqual(guard.budget_for(cfg, "/elsewhere", None), 1000)
+
+    def test_off_for_one_session(self):
+        cfg = dict(CFG, sessions={"s1": {"off": True}})
+        self.assertIsNone(guard.budget_for(cfg, "/repo", "s1"))
+        self.append(asst("r1", usage(inp=5000, out=0, cr=0)))
+        self.assertIsNone(self.call(cfg))
+
+    def test_limit_below_current_use_asks_on_the_next_call(self):
+        self.append(asst("r1", usage(inp=900, out=0, cr=0)))
+        cfg = dict(CFG, sessions={"s1": {"session_tokens": 500}})
+        self.assertEqual(self.call(cfg)["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_validation_keeps_good_entries_and_drops_bad_ones(self):
+        g, bad = guard.validate_guard({"sessions": {
+            "s1": {"session_tokens": 10, "set_at": "2026-09-30T00:00:00"},
+            "s2": {"off": True}, "s3": {"session_tokens": -4}, "../x": {"session_tokens": 5}}}, CFG)
+        self.assertEqual(set(g["sessions"]), {"s1", "s2"})
+        self.assertEqual(g["sessions"]["s1"]["session_tokens"], 10)
+        self.assertEqual(len(bad), 2)
+
+    def test_prune_drops_entries_older_than_30_days(self):
+        now = guard.time.time()
+        old = guard.time.strftime("%Y-%m-%dT%H:%M:%S", guard.time.localtime(now - 31 * 86400))
+        new = guard.time.strftime("%Y-%m-%dT%H:%M:%S", guard.time.localtime(now - 86400))
+        kept = guard.prune_sessions({"a": {"session_tokens": 1, "set_at": old},
+                                     "b": {"session_tokens": 1, "set_at": new},
+                                     "c": {"off": True}})
+        self.assertEqual(set(kept), {"b", "c"})
+
+    def test_session_usage_reads_the_whole_session_without_saving_state(self):
+        sub = os.path.join(self.proj, "s1", "subagents")
+        os.makedirs(sub)
+        self.append(asst("r1", usage()), asst("r1", usage()), asst("r2", usage()))
+        self.append(asst("a1", usage()), path=os.path.join(sub, "agent-1.jsonl"))
+        self.assertEqual(guard.session_usage(self.transcript, "s1"), 3000)
+        self.assertFalse(os.path.exists(guard.STATE_DIR))
+
+    def test_find_transcript(self):
+        self.assertEqual(guard.find_transcript("s1", [self.dir]), self.transcript)
+        self.assertIsNone(guard.find_transcript("nope", [self.dir]))
+        self.assertIsNone(guard.find_transcript("../etc", [self.dir]))
+
+
 class TestFailOpen(Base):
     def run_main(self, stdin):
         out = io.StringIO()

@@ -17,6 +17,7 @@ if the guard were not installed.
 import glob
 import json
 import os
+import re
 import sys
 import time
 
@@ -31,6 +32,8 @@ STATE_DIR = os.path.join(DATA_DIR, "guard")
 MAX_READ = 64 * 1024 * 1024      # new bytes read per call; the rest waits for the next call
 STALE_S = 30 * 86400
 SWEEP_S = 3600
+SESSION_KEEP_S = 30 * 86400          # a per-session limit is forgotten after this long
+SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 REJECTED = ("User rejected tool use", "The user doesn't want to proceed with this tool use")
 
 
@@ -69,6 +72,22 @@ def validate_guard(g, default):
                 out[k] = v
             else:
                 bad.append(f"guard.{k}")
+        elif k == "sessions":
+            if not isinstance(v, dict):
+                bad.append(f"guard.{k}")
+                continue
+            sessions = {}
+            for sid, o in v.items():
+                keep = {"set_at": o["set_at"]} if isinstance(o, dict) and isinstance(o.get("set_at"), str) else {}
+                if not SAFE_ID.match(str(sid)):
+                    bad.append(f"guard.sessions.{sid}")
+                elif isinstance(o, dict) and o.get("off") is True:
+                    sessions[sid] = dict(keep, off=True)
+                elif isinstance(o, dict) and _num(o.get("session_tokens")) and o["session_tokens"] > 0:
+                    sessions[sid] = dict(keep, session_tokens=o["session_tokens"])
+                else:
+                    bad.append(f"guard.sessions.{sid}")
+            out[k] = sessions
         elif k == "projects":
             if not isinstance(v, dict):
                 bad.append(f"guard.{k}")
@@ -111,8 +130,33 @@ def _norm(p):
     return os.path.normcase(os.path.realpath(os.path.expanduser(p)))
 
 
-def budget_for(cfg, cwd):
-    """This project's session budget: the most specific override, else the global one."""
+def prune_sessions(sessions, now=None):
+    """Drop per-session limits set more than 30 days ago (entries without a date stay)."""
+    now = now or time.time()
+    out = {}
+    for sid, o in (sessions or {}).items():
+        try:
+            age = now - time.mktime(time.strptime(o["set_at"], "%Y-%m-%dT%H:%M:%S"))
+        except (KeyError, TypeError, ValueError):
+            age = 0
+        if age <= SESSION_KEEP_S:
+            out[sid] = o
+    return out
+
+
+def has_any_budget(cfg):
+    """Is any per-session budget set: global, a project override, or one session's own?"""
+    return bool(cfg.get("session_tokens")) or any(
+        o.get("session_tokens") for sect in ("projects", "sessions")
+        for o in (cfg.get(sect) or {}).values())
+
+
+def budget_for(cfg, cwd, session_id=None):
+    """The budget that applies: this session's own limit, else the most specific
+    project override, else the global one."""
+    own = (cfg.get("sessions") or {}).get(session_id) if session_id else None
+    if own is not None:
+        return None if own.get("off") else own.get("session_tokens")
     best, best_len = None, -1
     if cwd:
         here = _norm(cwd)
@@ -204,6 +248,28 @@ def count_session(transcript_path, session_id, state, pending_tool=None):
         left -= _read_new(path, fs, left, on_row)
     total = sum(sum(f.get("requests", {}).values()) for f in files.values())
     return total, (outcome[-1] if outcome else None)
+
+
+def session_usage(transcript_path, session_id):
+    """The session's billable tokens, counted like the hook does, without saving state."""
+    state = {}
+    while True:
+        before = {p: f.get("offset", 0) for p, f in state.get("files", {}).items()}
+        total, _ = count_session(transcript_path, session_id, state)
+        after = {p: f.get("offset", 0) for p, f in state.get("files", {}).items()}
+        if after == before:                    # nothing new read: the whole session is counted
+            return total
+
+
+def find_transcript(session_id, roots):
+    """<root>/<project>/<session_id>.jsonl for a Claude Code session id, or None."""
+    if not SAFE_ID.match(str(session_id or "")):
+        return None
+    for root in roots:
+        hits = glob.glob(os.path.join(root, "*", f"{session_id}.jsonl"))
+        if hits:
+            return hits[0]
+    return None
 
 
 # ---------------------------------------------------------------- deciding ----
@@ -315,7 +381,7 @@ def run(payload, cfg=None):
     if not session_id or not transcript:
         return None
     cfg = cfg if cfg is not None else load_guard_settings()
-    budget = budget_for(cfg, payload.get("cwd"))
+    budget = budget_for(cfg, payload.get("cwd"), session_id)
     if not budget:
         return None
     os.makedirs(STATE_DIR, exist_ok=True)

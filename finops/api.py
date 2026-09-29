@@ -70,6 +70,81 @@ def _validate_guard(v):
                          "numbers between 0 and 100, after_approval step|once, step_pct 1..1000, "
                          "projects {path: {session_tokens: n} | {off: true}}")
 
+class NotFound(BadRequest):
+    """A 404 raised from a helper; handled next to BadRequest."""
+
+
+def _session_transcript(sid):
+    from . import guard as G
+    from .etl import DEFAULT_SOURCE
+    if not G.SAFE_ID.match(sid or ""):
+        raise BadRequest("That is not a Claude Code session id.")
+    tp = G.find_transcript(sid, [os.environ.get("CLAUDE_PROJECTS") or DEFAULT_SOURCE])
+    if not tp:
+        raise NotFound("No Claude Code transcript found for that session.")
+    return tp
+
+
+def _session_limit_status(a, sid):
+    """GET /api/guard/session/<id>: tokens used so far (as the guard counts them),
+    this session's own limit, the budget that applies, and whether the hook is installed."""
+    from . import guard as G
+    from .integrate import guard_state
+    tp = _session_transcript(sid)
+    cwd = None
+    with open(tp, errors="replace") as fh:
+        for i, line in enumerate(fh):
+            if '"cwd"' in line:
+                try:
+                    cwd = json.loads(line).get("cwd")
+                except ValueError:
+                    pass
+            if cwd or i > 50:
+                break
+    cfg = a.settings.get("guard") or {}
+    try:
+        installed = guard_state() == "installed"
+    except Exception:
+        installed = False
+    return {"session_id": sid, "tokens": G.session_usage(tp, sid),
+            "limit": (cfg.get("sessions") or {}).get(sid), "applies": G.budget_for(cfg, cwd, sid),
+            "installed": installed}
+
+
+def _set_session_limit(sid, payload):
+    """POST /api/do/session_limit/<id>: {session_tokens: n} | {off: true} | {remove: true}."""
+    global A
+    from . import guard as G
+    import time
+    if not G.SAFE_ID.match(sid or ""):
+        raise BadRequest("That is not a Claude Code session id.")
+    if payload.get("remove"):
+        entry = None
+    elif payload.get("off") is True:
+        entry = {"off": True}
+    elif _is_num(payload.get("session_tokens")) and payload["session_tokens"] > 0:
+        entry = {"session_tokens": payload["session_tokens"]}
+    else:
+        raise BadRequest("Enter a token limit above 0, or turn the guard off for this session.")
+    local = {}
+    if os.path.exists(LOCAL_SETTINGS_PATH):
+        with open(LOCAL_SETTINGS_PATH) as fh:
+            local = json.load(fh)
+    g = local.setdefault("guard", {})
+    sessions = dict(g.get("sessions") or {})
+    if entry is None:
+        sessions.pop(sid, None)
+    else:
+        sessions[sid] = dict(entry, set_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    g["sessions"] = G.prune_sessions(sessions)
+    with open(LOCAL_SETTINGS_PATH, "w") as fh:
+        json.dump(local, fh, indent=2)
+    cur = load_settings()
+    with _lock:
+        A.settings = cur
+    return {"ok": True, "limit": g["sessions"].get(sid)}
+
+
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".json": "application/json",
         ".svg": "image/svg+xml", ".ico": "image/x-icon"}
@@ -248,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "settings": cur})
             self.send_json({"error": "unknown endpoint"}, 404)
         except BadRequest as e:
-            self.send_json({"error": str(e)}, 400)
+            self.send_json({"error": str(e)}, 404 if isinstance(e, NotFound) else 400)
         except Exception:
             log.exception("POST %s failed", path)
             self.send_json({"error": "internal error; see data/server.log"}, 500)
@@ -283,6 +358,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["statusline"]:
             from .integrate import install_statusline
             return self.send_json(install_statusline())
+        if len(parts) == 2 and parts[0] == "session_limit":
+            return self.send_json(_set_session_limit(parts[1], payload))
         if len(parts) == 2 and parts[0] == "key":
             from .cloud import save_key, key_status
             value = payload.get("value")
@@ -380,7 +457,7 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except BadRequest as e:
-            self.send_json({"error": str(e) or "bad request"}, 400)
+            self.send_json({"error": str(e) or "bad request"}, 404 if isinstance(e, NotFound) else 400)
         except Exception:
             log.exception("GET %s failed", path)
             self.send_json({"error": "internal error; see data/server.log"}, 500)
@@ -485,6 +562,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not want or any(x != "claude" for x in want) else []
             rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
+        if route.startswith("guard/session/"):
+            return self.send_json(_session_limit_status(a, route[len("guard/session/"):]))
         if route == "keys":
             from .cloud import key_status
             return self.send_json(key_status())

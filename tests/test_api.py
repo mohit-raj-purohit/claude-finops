@@ -276,3 +276,73 @@ class TestBudgetSuggestions(ServerFixture):
         for k in ("spend_30d", "tokens_30d", "daily_avg", "daily_p90", "session_tokens"):
             self.assertIn(k, sg)
         self.assertEqual(sg["session_tokens"], sorted(sg["session_tokens"]))
+
+
+class TestSessionLimitApi(ServerFixture):
+    """Set limit on the Running sessions page: one session's own token limit."""
+
+    def setUp(self):
+        from unittest import mock
+        from finops import guard
+        self.src = tempfile.mkdtemp(prefix="finops-src-")
+        os.makedirs(os.path.join(self.src, "-repo"))
+        with open(os.path.join(self.src, "-repo", "sess-1.jsonl"), "w") as fh:
+            for i in range(3):
+                fh.write(json.dumps({"type": "assistant", "requestId": f"r{i}", "message": {
+                    "id": f"m{i}", "usage": {"input_tokens": 100, "output_tokens": 0}}}) + "\n")
+        self.p = [mock.patch.dict(os.environ, {"CLAUDE_PROJECTS": self.src}),
+                  mock.patch.object(guard, "STATE_DIR", tempfile.mkdtemp(prefix="finops-state-"))]
+        for p in self.p:
+            p.start()
+        if os.path.exists(self.local_settings_path):
+            os.remove(self.local_settings_path)
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+
+    def set(self, sid, body, headers=None):
+        return self.post(f"/api/do/session_limit/{sid}", body, headers=headers or {"X-FinOps-Action": "1"})
+
+    def saved(self):
+        with open(self.local_settings_path) as fh:
+            return json.load(fh)["guard"]["sessions"]
+
+    def test_get_reports_usage_and_limit(self):
+        code, body = self.get("/api/guard/session/sess-1")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["tokens"], 300)
+        self.assertIsNone(body["limit"])
+        self.assertIn("installed", body)
+
+    def test_unknown_session_is_404_and_bad_id_is_400(self):
+        self.assertEqual(self.get("/api/guard/session/nope")[0], 404)
+        self.assertEqual(self.get("/api/guard/session/..%2Fx")[0], 400)
+
+    def test_set_off_and_remove(self):
+        code, body = self.set("sess-1", {"session_tokens": 2500})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.saved()["sess-1"]["session_tokens"], 2500)
+        self.assertIn("set_at", self.saved()["sess-1"])
+        self.assertEqual(self.get("/api/guard/session/sess-1")[1]["limit"]["session_tokens"], 2500)
+        self.set("sess-1", {"off": True})
+        self.assertTrue(self.saved()["sess-1"]["off"])
+        self.set("sess-1", {"remove": True})
+        self.assertNotIn("sess-1", self.saved())
+
+    def test_keeps_the_rest_of_the_guard_settings(self):
+        self.post("/api/settings", {"guard": {"session_tokens": 9000}}, headers={"X-FinOps-Action": "1"})
+        self.set("sess-1", {"session_tokens": 2500})
+        with open(self.local_settings_path) as fh:
+            self.assertEqual(json.load(fh)["guard"]["session_tokens"], 9000)
+        # and a later Budgets save must not wipe the session limit
+        self.post("/api/settings", {"guard": {"session_tokens": 8000}}, headers={"X-FinOps-Action": "1"})
+        self.assertEqual(self.saved()["sess-1"]["session_tokens"], 2500)
+
+    def test_rejects_bad_values_and_cross_origin(self):
+        for bad in ({"session_tokens": 0}, {"session_tokens": "x"}, {}):
+            self.assertEqual(self.set("sess-1", bad)[0], 400, bad)
+        self.assertEqual(self.set("bad%20id!", {"session_tokens": 5})[0], 400)
+        code, _ = self.set("sess-1", {"session_tokens": 5},
+                           headers={"X-FinOps-Action": "1", "Origin": "http://evil.example"})
+        self.assertEqual(code, 403)

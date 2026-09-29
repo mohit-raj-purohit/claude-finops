@@ -217,10 +217,8 @@ def install_guard(remove=False):
     msg = (f"Installed the session guard in {SETTINGS}. It applies to new Claude Code sessions. "
            "Undo: claude-finops --uninstall-guard")
     try:
-        from .guard import load_guard_settings
-        cfg = load_guard_settings()
-        if not cfg.get("session_tokens") and not any(
-                o.get("session_tokens") for o in (cfg.get("projects") or {}).values()):
+        from .guard import load_guard_settings, has_any_budget
+        if not has_any_budget(load_guard_settings()):
             msg += (" It stays inactive until you set a per-session token budget "
                     "(Budgets page, or guard.session_tokens in settings.local.json).")
     except Exception:
