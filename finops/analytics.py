@@ -17,6 +17,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 
 from .pricing import Pricing
+from . import localtime
 from .segments import is_compaction
 
 from .paths import DB_PATH, SETTINGS_PATH, LOCAL_SETTINGS_PATH
@@ -164,6 +165,13 @@ def _d(s):
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def like(term):
+    r"""A LIKE pattern (used with ESCAPE '\') matching `term` literally, so % and _
+    in what you type are not wildcards."""
+    t = str(term).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{t}%"
+
+
 def _cumsum(values):
     total = 0.0
     for v in values:
@@ -201,7 +209,15 @@ class Analytics:
     _today = None                      # tests set this; production uses the clock
 
     def today(self):
-        return self._today or datetime.now(timezone.utc).date()
+        return self._today or localtime.today()
+
+    def data_end(self):
+        """The last day the warehouse can speak for: today, or the day it was last synced if
+        that is earlier. Days after a sync are not idle, they are unread, so rate windows
+        end here instead of counting them as zero."""
+        built = localtime.local(self.meta.get("built_at"))
+        today = self.today()
+        return min(today, built.date()) if built and not self._today else today
 
     @property
     def db(self):
@@ -337,6 +353,11 @@ class Analytics:
             p).get("n", 0)
         tot["tool_calls"] = self.one(
             f"SELECT COALESCE(SUM(r.tool_call_count),0) n FROM requests r WHERE {w}", p).get("n", 0)
+        # Requests with tokens but no price (an agent without price data, such as Cursor,
+        # or a model missing from pricing.json): they count, but at $0.
+        tot["unpriced_requests"] = self.one(
+            f"SELECT COUNT(*) n FROM requests r WHERE {w} AND r.est_cost_usd = 0 AND r.billable_tokens > 0",
+            p).get("n", 0)
 
         bp = self.billing_period()
         today = bp["today"]
@@ -362,8 +383,12 @@ class Analytics:
 
     # ---------------- burn rate & limits ----------------
     def burn(self, f=None):
+        # The billing period is its own window: the page's date range must not move it,
+        # or picking "last 7 days" would quietly change what the period projects to.
+        f = dict(f or {}, start=None, end=None)
         w, p = self.where(f)
         bp = self.billing_period()
+        today, synced = self.today(), self.data_end()
         rows = self.q(f"""SELECT r.day, SUM(r.est_cost_usd) cost, SUM(r.billable_tokens) tokens,
                           COUNT(*) requests FROM requests r
                           WHERE {w} AND r.day >= ? AND r.day <= ? GROUP BY 1 ORDER BY 1""",
@@ -371,23 +396,37 @@ class Analytics:
         used_cost = sum(r["cost"] for r in rows)
         used_tokens = sum(r["tokens"] for r in rows)
         used_req = sum(r["requests"] for r in rows)
-        elapsed = max(bp["elapsed_days"], 1)
+        # Days after the last sync are unread, not idle: the period average and the
+        # projection only count the days the warehouse actually covers.
+        unread = max((today - max(synced, _d(bp["start"]) - timedelta(days=1))).days, 0)
+        elapsed = max(bp["elapsed_days"] - unread, 1)
         daily_avg = used_cost / elapsed
 
         # Trailing rates are measured over the last N CALENDAR days, not only the
         # slice inside the billing period — early in a period that slice is too short
         # to be a rate. Idle days count as zero, because these rates get multiplied by
         # calendar days remaining. This keeps burn and forecast on one methodology.
-        yesterday = (self.today() - timedelta(days=1)).isoformat()
-        last7 = self.daily_series(f, days=7, end=yesterday)
-        last14 = self.daily_series(f, days=14, end=yesterday)
+        # The window ends on the last complete day the warehouse has read.
+        rate_end = (synced - timedelta(days=1)).isoformat()
+        last7 = self.daily_series(f, days=7, end=rate_end)
+        last14 = self.daily_series(f, days=14, end=rate_end)
         avg7 = (sum(r["cost"] for r in last7) / len(last7)) if last7 else 0.0
         tok_avg7 = (sum(r["tokens"] for r in last7) / len(last7)) if last7 else 0.0
         # the projection rate matches Analytics.forecast()'s "expected" scenario
         burn = (sum(r["cost"] for r in last14) / len(last14)) if last14 else daily_avg
         tok_burn = (sum(r["tokens"] for r in last14) / len(last14)) if last14 else 0.0
-        projected = used_cost + burn * bp["remaining_days"]
+        req_burn = (sum(r["requests"] for r in last14) / len(last14)) if last14 else used_req / elapsed
+        ahead = bp["remaining_days"] + unread
+        projected = used_cost + burn * ahead
         tok_daily = used_tokens / elapsed
+        # Zero-filled so the daily chart keeps idle days as gaps, not as missing bars.
+        by_day = {r["day"]: r for r in rows}
+        series, cur = [], _d(bp["start"])
+        while cur <= min(synced, _d(bp["end"])):
+            k = cur.isoformat()
+            series.append(by_day.get(k) or {"day": k, "cost": 0.0, "tokens": 0, "requests": 0})
+            cur += timedelta(days=1)
+        rows = series
 
         lim = self.settings["limits"]
         out = {
@@ -399,7 +438,8 @@ class Analytics:
             "burn_rate_cost_per_day": burn,
             "burn_rate_window_days": len(last14),
             "projected_period_cost": projected,
-            "projected_period_tokens": used_tokens + tok_burn * bp["remaining_days"],
+            "projected_period_tokens": used_tokens + tok_burn * ahead,
+            "synced_through": synced.isoformat(), "unread_days": unread,
             "forecast_basis": "forecast",
             "forecast_note": ("Projection uses the %d-calendar-day mean daily spend, idle days "
                               "included as zero — the same rate as the "
@@ -410,7 +450,7 @@ class Analytics:
         for key, used_val, rate, label in (
             ("monthly_cost_allowance_usd", used_cost, burn, "cost"),
             ("monthly_token_allowance", used_tokens, (tok_burn or tok_daily), "tokens"),
-            ("monthly_request_allowance", used_req, used_req / elapsed, "requests"),
+            ("monthly_request_allowance", used_req, req_burn, "requests"),
         ):
             allowance = lim.get(key)
             if not allowance:
@@ -419,7 +459,7 @@ class Analytics:
             remaining = allowance - used_val
             pct = 100.0 * used_val / allowance
             days_left = (remaining / rate) if rate > 0 and remaining > 0 else None
-            proj = used_val + rate * bp["remaining_days"]
+            proj = used_val + rate * ahead
             out["allowances"][label] = {
                 "configured": True, "allowance": allowance, "used": used_val,
                 "remaining": remaining, "used_pct": round(pct, 1),
@@ -446,29 +486,64 @@ class Analytics:
     # ---------------- timeline ----------------
     def timeline(self, f=None, grain="day"):
         w, p = self.where(f)
-        col = "r.day" if grain == "day" else "substr(r.ts,1,13)"
-        return self.q(f"""
+        col = "r.day" if grain == "day" else self._hour_bucket("r.day", "r.hour", "r.ts")
+        rows = self.q(f"""
           SELECT {col} bucket, COUNT(*) requests,
                  COUNT(DISTINCT r.session_id) sessions,
-                 COUNT(DISTINCT r.prompt_id) prompts,
                  SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,
                  SUM(r.cache_read_tokens) cache_read_tokens,
                  SUM(r.cache_write_tokens) cache_write_tokens,
                  SUM(r.billable_tokens) tokens, SUM(r.est_cost_usd) cost,
                  AVG(r.context_tokens) avg_context
           FROM requests r WHERE {w} AND r.day <> '' GROUP BY 1 ORDER BY 1""", p)
+        # A prompt is counted once, in the bucket of its first request, so the buckets
+        # add up to the prompt total even when a prompt runs past midnight.
+        first = "MIN(r.day)" if grain == "day" else f"MIN({self._hour_bucket('r.day', 'r.hour', 'r.ts')})"
+        prompts = {x["b"]: x["n"] for x in self.q(f"""
+          SELECT b, COUNT(*) n FROM (SELECT {first} b FROM requests r
+            WHERE {w} AND r.day <> '' AND r.prompt_id IS NOT NULL GROUP BY r.prompt_id) GROUP BY b""", p)}
+        for r in rows:
+            r["prompts"] = prompts.get(r["bucket"], 0)
+        if grain != "day" or not rows:
+            return rows
+        # Idle days are part of the range: fill them with zeros so charts keep the gaps.
+        by_day = {r["bucket"]: r for r in rows}
+        start = _d((f or {}).get("start") or rows[0]["bucket"])
+        end = _d((f or {}).get("end") or rows[-1]["bucket"])
+        end = min(end, max(self.data_end(), _d(rows[-1]["bucket"])))
+        out, cur = [], start
+        while cur <= end:
+            k = cur.isoformat()
+            out.append(by_day.get(k) or {"bucket": k, "requests": 0, "sessions": 0, "prompts": 0,
+                                         "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+                                         "cache_write_tokens": 0, "tokens": 0, "cost": 0.0,
+                                         "avg_context": None})
+            cur += timedelta(days=1)
+        return out
+
+    def _local_cols(self):
+        """True when day/hour were written in local time (see finops/localtime.py)."""
+        return self.meta.get("day_basis") == "local"
+
+    def _hour_bucket(self, day, hour, ts):
+        if self._local_cols():
+            return f"({day} || 'T' || printf('%02d', {hour}))"
+        return f"strftime('%Y-%m-%dT%H', {ts}, 'localtime')"     # warehouse from an older version
 
     def heatmap(self, f=None):
-        """Spend by weekday x hour, in this machine's local time (Monday first).
+        """Spend by weekday x hour, in your local time (Monday first).
 
         Transcripts stamp UTC; bucketing on that would put a 10am IST session at
-        4am. SQLite's 'localtime' modifier applies the local offset, half-hour
-        zones included. Date filters still apply to UTC days like every view.
+        4am. The day and hour columns are written in local time when the warehouse is
+        built (honouring CLAUDE_FINOPS_TZ); a warehouse built by an older version falls
+        back to SQLite's 'localtime', the computer's own zone.
         """
         w, p = self.where(f)
+        wd = "strftime('%w', r.day)" if self._local_cols() else "strftime('%w', r.ts, 'localtime')"
+        hr = "r.hour" if self._local_cols() else "strftime('%H', r.ts, 'localtime')"
         rows = self.q(f"""
-          SELECT CAST(strftime('%w', r.ts, 'localtime') AS INTEGER) wd,
-                 CAST(strftime('%H', r.ts, 'localtime') AS INTEGER) hr,
+          SELECT CAST({wd} AS INTEGER) wd,
+                 CAST({hr} AS INTEGER) hr,
                  COALESCE(SUM(r.est_cost_usd),0) cost, COALESCE(SUM(r.billable_tokens),0) tokens,
                  COUNT(*) requests
           FROM requests r WHERE {w} AND r.ts <> '' GROUP BY 1, 2""", p)
@@ -480,7 +555,7 @@ class Analytics:
             c = grid[((r["wd"] + 6) % 7, r["hr"])]
             c["cost"], c["tokens"], c["requests"] = r["cost"], r["tokens"], r["requests"]
         return {"cells": [grid[(d, h)] for d in range(7) for h in range(24)],
-                "tz": time.strftime("%Z"), "cost_basis": "estimated"}
+                "tz": os.environ.get("CLAUDE_FINOPS_TZ") or time.strftime("%Z"), "cost_basis": "estimated"}
 
     # ---------------- models ----------------
     def models(self, f=None):
@@ -507,9 +582,12 @@ class Analytics:
                               COUNT(*) n, AVG(r.context_tokens) avg_ctx
                             FROM requests r WHERE {w}
                             GROUP BY r.model, r.priced_as, r.unpriced_long_context""", p):
-            u = util.setdefault(v["model"], {"num": 0.0, "den": 0, "over": 0, "long": 0})
+            u = util.setdefault(v["model"], {"num": 0.0, "den": 0, "over": 0, "long": 0, "nowin": 0})
             win = self.pricing.context_window(v["priced_as"] or v["model"])
-            if v["u"] or not win:
+            if not win:
+                u["nowin"] += v["n"]     # no known window: neither "over" nor a utilisation
+                continue
+            if v["u"]:
                 u["over"] += v["n"]
                 continue
             u["num"] += v["n"] * 100.0 * (v["avg_ctx"] or 0) / win
@@ -521,6 +599,9 @@ class Analytics:
             r["tier"] = self.pricing.tier(r["model"])
             r["context_window"] = self.pricing.context_window(r["model"])
             r["pricing_known"] = bool(r["model_known"])
+            # an unlisted Claude model priced as its newest listed sibling (pricing.py)
+            r["priced_as_family"] = (None if r["pricing_known"]
+                                     else self.pricing.rates(r["model"]).get("fallback_name"))
             r["cost_pct"] = round(100.0 * r["cost"] / tc, 1)
             r["token_pct"] = round(100.0 * r["tokens"] / tt, 1)
             r["cost_per_1k_output"] = (1000.0 * r["cost"] / r["output_tokens"]) if r["output_tokens"] else None
@@ -530,16 +611,21 @@ class Analytics:
             u = util.get(r["model"], {})
             r["utilization_pct"] = round(u["num"] / u["den"], 1) if u.get("den") else None
             r["over_window_requests"] = u.get("over", 0)
+            r["unknown_window_requests"] = u.get("nowin", 0)
             r["long_context_requests"] = u.get("long", 0)
         priced = [r for r in rows if r["tokens"] and r["tier"] != "none"]
+        # "Most token-efficient" and "best cost per output" compare paid models with a
+        # real sample: one request on a free local model would otherwise win both.
+        total_req = sum(r["requests"] for r in rows) or 1
+        rated = [r for r in priced if r["cost"] > 0 and r["requests"] >= max(20, total_req * 0.005)]
         superlatives = {}
         if priced:
             superlatives = {
                 "most_expensive": max(priced, key=lambda r: r["cost"])["model"],
                 "most_used": max(priced, key=lambda r: r["requests"])["model"],
-                "most_token_efficient": max(priced, key=lambda r: r["output_per_input"])["model"],
+                "most_token_efficient": max(rated or priced, key=lambda r: r["output_per_input"])["model"],
                 "best_cost_per_output": min(
-                    [r for r in priced if r["cost_per_1k_output"]],
+                    [r for r in (rated or priced) if r["cost_per_1k_output"]],
                     key=lambda r: r["cost_per_1k_output"], default={}).get("model"),
             }
         return {"rows": rows, "superlatives": superlatives, "basis": "estimated"}
@@ -556,12 +642,15 @@ class Analytics:
                  SUM(r.est_cost_usd) cost, GROUP_CONCAT(DISTINCT r.model) models
           FROM requests r JOIN projects pr ON pr.id = r.project_id
           WHERE {w} GROUP BY pr.id ORDER BY cost DESC""", p)
+        # Files touched by the prompts in range, not every file the project ever touched.
+        files = {x["project_id"]: x["n"] for x in self.q(f"""
+          SELECT ft.project_id, COUNT(DISTINCT ft.path) n FROM files_touched ft
+          WHERE ft.prompt_id IN (SELECT DISTINCT r.prompt_id FROM requests r WHERE {w})
+          GROUP BY ft.project_id""", p)}
         for r in rows:
             r["avg_cost_per_session"] = r["cost"] / r["sessions"] if r["sessions"] else 0
             r["avg_cost_per_prompt"] = r["cost"] / r["prompts"] if r["prompts"] else None
-            r["files_touched"] = self.one(
-                "SELECT COUNT(DISTINCT path) n FROM files_touched WHERE project_id=?",
-                (r["project_id"],))["n"]
+            r["files_touched"] = files.get(r["project_id"], 0)
             b = self.settings["budgets"].get("per_project_usd", {}).get(r["name"])
             r["budget_usd"] = b
             r["budget_used_pct"] = round(100.0 * r["cost"] / b, 1) if b else None
@@ -615,13 +704,17 @@ class Analytics:
                          f"JOIN sessions s ON s.id = r.session_id "
                          f"JOIN projects pr ON pr.id = s.project_id WHERE {w}", p)["n"]
 
+    @staticmethod
+    def _prompt_search(search):
+        if not search:
+            return "", []
+        return (" AND r.prompt_id IN (SELECT id FROM prompts pr WHERE pr.text LIKE ? ESCAPE '\\' "
+                "OR pr.session_id LIKE ? ESCAPE '\\' OR pr.category LIKE ? ESCAPE '\\')",
+                [like(search)] * 3)
+
     def prompts_total(self, f=None, search=None):
         w, p = self.where(f)
-        extra, ep = "", []
-        if search:
-            extra = (" AND r.prompt_id IN (SELECT id FROM prompts pr WHERE pr.text LIKE ? "
-                     "OR pr.session_id LIKE ? OR pr.category LIKE ?)")
-            ep = [f"%{search}%"] * 3
+        extra, ep = self._prompt_search(search)
         return self.one(f"SELECT COUNT(DISTINCT r.prompt_id) n FROM requests r "
                          f"WHERE {w}{extra} AND r.prompt_id IS NOT NULL", p + ep)["n"]
 
@@ -630,11 +723,9 @@ class Analytics:
         ob = {"cost": "pcost DESC", "tokens": "ptokens DESC", "recent": "pr.ts DESC",
               "cheapest": "pcost ASC", "efficiency": "efficiency DESC",
               "length": "pr.char_len DESC"}.get(order, "pcost DESC")
-        extra, ep = "", []
-        if search:
-            extra = (" AND r.prompt_id IN (SELECT id FROM prompts pr WHERE pr.text LIKE ? "
-                     "OR pr.session_id LIKE ? OR pr.category LIKE ?)")
-            ep = [f"%{search}%"] * 3
+        extra, ep = self._prompt_search(search)
+        # "Cheapest" ranks prompts you paid for: $0 ones ran on free/local models.
+        having = "HAVING SUM(r.est_cost_usd) > 0" if order == "cheapest" else ""
         # Aggregate requests per prompt first, rank, and only then join the (large) prompt
         # text for the page being returned. Grouping with the text attached was ~2s a call.
         if order in ("recent", "length"):
@@ -653,7 +744,7 @@ class Analytics:
                    GROUP_CONCAT(DISTINCT r.model) models,
                    (CAST(SUM(r.output_tokens) AS REAL) / MAX(SUM(r.billable_tokens),1)) efficiency
             FROM requests r WHERE {w}{extra} AND r.prompt_id IS NOT NULL
-            GROUP BY r.prompt_id {inner_ob} {inner_lim})
+            GROUP BY r.prompt_id {having} {inner_ob} {inner_lim})
           SELECT pr.id prompt_id, pr.uuid, pr.ts, pr.day, pr.text, pr.char_len, pr.word_len,
                  pr.category, pr.category_confidence, pr.category_evidence, pr.source,
                  pr.session_id, proj.name project, proj.id project_id, s.title session_title,
@@ -682,12 +773,23 @@ class Analytics:
                 r["category_evidence"] = []
         return rows
 
-    def prompt_detail(self, pid):
+    def _in_range(self, f, col, val):
+        """The same item's totals inside the selected dates, when a range is set."""
+        if not f or not (f.get("start") or f.get("end")):
+            return None
+        rng = {"start": f.get("start"), "end": f.get("end")}
+        w, p = self.where(rng)
+        return self.one(f"""SELECT COALESCE(SUM(r.est_cost_usd),0) cost, COUNT(*) requests,
+                            COUNT(DISTINCT r.prompt_id) prompts, COALESCE(SUM(r.billable_tokens),0) tokens
+                            FROM requests r WHERE {w} AND r.{col} = ?""", p + [val])
+
+    def prompt_detail(self, pid, f=None):
         p = self.one("""SELECT pr.*, proj.name project, s.title session_title, s.git_branch
                         FROM prompts pr JOIN projects proj ON proj.id=pr.project_id
                         LEFT JOIN sessions s ON s.id=pr.session_id WHERE pr.id=?""", (pid,))
         if not p:
             return {"error": "not found"}
+        p["in_range"] = self._in_range(f, "prompt_id", pid)
         p["requests"] = self.q(
             "SELECT ts, model, effort, input_tokens, output_tokens, thinking_tokens,"
             " cache_read_tokens, cache_write_tokens, billable_tokens, context_tokens,"
@@ -708,11 +810,12 @@ class Analytics:
             p["category_evidence"] = []
         return p
 
-    def session_detail(self, sid):
+    def session_detail(self, sid, f=None):
         s = self.one("""SELECT s.*, pr.name project FROM sessions s
                         JOIN projects pr ON pr.id=s.project_id WHERE s.id=?""", (sid,))
         if not s:
             return {"error": "not found"}
+        s["in_range"] = self._in_range(f, "session_id", sid)
         s["prompts"] = self.q("""
           SELECT pr.id prompt_id, pr.ts, pr.category, substr(pr.text,1,220) preview,
                  pr.char_len, pr.billable_tokens ptokens, pr.est_cost_usd pcost,
@@ -740,8 +843,16 @@ class Analytics:
                  AVG(pr.char_len) avg_prompt_chars
           FROM prompts pr JOIN requests r ON r.prompt_id = pr.id
           WHERE {w} GROUP BY pr.category ORDER BY cost DESC""", p)
+        # Averages per prompt, not per request: joined to requests, a prompt with 200
+        # requests would otherwise count 200 times in its category's average length.
+        per_prompt = {x["category"]: x for x in self.q(f"""
+          SELECT pr.category, AVG(pr.category_confidence) confidence, AVG(pr.char_len) avg_prompt_chars
+          FROM prompts pr WHERE pr.id IN (SELECT DISTINCT r.prompt_id FROM requests r WHERE {w})
+          GROUP BY pr.category""", p)}
         tc = sum(r["cost"] for r in rows) or 1
         for r in rows:
+            pp = per_prompt.get(r["category"]) or {}
+            r["confidence"], r["avg_prompt_chars"] = pp.get("confidence"), pp.get("avg_prompt_chars")
             r["cost_pct"] = round(100.0 * r["cost"] / tc, 1)
             r["cost_per_prompt"] = r["cost"] / r["prompts"] if r["prompts"] else 0
         return {"rows": rows, "basis": "estimated",
@@ -849,16 +960,17 @@ class Analytics:
                                                 WHERE s.id IN ({ph})""", ids)}
 
         def downsample(traj):
+            """Evenly spaced points, each with its real 1-based request number."""
             n = len(traj)
-            if n <= trajectory_points:
-                return traj
-            step = n / trajectory_points
-            return [traj[int(i * step)] for i in range(trajectory_points)]
+            idx = range(n) if n <= trajectory_points else \
+                [int(i * n / trajectory_points) for i in range(trajectory_points)]
+            return [traj[i] for i in idx], [i + 1 for i in idx]
 
         out_sessions = []
         for s in ranked:
             m = meta.get(s["session_id"], {})
-            traj = downsample(s["traj"])
+            traj, traj_idx = downsample(s["traj"])
+            cum = list(_cumsum(cost for _, cost in s["traj"]))
             out_sessions.append({
                 "session_id": s["session_id"], "title": m.get("title"), "project": m.get("project"),
                 "requests": s["requests"], "cost_usd": s["cost_usd"], "max_context": s["max_context"],
@@ -870,7 +982,8 @@ class Analytics:
                 "cost_after_pct": {str(t): (round(100.0 * s["cost_after"][t] / s["cost_usd"], 1)
                                             if s["cost_usd"] else 0.0) for t in thresholds},
                 "context_trajectory": [c for c, _ in traj],
-                "cumulative_cost": [round(x, 4) for x in _cumsum(cost for _, cost in traj)],
+                "trajectory_index": traj_idx,
+                "cumulative_cost": [round(cum[i - 1], 4) for i in traj_idx],
                 "basis": "actual",
             })
         return {
@@ -961,8 +1074,9 @@ class Analytics:
                 % (sum(r["n"] for r in unpriced), ", ".join(sorted({r["model"] for r in unpriced})))
                 if unpriced else ""),
             "unknown_message": (
-                "%d requests used a claude-* model with no entry in pricing.json at "
-                "all, so their cost is a fallback guess. Add pricing.json entries for: %s."
+                "%d requests used a claude-* model with no entry in pricing.json, so they "
+                "are priced as the newest listed model of the same family (or $0 when there "
+                "is none). Add pricing.json entries for: %s."
                 % (unknown_requests, ", ".join(unknown_models))
                 if unknown_rows else ""),
             "basis": "estimated",
@@ -1070,6 +1184,8 @@ class Analytics:
                 "reads": t["cr"], "writes": t["cw"],
                 "cost_split": cache_cost,
                 "breakeven_margin": breakeven_margin,
+                # unclamped: the margin above is capped at ±1 for scoring, this is the real ratio
+                "breakeven_ratio": ((discount - premium) / cache_cost_total) if cache_cost_total else None,
                 "cost_with_cache": t["cost"], "cost_without_cache": t["cost_nc"],
                 # Named for what it is. This used to be "estimated_savings_usd", and the
                 # UI called it a saving; it is the gap to a run that never happened.
@@ -1111,14 +1227,28 @@ class Analytics:
           WHERE {w} GROUP BY s.id HAVING MAX(r.context_tokens) >= ?
           ORDER BY cost DESC LIMIT 20""", p + [thr])
         agg = self.one(f"SELECT AVG(r.context_tokens) a, MAX(r.context_tokens) m FROM requests r WHERE {w}", p)
-        windows = [v.get("context_window") for v in self.pricing.models.values() if v.get("context_window")]
+        # Utilisation against each request's own model window, weighted by requests —
+        # not against the largest window anywhere in the price table (a Gemini window
+        # would set the scale for Claude-only usage).
+        num = den = 0.0
+        wins = defaultdict(int)
+        for v in self.q(f"""SELECT COALESCE(r.priced_as, r.model) m, COUNT(*) n, AVG(r.context_tokens) a
+                            FROM requests r WHERE {w} GROUP BY 1""", p):
+            win = self.pricing.context_window(v["m"])
+            if win:
+                num += v["n"] * (v["a"] or 0) / win
+                den += v["n"]
+                wins[win] += v["n"]
+        util_pct = round(100.0 * num / den, 1) if den else None
+        typical_window = max(wins, key=wins.get) if wins else None
         return {
             "buckets": buckets, "avg_context": agg["a"], "max_context": agg["m"],
             "threshold": thr,
             "large_context_requests": big["n"], "large_context_cost": big["c"],
             "large_context_cost_pct": round(100.0 * big["c"] / total_cost, 1),
             "heavy_sessions": heavy_sessions,
-            "typical_context_window": max(windows) if windows else None,
+            "typical_context_window": typical_window,
+            "context_utilization_pct": util_pct,
             "basis": "actual token counts, estimated cost",
         }
 
@@ -1154,41 +1284,74 @@ class Analytics:
                 "affected": {key: [e[key] for e in evidence if e.get(key)]},
                 "recommended_action": action, "basis": "estimated"})
 
-        # 1. very long prompts — excess is the share of spend attributable to
-        #    re-sending the oversized prompt text on every turn of the same request.
-        rows = self.q(f"""SELECT pr.id prompt_id, pr.char_len, substr(pr.text,1,160) preview,
-                          pr.session_id, pr.est_cost_usd cost, pr.billable_tokens tokens,
-                          pr.request_count requests
-                          FROM prompts pr WHERE {pfilter} AND pr.char_len >= ?
-                          ORDER BY cost DESC LIMIT 15""", p + [rules["long_prompt_chars"]])
+        # Who wrote a prompt matters for the advice: a person typed it, a script sent it
+        # through the SDK, or Claude Code wrote it itself (a continuation summary after
+        # compaction). "Stop pasting" is only advice for the first.
+        human = ("(pr.source IS NULL OR pr.source NOT IN ('sdk')) "
+                 "AND pr.text NOT LIKE 'This session is being continued%'")
+        sdk = "pr.source = 'sdk'"
+
+        # 1. very long prompts — no excess claimed; split by who sent them.
         budget_chars = rules["long_prompt_chars"]
-        for r in rows:
-            r["excess"] = 0.0
-        if rows:
-            add("high", "long_prompts",
-                f"{len(rows)} very long prompts (>{budget_chars:,} chars)",
-                "Long pasted prompts inflate the cached prefix re-sent on every following turn.",
-                rows, "Move large pasted context into a file and reference it, or summarize first.",
-                "prompt_id",
-                "none claimed — flagged for review only")
+        for kind, cond, title, detail, action in (
+            ("long_prompts", human, "very long prompts you sent",
+             "Long pasted prompts inflate the cached prefix re-sent on every following turn.",
+             "Move large pasted context into a file and reference it, or summarize first."),
+            ("long_sdk_prompts", sdk, "very long prompts sent by scripts (SDK)",
+             "A script or pipeline sends these through the Claude Code SDK; each one starts a "
+             "turn with that whole text.",
+             "Trim what the script sends per call: pass file paths instead of file contents, "
+             "and keep the stable part first so it is cached."),
+        ):
+            rows = self.q(f"""SELECT pr.id prompt_id, pr.char_len, substr(pr.text,1,160) preview,
+                              pr.session_id, pr.est_cost_usd cost, pr.billable_tokens tokens,
+                              pr.request_count requests
+                              FROM prompts pr WHERE {pfilter} AND pr.char_len >= ? AND {cond}
+                              ORDER BY cost DESC""", p + [budget_chars])
+            for r in rows:
+                r["excess"] = 0.0
+            if rows:
+                add("medium", kind, f"{len(rows)} {title} (≥{budget_chars:,} chars)",
+                    detail, rows, action, "prompt_id", "none claimed — flagged for review only")
 
         # 2. duplicate prompts — excess is the cost of the repeats, not the first ask,
         #    counted only within a single session so cross-session coincidences don't count.
-        dups = self.q(f"""SELECT pr.norm_hash, pr.session_id, COUNT(*) n, substr(MIN(pr.text),1,160) preview,
-                          SUM(pr.est_cost_usd) cost, SUM(pr.billable_tokens) tokens,
-                          MIN(pr.est_cost_usd) first_cost, GROUP_CONCAT(pr.id) prompt_ids
-                          FROM prompts pr WHERE {pfilter} AND pr.char_len > 25
-                          GROUP BY pr.norm_hash, pr.session_id HAVING n > 1
-                          ORDER BY cost DESC LIMIT 15""", p)
-        for d in dups:
-            d["prompt_id"] = int(d["prompt_ids"].split(",")[0])
-            d["affected_ids"] = [int(x) for x in d["prompt_ids"].split(",")]
-            d["excess"] = max(d["cost"] - d["first_cost"], 0)   # repeats only
+        window = timedelta(minutes=rules.get("duplicate_window_minutes", 60))
+        occ = self.q(f"""SELECT pr.id, pr.norm_hash, pr.session_id, pr.ts, substr(pr.text,1,160) preview,
+                         pr.est_cost_usd cost, pr.billable_tokens tokens
+                         FROM prompts pr WHERE {pfilter} AND pr.char_len > 25 AND {human}
+                           AND (pr.norm_hash, pr.session_id) IN (
+                             SELECT norm_hash, session_id FROM prompts GROUP BY 1, 2 HAVING COUNT(*) > 1)
+                         ORDER BY pr.session_id, pr.norm_hash, pr.ts""", p)
+        groups = defaultdict(list)
+        for o in occ:
+            groups[(o["norm_hash"], o["session_id"])].append(o)
+        dups = []
+        for (_, sid), items in groups.items():
+            # A repeat is an ask sent again within the window of the previous one; the
+            # first ask of each run is the real work and is never counted as excess.
+            ids, repeat_cost, prev = [], 0.0, None
+            for o in items:
+                t = localtime.parse(o["ts"])
+                if prev is not None and t and prev["t"] and t - prev["t"] <= window:
+                    if not ids:
+                        ids.append(prev["id"])
+                    ids.append(o["id"])
+                    repeat_cost += o["cost"] or 0.0
+                prev = {"t": t, "id": o["id"]}
+            if ids:
+                inc = [o for o in items if o["id"] in ids]
+                dups.append({"norm_hash": items[0]["norm_hash"], "session_id": sid, "n": len(ids),
+                             "preview": items[0]["preview"], "cost": sum(o["cost"] or 0 for o in inc),
+                             "tokens": sum(o["tokens"] or 0 for o in inc), "prompt_id": ids[0],
+                             "affected_ids": ids, "excess": repeat_cost})
+        dups.sort(key=lambda d: -d["cost"])
         if dups:
-            add("high", "duplicate_prompts", f"{len(dups)} prompts repeated more than once",
+            add("high", "duplicate_prompts",
+                f"{len(dups)} prompts repeated within {rules.get('duplicate_window_minutes', 60)} minutes",
                 "The same request was sent again, re-paying for context each time.",
                 dups, "Reuse the earlier answer, or capture the recurring request as a slash command.",
-                "prompt_id", "cost of the repeat occurrences, excluding the first ask")
+                "prompt_id", "cost of the repeats, excluding the first ask of each run")
 
         # 3. low-yield sessions — excess is what the session cost ABOVE what the same
         #    output would have cost at your own median session efficiency.
@@ -1210,7 +1373,7 @@ class Analytics:
                          proj.name project FROM sessions s JOIN projects proj ON proj.id=s.project_id
                          WHERE {sfilter} AND s.billable_tokens > ?
                            AND (CAST(s.output_tokens AS REAL)/MAX(s.billable_tokens,1)) < ?
-                         ORDER BY cost DESC LIMIT 15""",
+                         ORDER BY cost DESC""",
                      p + [rules["huge_session_tokens"], cutoff])
         for r in low:
             r["excess"] = 0.0
@@ -1248,7 +1411,7 @@ class Analytics:
                                  AND pr.output_tokens < ? AND pr.tool_calls = 0 AND pr.est_cost_usd > 0
                                  AND EXISTS (SELECT 1 FROM requests r2 WHERE r2.prompt_id=pr.id
                                              AND r2.model IN ({ph}))
-                               ORDER BY cost DESC LIMIT 15""",
+                               ORDER BY cost DESC""",
                            p + [rules["simple_task_output_tokens"]] + frontier)
             for r in small:
                 r["excess"] = 0.0
@@ -1257,7 +1420,9 @@ class Analytics:
                     f"{len(small)} frontier-model prompts produced under "
                     f"{rules['simple_task_output_tokens']} output tokens",
                     "Short, simple turns running on the most expensive model tier.",
-                    small, "Route short lookups and confirmations to a cheaper model tier.",
+                    small, "For standalone lookups, start a fresh session on a cheaper model. "
+                           "Switching models mid-session is not cheaper: the new model has to "
+                           "write the whole conversation into its own cache first.",
                     "prompt_id", "none claimed")
 
         # 5. tool loops — excess is the share of the loop beyond the threshold.
@@ -1265,11 +1430,11 @@ class Analytics:
         loops = self.q(f"""SELECT pr.id prompt_id, substr(pr.text,1,160) preview, pr.session_id,
                            pr.tool_calls tools, pr.est_cost_usd cost, pr.billable_tokens tokens
                            FROM prompts pr WHERE {pfilter} AND pr.tool_calls > ?
-                           ORDER BY cost DESC LIMIT 15""", p + [loop_calls])
+                           ORDER BY cost DESC""", p + [loop_calls])
         for r in loops:
             r["excess"] = 0.0
         if loops:
-            add("medium", "tool_loops", f"{len(loops)} prompts triggered {loop_calls}+ tool calls",
+            add("medium", "tool_loops", f"{len(loops)} prompts made more than {loop_calls} tool calls",
                 "Long agentic loops re-send the whole conversation each step, so cost grows super-linearly.",
                 loops, "Split the task, or give more precise instructions up front.", "prompt_id",
                 "none claimed")
@@ -1296,7 +1461,7 @@ class Analytics:
             if net > 0:
                 r["excess"] = net
                 flagged.append(r)
-        poor = flagged[:15]
+        poor = flagged
         if poor:
             add("medium", "poor_cache_reuse", f"{len(poor)} sessions wrote cache they barely reused",
                 "Cache writes cost more than plain input; they only pay off when read back repeatedly.",
@@ -1309,7 +1474,7 @@ class Analytics:
                           s.request_count requests, s.est_cost_usd cost
                           FROM sessions s JOIN projects proj ON proj.id=s.project_id
                           WHERE {sfilter} AND s.duration_s > ? AND s.request_count < 30
-                          ORDER BY s.duration_s DESC LIMIT 10""",
+                          ORDER BY s.duration_s DESC""",
                      p + [rules["idle_gap_minutes"] * 60 * 4])
         for r in idle:
             r["excess"] = 0.0
@@ -1357,7 +1522,7 @@ class Analytics:
                             len(e.get("affected_ids") or [1]), 1))
                 elif e.get("session_id"):
                     s_excess[e["session_id"]] = max(s_excess.get(e["session_id"], 0.0), ex)
-        counted_sessions = set(s_excess)
+        counted_sessions = {k for k, v in s_excess.items() if v > 0}
         outside = 0.0
         if p_excess:
             owner = {r["id"]: r["session_id"] for r in self.q(
@@ -1366,7 +1531,13 @@ class Analytics:
             outside = sum(v for pid_, v in p_excess.items()
                           if owner.get(pid_) not in counted_sessions)
         excess = min(sum(s_excess.values()) + outside, exposed)
+        high = sum(fd["est_cost_usd"] for fd in findings if fd["severity"] == "high")
+        for fd in findings:
+            fd["count"] = len(fd["evidence"])
+            fd["evidence"] = fd["evidence"][:15]
+            fd["affected"] = {k: v[:15] for k, v in fd["affected"].items()}
         return {"findings": findings,
+                "high_severity_pct": round(min(100.0 * high / total, 100.0), 1) if total else 0,
                 "estimated_excess_usd": excess,
                 "excess_pct": round(100.0 * excess / total, 1) if total else 0,
                 "exposed_cost_usd": exposed,
@@ -1472,42 +1643,58 @@ class Analytics:
                 "estimated_savings_usd": None, "estimated_savings_pct": None,
                 "caveat": "No saving is claimed: what an uncached run would have cost is a "
                           "counterfactual, not money you avoided.",
-                "basis": "actual",
+                "basis": "estimated",
             })
 
-        ctx = self.context_analysis(f)
-        if ctx["large_context_cost_pct"] > 15:
+        # Same definition as Context hygiene and the scorecard: main-conversation turns
+        # only (subagents run on their own prefix), at or above the threshold.
+        thr = self.settings["waste_rules"]["large_context_tokens"]
+        hy = self.hygiene(f, top=0)
+        big = hy["above"].get(str(thr))
+        if big is None:
+            w2, p2 = self.where(f)
+            n = self.one(f"""SELECT COUNT(*) n, COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
+                             WHERE {w2} AND r.is_sidechain=0 AND r.context_tokens >= ?""", p2 + [thr])
+            big = {"requests": n["n"], "cost_usd": n["c"],
+                   "share_pct": round(100.0 * n["c"] / hy["cost_usd"], 1) if hy["cost_usd"] else 0.0}
+        if big["share_pct"] > 15:
             recs.append({
                 "type": "context_reduction", "confidence": "observed",
-                "title": f"{ctx['large_context_cost_pct']}% of spend comes from >"
-                         f"{ctx['threshold']//1000}K-context requests",
-                "detail": (f"{ctx['large_context_requests']:,} requests re-sent a large prefix "
+                "title": f"{big['share_pct']}% of spend comes from requests at or above "
+                         f"{thr//1000}K context",
+                "detail": (f"{big['requests']:,} main-conversation requests re-sent a large prefix "
                            f"on every turn. /compact or a fresh session resets it; how much "
                            f"that would have saved depends on what the work needed, and is "
                            f"not estimated here."),
-                "scope": f"{ctx['large_context_requests']:,} requests",
-                "actual_cost_usd": ctx["large_context_cost"],
+                "scope": f"{big['requests']:,} requests",
+                "actual_cost_usd": big["cost_usd"],
                 "estimated_alternative_cost_usd": None,
                 "estimated_savings_usd": None, "estimated_savings_pct": None,
                 "caveat": "Observed share of spend. No reduction is assumed.",
-                "basis": "actual",
+                "basis": "estimated",
             })
         recs.sort(key=lambda r: -(r.get("actual_cost_usd") or 0))
         return {"recommendations": recs, "basis": "actual"}
 
     # ---------------- forecast ----------------
     def forecast(self, f=None):
+        # A forecast always looks forward from your latest data: the page's date range
+        # would otherwise turn "August" into a $0 forecast for the current period.
+        f = dict(f or {}, start=None, end=None)
         w, p = self.where(f)
         bp = self.billing_period()
         rows = self.q(f"""SELECT r.day, SUM(r.est_cost_usd) cost, SUM(r.billable_tokens) tokens
                           FROM requests r WHERE {w} AND r.day <> '' GROUP BY 1 ORDER BY 1""", p)
         if not rows:
             return {"available": False, "message": "No usage in the selected range."}
-        # calendar days, idle days as zero, excluding today (still partial) — the rate
-        # below is multiplied by calendar days remaining, so a per-active-day mean
-        # would overstate every scenario and a partial today would understate it
-        yesterday = (self.today() - timedelta(days=1)).isoformat()
-        recent = [r for r in self.daily_series(f, days=14, end=yesterday)]   # complete days only
+        # calendar days, idle days as zero, excluding the last read day (still partial) —
+        # the rate below is multiplied by calendar days remaining, so a per-active-day
+        # mean would overstate every scenario and a partial day would understate it.
+        # Days after the last sync are unread, not idle: they are projected, not zeroed.
+        synced = self.data_end()
+        unread = max((self.today() - max(synced, _d(bp["start"]) - timedelta(days=1))).days, 0)
+        last_full = (synced - timedelta(days=1)).isoformat()
+        recent = [r for r in self.daily_series(f, days=14, end=last_full)]   # complete days only
         priced = [r["cost"] for r in recent]
         sample_days = sum(1 for c in priced if c > 0)
         mean = statistics.fmean(priced) if priced else 0.0
@@ -1515,14 +1702,15 @@ class Analytics:
         in_period = [r for r in rows if bp["start"] <= r["day"] <= bp["end"]]
         used = sum(r["cost"] for r in in_period)
         used_tok = sum(r["tokens"] for r in in_period)
-        left = bp["remaining_days"]
+        left = bp["remaining_days"] + unread
         insufficient = sample_days < 7
 
         def band(rate, spread=0.0):
             # spend on different days is treated as independent, so the spread of a
             # sum over `left` days grows with sqrt(left), not left
-            return {"daily_rate": rate,
-                    "end_of_period_cost": used + rate * left + spread * (left ** 0.5)}
+            end = used + rate * left + spread * (left ** 0.5)
+            # the daily rate each scenario implies, so the table doesn't repeat one number
+            return {"daily_rate": (end - used) / left if left else rate, "end_of_period_cost": end}
 
         scenarios = {"expected": band(mean)}
         if not insufficient:
@@ -1537,14 +1725,15 @@ class Analytics:
             "available": True,
             "method": ("mean of the last 14 complete calendar days (idle days as zero); "
                        "bands are ±1 sd × sqrt(days remaining)"),
-            "sample_days": sample_days,
+            "sample_days": sample_days, "window_days": len(recent),
+            "synced_through": synced.isoformat(), "unread_days": unread,
             "insufficient_history": insufficient,
             "daily_mean": mean, "daily_stdev": sd,
             "period_used": used, "period_used_tokens": used_tok,
             "remaining_days": left,
             "scenarios": scenarios,
             "end_of_period_tokens": used_tok + tok_mean * left,
-            "estimated_monthly_cost": used + mean * left,
+            "estimated_monthly_cost": mean * 30,
             "basis": "forecast",
         }
         allowance = self.settings["limits"].get("monthly_cost_allowance_usd")
@@ -1603,36 +1792,43 @@ class Analytics:
             out["lines"].append(self._session_budget_line(f, bp, line))
         else:
             out["lines"].append(line("Per-session tokens", None, 0, None, unit="tokens"))
+        # Per-project and per-model lines follow the agent selection like every other line.
+        wa, pa = self.where({"agents": (f or {}).get("agents") or []})
         for proj, bud in (b.get("per_project_usd") or {}).items():
-            act = self.one("""SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
+            act = self.one(f"""SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
                               JOIN projects pr ON pr.id=r.project_id
-                              WHERE pr.name=? AND r.day>=? AND r.day<=?""",
-                           (proj, bp["start"], bp["end"]))["c"]
+                              WHERE {wa} AND pr.name=? AND r.day>=? AND r.day<=?""",
+                           pa + [proj, bp["start"], bp["end"]])["c"]
             out["lines"].append(line(f"Project: {proj}", bud, act, None))
         for model, bud in (b.get("per_model_usd") or {}).items():
-            act = self.one("""SELECT COALESCE(SUM(est_cost_usd),0) c FROM requests
-                              WHERE model=? AND day>=? AND day<=?""",
-                           (model, bp["start"], bp["end"]))["c"]
+            act = self.one(f"""SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
+                              WHERE {wa} AND r.model=? AND r.day>=? AND r.day<=?""",
+                           pa + [model, bp["start"], bp["end"]])["c"]
             out["lines"].append(line(f"Model: {self.pricing.display_name(model)}", bud, act, None))
         return out
 
     def budget_suggestions(self, f=None):
         """Figures the Budgets form offers as suggestions: recent spend and session sizes.
 
-        Last 30 days up to today, under the current filter; session sizes are Claude Code
-        sessions' whole-session billable tokens (a sorted sample, at most 2,000 values),
-        so the page can say how many past sessions a budget would have caught.
+        Your last 30 days of data (ending on the last synced day, whatever date range the
+        page shows), under the other filters; session sizes are Claude Code sessions'
+        whole-session billable tokens for sessions active in those 30 days (a sorted sample,
+        at most 2,000 values), so the page can say how many recent sessions a budget would
+        have caught.
         """
-        w, p = self.where(f)
-        start = (self.today() - timedelta(days=29)).isoformat()
+        w, p = self.where(dict(f or {}, start=None, end=None))
+        end = self.data_end().isoformat()
+        start = (self.data_end() - timedelta(days=29)).isoformat()
         days = [r["c"] for r in self.q(
             f"SELECT r.day, SUM(r.est_cost_usd) c FROM requests r WHERE {w} AND r.day >= ? "
-            f"GROUP BY r.day", p + [start])]
+            f"AND r.day <= ? GROUP BY r.day", p + [start, end])]
+        days += [0.0] * (30 - len(days))          # idle days are part of the 30
         tot = self.one(f"SELECT COALESCE(SUM(r.est_cost_usd),0) c, COALESCE(SUM(r.billable_tokens),0) t "
-                       f"FROM requests r WHERE {w} AND r.day >= ?", p + [start])
+                       f"FROM requests r WHERE {w} AND r.day >= ? AND r.day <= ?", p + [start, end])
         sizes = [r["t"] for r in self.q(
             "SELECT billable_tokens t FROM sessions WHERE agent='claude' AND billable_tokens > 0 "
-            "ORDER BY t")]
+            "AND id IN (SELECT DISTINCT session_id FROM requests WHERE day >= ? AND day <= ?) "
+            "ORDER BY t", (start, end))]
         if len(sizes) > 2000:
             step = len(sizes) / 2000.0
             sizes = [sizes[int(i * step)] for i in range(2000)]
@@ -1674,8 +1870,11 @@ class Analytics:
         w, p = self.where(f)
         cfg = self.settings["anomaly"]
         found = []
-        yesterday = (self.today() - timedelta(days=1)).isoformat()
-        series = [d for d in self.daily_series(dict(f or {}, agents=["claude"]), end=yesterday)]
+        # complete days only: the last synced day may be partial
+        last_full = self.data_end() - timedelta(days=1)
+        if (f or {}).get("end"):
+            last_full = min(last_full, _d(f["end"]))
+        series = [d for d in self.daily_series(f, end=last_full.isoformat())]
         priced = [d for d in series if d["cost"] > 0]
         if len(priced) >= 14:
             # Median/MAD, not mean/stdev: unpriced $0 days from agents without pricing
@@ -1693,7 +1892,7 @@ class Analytics:
                 if score >= cfg.get("daily_robust_z", 3.5) and ratio >= cfg["daily_ratio"]:
                     found.append({
                         "severity": "high", "type": "daily_spike", "date": d["day"],
-                        "title": f"{d['day']} spend was {ratio:.1f}x your daily average",
+                        "title": f"{d['day']} spend was {ratio:.1f}x your typical (median) day",
                         "detail": f"${d['cost']:,.2f} vs a ${med:,.2f} median priced day (robust z={score:.1f}).",
                         "metric_value": d["cost"], "baseline": med, "ratio": round(ratio, 2),
                         "drilldown": {"filter": {"start": d["day"], "end": d["day"]}},
@@ -1731,7 +1930,7 @@ class Analytics:
                     })
         # week-over-week model shift
         if self.last_day:
-            end = self.today() - timedelta(days=1)   # anchor on yesterday, not last_day
+            end = last_full   # the last complete day you have data for, within the range
             cur_s = (end - timedelta(days=6)).isoformat()
             prev_s, prev_e = (end - timedelta(days=13)).isoformat(), (end - timedelta(days=7)).isoformat()
             for m in self.q(f"SELECT DISTINCT r.model FROM requests r WHERE {w}", p):
@@ -1751,7 +1950,8 @@ class Analytics:
                         "drilldown": {"filter": {"models": [model], "start": cur_s}},
                         "basis": "estimated",
                     })
-        found.sort(key=lambda x: -x.get("ratio", 0))
+        sev = {"high": 0, "medium": 1, "low": 2}
+        found.sort(key=lambda x: (sev.get(x["severity"], 3), -x.get("ratio", 0)))
         return {"anomalies": found[:25], "basis": "estimated"}
 
     # ---------------- scorecard ----------------
@@ -1775,9 +1975,12 @@ class Analytics:
         if margin is None:
             dim("Cache break-even", 50, "No cache activity in range", 1.0)
         else:
+            ratio = eff["cache"].get("breakeven_ratio") or margin
             dim("Cache break-even", 50 + margin * 50,
-                f"Caching returned {margin*100:.0f}% of its cost as read discount net of "
-                "write premium.", 1.0)
+                (f"Caching saved {ratio:.1f}× what it cost (read discount net of write premium)."
+                 if ratio >= 1 else
+                 f"Caching returned {ratio*100:.0f}% of its cost as read discount net of write premium."),
+                1.0)
 
         ml = next((l for l in bud["lines"] if l["name"] == "Monthly spend"), None)
         if ml and ml.get("configured"):
@@ -1796,7 +1999,7 @@ class Analytics:
         return {
             "score": total,
             "dimensions": dims,
-            "what_is_good": [f"{d['name']}: {d['detail']}" for d in strong if d["score"] >= 60],
+            "what_is_good": [f"{d['name']}: {d['detail']}" for d in strong if d["score"] >= 70],
             "needs_attention": [f"{d['name']}: {d['detail']}" for d in weak if d["score"] < 70],
             "biggest_opportunity": (
                 {"title": top["title"], "detail": top["detail"],
@@ -1818,15 +2021,19 @@ class Analytics:
         ov = self.overview(f)
 
         for a in anos["anomalies"][:2]:
-            actions.append({"priority": 1, "kind": "anomaly", "text": a["title"],
+            actions.append({"priority": {"high": 1, "medium": 2}.get(a["severity"], 3),
+                            "kind": "anomaly", "text": a["title"],
                             "detail": a["detail"], "drilldown": a.get("drilldown"),
                             "basis": "estimated"})
         for wf in wst["findings"][:2]:
             actions.append({"priority": 2, "kind": "waste",
                             "text": wf["title"],
-                            "detail": f"{wf['detail']} ~${wf['est_excess_usd']:,.2f} estimated "
-                                      f"excess across ${wf['est_cost_usd']:,.2f} of exposed spend. "
-                                      f"{wf['recommended_action']}",
+                            "detail": (f"{wf['detail']} ~${wf['est_excess_usd']:,.2f} estimated "
+                                       f"excess across ${wf['est_cost_usd']:,.2f} of exposed spend. "
+                                       if wf["est_excess_usd"] > 0 else
+                                       f"{wf['detail']} No excess is claimed; "
+                                       f"${wf['est_cost_usd']:,.2f} of spend sits in these items. ")
+                                      + wf["recommended_action"],
                             "basis": "estimated"})
         for r in recs["recommendations"][:2]:
             if r["type"] == "cache_working":
@@ -1870,14 +2077,14 @@ class Analytics:
                            WHERE {w} GROUP BY 1 ORDER BY 2 DESC""", p)
         files = self.q(f"""SELECT ft.path, COUNT(*) touches, COUNT(DISTINCT ft.session_id) sessions,
                            GROUP_CONCAT(DISTINCT ft.op) ops
-                           FROM files_touched ft WHERE ft.session_id IN
-                           (SELECT DISTINCT r.session_id FROM requests r WHERE {w})
+                           FROM files_touched ft WHERE ft.prompt_id IN
+                           (SELECT DISTINCT r.prompt_id FROM requests r WHERE {w})
                            GROUP BY 1 ORDER BY 2 DESC LIMIT 40""", p)
         branches = self.q(f"""SELECT COALESCE(s.git_branch,'(none)') branch,
                               COUNT(DISTINCT s.id) sessions, SUM(r.est_cost_usd) cost,
                               SUM(r.billable_tokens) tokens
                               FROM requests r JOIN sessions s ON s.id=r.session_id
-                              WHERE {w} GROUP BY 1 ORDER BY cost DESC LIMIT 25""", p)
+                              WHERE {w} GROUP BY 1 ORDER BY cost DESC""", p)
         repos = [r for r in self.projects(f) if not r["is_sandbox"]]
         return {
             "tools": tools, "files": files, "branches": branches, "repositories": repos,
@@ -1897,32 +2104,41 @@ class Analytics:
 
     # ---------------- global search ----------------
     def search(self, term, limit=40):
-        like = f"%{term}%"
+        # One more row than shown, so the page can say "40+" instead of a capped count.
+        pat, limit = like(term), limit + 1
+        out = self._search(term, pat, limit)
+        for k, v in list(out.items()):
+            if isinstance(v, list):
+                out[k + "_more"] = len(v) >= limit
+                out[k] = v[:limit - 1]
+        return out
+
+    def _search(self, term, like, limit):
         return {
             "term": term,
             "prompts": self.q(
                 "SELECT id prompt_id, ts, category, session_id, substr(text,1,240) preview,"
-                " est_cost_usd, billable_tokens FROM prompts WHERE text LIKE ?"
+                " est_cost_usd, billable_tokens FROM prompts WHERE text LIKE ? ESCAPE '\\'"
                 " ORDER BY est_cost_usd DESC LIMIT ?", (like, limit)),
             "sessions": self.q(
                 "SELECT s.id session_id, s.title, s.git_branch, pr.name project, s.started_at,"
                 " s.est_cost_usd, s.billable_tokens FROM sessions s"
                 " JOIN projects pr ON pr.id=s.project_id"
-                " WHERE s.id LIKE ? OR s.title LIKE ? OR s.git_branch LIKE ?"
+                " WHERE s.id LIKE ? ESCAPE '\\' OR s.title LIKE ? ESCAPE '\\' OR s.git_branch LIKE ? ESCAPE '\\'"
                 " ORDER BY s.est_cost_usd DESC LIMIT ?", (like, like, like, limit)),
             "projects": self.q(
                 "SELECT id project_id, name, path, slug FROM projects"
-                " WHERE name LIKE ? OR path LIKE ? LIMIT ?", (like, like, limit)),
+                " WHERE name LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\' LIMIT ?", (like, like, limit)),
             "models": self.q(
                 "SELECT model, COUNT(*) requests, SUM(est_cost_usd) cost FROM requests"
-                " WHERE model LIKE ? GROUP BY 1", (like,)),
+                " WHERE model LIKE ? ESCAPE '\\' GROUP BY 1", (like,)),
             "tools": self.q(
                 "SELECT name, target, COUNT(*) n FROM tool_calls"
-                " WHERE name LIKE ? OR target LIKE ? GROUP BY name, target"
+                " WHERE name LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' GROUP BY name, target"
                 " ORDER BY n DESC LIMIT ?", (like, like, limit)),
             "days": self.q(
                 "SELECT day, COUNT(*) requests, SUM(est_cost_usd) cost FROM requests"
-                " WHERE day LIKE ? GROUP BY 1 ORDER BY 1", (like,)),
+                " WHERE day LIKE ? ESCAPE '\\' GROUP BY 1 ORDER BY 1", (like,)),
         }
 
     # ---------------- filter option lists ----------------
@@ -1971,11 +2187,16 @@ class Analytics:
                                " FROM projects pr LEFT JOIN requests r ON r.project_id=pr.id"
                                " GROUP BY pr.id HAVING n>0 ORDER BY n DESC"),
             "categories": self.q("SELECT category, COUNT(*) n FROM prompts GROUP BY 1 ORDER BY 2 DESC"),
-            "date_range": {"first": self.first_day, "last": self.last_day},
+            "date_range": {"first": self.first_day, "last": self.last_day,
+                           "today": self.today().isoformat(), "synced_through": self.data_end().isoformat()},
             "billing_period": self.billing_period(),
             "meta": self.meta,
             "pricing": {"updated": self.pricing.updated, "source": self.pricing.source,
-                        "models": self.pricing.models},
+                        "models": self.pricing.models,
+                        # price-table keys your data actually uses (ids normalised the same
+                        # way costs are), so the page can lead with those
+                        "used": sorted({self.pricing.normalize(r["model"]) for r in self.q(
+                            "SELECT DISTINCT model FROM requests")} & set(self.pricing.models))},
             "settings": self.settings,
             "version": _version(),
             "unavailable_label": UNAVAILABLE,

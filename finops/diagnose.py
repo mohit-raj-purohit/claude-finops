@@ -121,9 +121,13 @@ class Diagnoser:
                 "basis": "actual tokens, estimated cost"})
 
         # 4. tool output flooding context
-        tools = a.q(f"""SELECT tc.name, COUNT(*) calls, SUM(r.billable_tokens) b
-            FROM tool_calls tc JOIN requests r ON r.id=tc.request_pk WHERE {w}
-            GROUP BY tc.name ORDER BY b DESC LIMIT 6""", p)
+        # Tokens per tool count each request once: a request that made three Bash calls
+        # was still one request, and joining calls to requests counted it three times.
+        tools = a.q(f"""SELECT x.name, SUM(x.calls) calls, SUM(r.billable_tokens) b
+            FROM (SELECT tc.request_pk, tc.name, COUNT(*) calls FROM tool_calls tc
+                  GROUP BY tc.request_pk, tc.name) x
+            JOIN requests r ON r.id=x.request_pk WHERE {w}
+            GROUP BY x.name ORDER BY b DESC LIMIT 6""", p)
         if tools:
             top = tools[0]
             out.append({
@@ -585,8 +589,17 @@ class Diagnoser:
                 MAX(tc.result_chars)/{CHARS_PER_TOKEN} largest
                 FROM tool_calls tc WHERE tc.kind IN ({ph}) AND {tcw}
                 GROUP BY tc.kind, tc.server ORDER BY carried DESC""", kinds + p)
+            # Re-reads are priced at the cache-read rate of the model that made each call,
+            # not one main-model rate for everything.
+            cost_by = defaultdict(float)
+            for x in a.q(f"""SELECT tc.kind, tc.server, rq.model,
+                    SUM(tc.result_chars*1.0*tc.carry_requests)/{CHARS_PER_TOKEN} carried
+                    FROM tool_calls tc JOIN requests rq ON rq.id=tc.request_pk
+                    WHERE tc.kind IN ({ph}) AND {tcw} GROUP BY 1, 2, 3""", kinds + p):
+                r_ = (a.pricing.rates(x["model"]).get("cache_read") or 0) / 1e6
+                cost_by[(x["kind"], x["server"])] += (x["carried"] or 0) * r_
             for r in rows:
-                r["carried_cost"] = (r["carried"] or 0) * rate
+                r["carried_cost"] = cost_by.get((r["kind"], r["server"]), (r["carried"] or 0) * rate)
                 r["tools"] = a.q(f"""SELECT tc.name, COUNT(*) calls,
                     SUM(tc.result_chars)/{CHARS_PER_TOKEN} injected,
                     SUM(tc.result_chars*1.0*tc.carry_requests)/{CHARS_PER_TOKEN} carried
@@ -622,7 +635,7 @@ class Diagnoser:
             "note": "Injected = size of what came back into context (actual size, ~4 chars/token). "
                     "Carried = injected × later requests in the same session that re-read it — an "
                     "upper bound, since /compact isn't visible. Carried cost prices those re-reads at "
-                    "your main model's cache-read rate (estimated). Subagent tokens are actual. "
+                    "the cache-read rate of the model that made each call (estimated). Subagent tokens are actual. "
                     "Slash-command figures attribute the whole turn they started.",
         }
 

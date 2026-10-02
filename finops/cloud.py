@@ -309,10 +309,13 @@ def report(analytics, days=30):
     cu = c.get("cursor_usage") or []
     cs = c.get("cursor_spend") or []
     since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    # The vendor APIs report UTC days, so this page compares on UTC days too (every
+    # other page uses your local calendar days); otherwise a late-evening session would
+    # sit on different dates on the two sides.
     local = {r["agent"]: r for r in analytics.q(
         "SELECT agent, SUM(est_cost_usd) cost, SUM(billable_tokens) tokens,"
         " COUNT(DISTINCT session_id) sessions, COUNT(*) requests"
-        " FROM requests WHERE day >= ? GROUP BY agent", (since,))}
+        " FROM requests WHERE substr(ts,1,10) >= ? GROUP BY agent", (since,))}
 
     by_day = {}
     for r in cc:
@@ -321,9 +324,9 @@ def report(analytics, days=30):
         d["billed_cost"] += r["est_cost_usd"]
         d["billed_tokens"] += r["tokens"]
         d["billed_sessions"] += r["sessions"]
-    for r in analytics.q("SELECT day, SUM(est_cost_usd) c, SUM(billable_tokens) t,"
+    for r in analytics.q("SELECT substr(ts,1,10) day, SUM(est_cost_usd) c, SUM(billable_tokens) t,"
                          " COUNT(DISTINCT session_id) s FROM requests"
-                         " WHERE agent='claude' AND day >= ? GROUP BY day", (since,)):
+                         " WHERE agent='claude' AND substr(ts,1,10) >= ? GROUP BY 1", (since,)):
         d = by_day.setdefault(r["day"], {"day": r["day"], "billed_cost": 0.0, "billed_tokens": 0,
                                          "billed_sessions": 0})
         d.update(local_cost=r["c"] or 0.0, local_tokens=r["t"] or 0, local_sessions=r["s"] or 0)
@@ -379,6 +382,7 @@ def report(analytics, days=30):
               for r in cost}.items()], key=lambda x: -x["cost_usd"])[:20],
         "note": "Billed figures come from the vendor APIs (org-wide, every machine and member). "
                 "Local figures are what this machine's transcripts recorded. A gap usually means "
-                "other machines, other members, or work outside this machine.",
+                "other machines, other members, or work outside this machine. Days on this "
+                "page are UTC days, as the vendors report them.",
         "basis": "billed",
     }

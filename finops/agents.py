@@ -17,6 +17,8 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
+from . import localtime
+
 HOME = os.path.expanduser("~")
 IS_WIN, IS_MAC = os.name == "nt", sys.platform == "darwin"
 
@@ -44,10 +46,10 @@ AGENTS = {
                "note": "Tokens and model per reply. Cost estimated at Gemini API list prices; "
                        "the free tier costs nothing."},
     "cursor": {"name": "Cursor", "data": "activity",
-               "paths": [os.path.join(HOME, ".cursor", "projects"), _cursor_state_db()],
-               "note": "Prompts and tool calls from agent transcripts; token counts only where "
-                       "the Cursor IDE stored them, with no model. Cursor bills by subscription, "
-                       "so no cost is estimated."},
+               "paths": [_cursor_state_db()],
+               "note": "Cursor IDE chats: prompts, times and token counts as the IDE stored "
+                       "them, with no model. Cursor bills by subscription, so no cost is "
+                       "estimated. Agent transcripts are not read: they have no times or tokens."},
 }
 
 
@@ -61,7 +63,7 @@ def detect():
 
 
 def _day(ts):
-    return (ts or "")[:10]
+    return localtime.day(ts)
 
 
 def _iso_ms(ms):
@@ -69,10 +71,6 @@ def _iso_ms(ms):
         return datetime.fromtimestamp(int(ms) / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
     except (TypeError, ValueError, OSError):
         return None
-
-
-def _iso_mtime(path):
-    return datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class AgentLoader:
@@ -132,7 +130,7 @@ class AgentLoader:
             " cache_write_5m, cache_write_1h, cache_write_tokens, billable_tokens,"
             " context_tokens, est_cost_usd, est_cost_no_cache_usd, tool_call_count,"
             " is_sidechain, agent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,0,0,?,?,?,?,?,0,?)",
-            (sid, pid, prompt_id, ts, _day(ts), t.hour if t else None, model,
+            (sid, pid, prompt_id, ts, _day(ts), localtime.hour(ts), model,
              1 if priced else 0, inp, out, think, cached, inp + out + cached, inp + cached,
              cost, cost - c_part + nc_part, len(tools), agent))
         rpk = cur.lastrowid
@@ -225,35 +223,11 @@ class AgentLoader:
 
     # ---------- Cursor ----------
     def cursor(self):
-        root = os.path.join(HOME, ".cursor", "projects")
-        for fp in sorted(glob.glob(os.path.join(root, "*", "agent-transcripts", "*", "*.jsonl"))):
-            slug = os.path.relpath(fp, root).split(os.sep)[0]
-            # "Users-me-Documents-JIRA" -> best effort real path, else show the slug
-            guess = "/" + slug.replace("-", "/")
-            cwd = guess if os.path.isdir(guess) else None
-            pid = self.project("cursor", cwd, slug.rsplit("-", 1)[-1] or slug)
-            sid = "cursor-" + os.path.splitext(os.path.basename(fp))[0]
-            ts = _iso_mtime(fp)          # transcripts carry no timestamps; use last write
-            self.session("cursor", sid, pid, fp)
-            prompt_id = None
-            with open(fp, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    try:
-                        o = json.loads(line)
-                    except ValueError:
-                        continue
-                    content = (o.get("message") or {}).get("content") or []
-                    if o.get("role") == "user":
-                        text = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
-                        text = text.replace("<user_query>", "").replace("</user_query>", "").strip()
-                        if text:
-                            prompt_id = self.prompt("cursor", sid, pid, ts, text)
-                    elif o.get("role") == "assistant":
-                        tools = [(c.get("name"), (c.get("input") or "")[:300]
-                                  if isinstance(c.get("input"), str) else
-                                  json.dumps(c.get("input"))[:300])
-                                 for c in content if isinstance(c, dict) and c.get("type") == "tool_use"]
-                        self.request("cursor", sid, pid, prompt_id, ts, "cursor", tools=tools)
+        # Cursor's agent transcripts (~/.cursor/projects/*/agent-transcripts) are not
+        # read: they carry no timestamps and no token counts, so every line would have
+        # been dated by the file's last write and counted as a request it never was.
+        # Only the IDE's own store, which records when each message was sent and its
+        # token counts, is loaded.
         self.cursor_ide()
 
     def cursor_ide(self):

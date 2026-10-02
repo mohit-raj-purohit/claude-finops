@@ -127,7 +127,9 @@ def sync(log, source=DEFAULT_SOURCE):
     """Rebuild the warehouse into a temp file, then swap it in (the dashboard keeps serving)."""
     tmp = DB_PATH + ".sync"
     log("Reading Claude transcripts…")
-    Loader(db_path=tmp, source=source).build(verbose=False)
+    # the live warehouse is the "previous" one: sessions whose transcripts were deleted
+    # since are carried into the new build (history.keep_deleted_transcripts)
+    Loader(db_path=tmp, source=source, keep_from=DB_PATH if os.path.exists(DB_PATH) else None).build(verbose=False)
     con = sqlite3.connect(tmp)
     con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     n = con.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
@@ -210,6 +212,7 @@ def free_models():
             have_model = os.path.exists(os.path.join(KEY_DIR, "openrouter.key"))
         fits = not m.get("min_ram_gb") or ram is None or ram >= m["min_ram_gb"]
         out.append({**m, "installed": installed and have_model, "launcher": launcher,
+                    "downloaded": bool(have_model) and m["provider"] == "ollama",
                     "fits_ram": fits, "ram_gb": round(ram or 0), "free_disk_gb": round(disk)})
     return {"models": out, "ollama_installed": bool(_ollama_bin()), "os": OS_NAME,
             "ollama_running": pulled is not None, "bin_on_path": _on_path(BIN_DIR),
@@ -236,11 +239,18 @@ def free_model_plan(mid):
         if ram and m.get("min_ram_gb") and ram < m["min_ram_gb"]:
             steps.append({"do": f"Warning: this model wants {m['min_ram_gb']} GB RAM and this "
                                 f"machine has {ram:.0f} GB. It may be very slow.", "warn": True})
-        if m.get("download_gb") and _free_disk_gb() < m["download_gb"] + 2:
-            return {"model": m, "blocked": f"Needs ~{m['download_gb']} GB free disk; only "
-                    f"{_free_disk_gb():.0f} GB free."}
-        steps.append({"do": f"Download {m['model']} (~{m['download_gb']} GB) with ollama pull",
-                      "consent": True})
+        pulled = _ollama_running() or []
+        have = any(n == m["model"] or n == m["model"] + ":latest" for n in pulled)
+        if have:
+            # ollama pull on a model you already have only checks it is current
+            steps.append({"do": f"{m['model']} is already downloaded; ollama pull only checks it is current",
+                          "consent": False})
+        else:
+            if m.get("download_gb") and _free_disk_gb() < m["download_gb"] + 2:
+                return {"model": m, "blocked": f"Needs ~{m['download_gb']} GB free disk; only "
+                        f"{_free_disk_gb():.0f} GB free."}
+            steps.append({"do": f"Download {m['model']} (~{m['download_gb']} GB) with ollama pull",
+                          "consent": True})
     else:
         if not os.path.exists(os.path.join(KEY_DIR, "openrouter.key")):
             needs.append({"field": "api_key", "label": "OpenRouter API key",
@@ -427,15 +437,22 @@ def _slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:40] or "task"
 
 
-def suggestions(a):
+def suggestions(a, f=None):
     """Skills and MCP servers worth adding, from recurring work (actual transcripts).
 
-    Scans every prompt and shell command, so it's cached on the warehouse (reset by sync);
-    installed-state is re-checked on every call.
+    Only Claude Code's own prompts and commands count (these are Claude Code skills and
+    MCP servers; another agent's templated prompts would suggest things Claude never
+    repeats), within the date range when one is given. Scanning is cached per range on
+    the warehouse (reset by sync); installed-state is re-checked on every call.
     """
-    if getattr(a, "_suggest", None) is None:
-        a._suggest = _suggestions(a)
-    out = a._suggest
+    f = f or {}
+    key = (f.get("start"), f.get("end"))
+    cache = getattr(a, "_suggest", None)
+    if not isinstance(cache, dict):
+        cache = a._suggest = {}
+    if key not in cache:
+        cache[key] = _suggestions(a, f)
+    out = cache[key]
     installed = _installed_mcp()
     existing = set(os.listdir(SKILLS_DIR)) if os.path.isdir(SKILLS_DIR) else set()
     for m in out["mcp"]:
@@ -445,13 +462,21 @@ def suggestions(a):
     return out
 
 
-def _suggestions(a):
+def _suggestions(a, f=None):
+    f = f or {}
+    rng, p = "", []
+    if f.get("start"):
+        rng += " AND {t}.day >= ?"; p.append(f["start"])
+    if f.get("end"):
+        rng += " AND {t}.day <= ?"; p.append(f["end"])
     used_tools = {r["name"] for r in a.q("SELECT DISTINCT name FROM tool_calls WHERE name LIKE 'mcp__%'")}
     installed = _installed_mcp()
-    corpus = a.q("""SELECT p.session_id, p.text, p.source, pj.name project FROM prompts p
-                    JOIN projects pj ON pj.id=p.project_id WHERE p.text IS NOT NULL""")
-    bash = a.q("""SELECT t.session_id, t.target, pj.name project FROM tool_calls t
-                  JOIN projects pj ON pj.id=t.project_id WHERE t.name='Bash'""")
+    corpus = a.q(f"""SELECT p.session_id, p.text, p.source, pj.name project FROM prompts p
+                    JOIN projects pj ON pj.id=p.project_id
+                    WHERE p.text IS NOT NULL AND p.agent='claude' {rng.format(t='p')}""", p)
+    bash = a.q(f"""SELECT t.session_id, t.target, pj.name project FROM tool_calls t
+                  JOIN projects pj ON pj.id=t.project_id
+                  WHERE t.name='Bash' AND t.agent='claude' {rng.format(t='t')}""", p)
 
     mcps = []
     for mid, name, what, rx, args, need in MCP_CATALOG:
@@ -527,8 +552,8 @@ def _suggestions(a):
                        "sessions": len(o["sessions"]), "runs": len(o["sessions"]),
                        "projects": sorted(o["projects"], key=o["projects"].get, reverse=True)[:3],
                        "examples": o["examples"], "installed": name in existing,
-                       "what": f"You started {len(o['sessions'])} sessions with \"{k}…\". Save it "
-                               f"as a skill and trigger it with /{name}."})
+                       "what": f"You typed prompts starting \"{k}…\" in {len(o['sessions'])} sessions. "
+                               f"Save it as a skill and trigger it with /{name}."})
     skills.sort(key=lambda x: (x["installed"], -x["sessions"]))
     return {"mcp": mcps[:12], "skills": skills[:15], "skills_dir": SKILLS_DIR,
             "note": "Suggestions come from keywords in your prompts and the shell commands Claude "
@@ -623,7 +648,7 @@ def free_model_test(log, mid):
     return {"ok": True, "command": m["command"]}
 
 
-def compare(a, agents=None):
+def compare(a, agents=None, f=None):
     """Each selected agent's priced models (with your usage) side by side; free models too
     when Claude Code is selected, since they plug into Claude Code."""
     with open(os.path.join(ROOT, "config", "model_compare.json")) as fh:
@@ -632,18 +657,20 @@ def compare(a, agents=None):
     prov = {"claude": "anthropic", "codex": "openai", "gemini": "google"}
     want = {prov[x] for x in agents if x in prov}
     where = {"anthropic": "Anthropic cloud", "openai": "OpenAI cloud", "google": "Google cloud"}
-    ph = ",".join("?" * len(agents))
-    used = {r["model"]: r for r in a.q(f"""SELECT model, COUNT(*) requests, SUM(est_cost_usd) cost,
-                                           SUM(billable_tokens) tokens FROM requests
-                                           WHERE agent IN ({ph}) GROUP BY model""", agents)}
+    w, wp = a.where(dict(f or {}, agents=agents))
+    used = {r["model"]: r for r in a.q(f"""SELECT r.model, COUNT(*) requests, SUM(r.est_cost_usd) cost,
+                                           SUM(r.billable_tokens) tokens FROM requests r
+                                           WHERE {w} GROUP BY r.model""", wp)}
     rows = []
     for mid, p in a.pricing.models.items():
         pv = p.get("provider", "anthropic")
         if p.get("tier") in (None, "none", "other") or pv not in want or mid.endswith("[1m]"):
             continue
-        if pv == "anthropic" and mid not in ratings:
-            continue
         u = used.get(mid) or {}
+        # An unrated Claude model still belongs in the table when you used it; unused
+        # unrated ones (old ids kept for pricing history) would only add noise.
+        if pv == "anthropic" and mid not in ratings and not u:
+            continue
         rt = ratings.get(mid) or {"tools": None, "reasoning": None, "multifile": None,
                                   "speed": "—", "best_for": p.get("tier", "").capitalize() + " tier"}
         rows.append({"id": mid, "name": p.get("display_name", mid), "kind": "claude" if pv == "anthropic" else pv,
@@ -666,6 +693,6 @@ def compare(a, agents=None):
     return {"rows": rows, "os": fm["os"], "ram_gb": fm["models"][0]["ram_gb"] if fm["models"] else None,
             "agents": agents,
             "note": "Ratings are judgement, not benchmarks; edit config/model_compare.json. "
-                    "Unrated models show — until you add them there. Tool use matters most: coding "
+                    "Models you used that have no rating show — until you add them there. Tool use matters most: coding "
                     "agents work by calling tools, and weak tool use means loops, broken edits "
                     "and early stops."}

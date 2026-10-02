@@ -36,7 +36,7 @@ const nice = v => {
   const r = v / p;
   return (r <= 1 ? 1 : r <= 2 ? 2 : r <= 2.5 ? 2.5 : r <= 5 ? 5 : 10) * p;
 };
-export const fmtUSD = v => v == null ? '—' :
+export const fmtUSD = v => v == null ? '—' : v === 0 ? '$0' :
   (Math.abs(v) >= 1000 ? '$' + v.toLocaleString(undefined, {maximumFractionDigits: 0})
    : Math.abs(v) >= 1 ? '$' + v.toFixed(2) : '$' + v.toFixed(v < 0.01 ? 4 : 3));
 export const fmtNum = v => v == null ? '—' :
@@ -249,7 +249,7 @@ export function gauge(host, {pct, status = 'healthy', label = '', size = 176}) {
 }
 
 /* ---------- forecast fan ---------- */
-export function forecastFan(host, {history, scenarios, remainingDays, height = 230}) {
+export function forecastFan(host, {history, scenarios, remainingDays, height = 230, nowLabel = 'today'}) {
   host.innerHTML = '';
   if (!history.length) { host.innerHTML = '<div class="empty">Not enough history</div>'; return; }
   const W = Math.max(host.clientWidth || 640, 320), H = height;
@@ -295,15 +295,23 @@ export function forecastFan(host, {history, scenarios, remainingDays, height = 2
     svg.appendChild(el('circle', {cx: x, cy: y, r: 3.5, fill: c, stroke: 'var(--surface)',
       'stroke-width': 2}));
   });
+  // End labels: keep at least one line of space between them, or they print on top of
+  // each other when the band is narrow.
+  const yExp = Y(paths.expected.at(-1)) - 6;
   if (paths.high) {
-    svg.appendChild(el('text', {x: X(total - 1), y: Y(paths.high.at(-1)) - 6, 'text-anchor': 'end',
+    const yHigh = Math.min(Y(paths.high.at(-1)) - 6, yExp - 13);
+    svg.appendChild(el('text', {x: X(total - 1), y: Math.max(yHigh, m.t + 10), 'text-anchor': 'end',
       class: 'val'}, 'High ' + fmtUSD(paths.high.at(-1))));
   }
-  svg.appendChild(el('text', {x: X(total - 1), y: Y(paths.expected.at(-1)) - 6, 'text-anchor': 'end',
+  svg.appendChild(el('text', {x: X(total - 1), y: yExp, 'text-anchor': 'end',
     class: 'val'}, 'Expected ' + fmtUSD(paths.expected.at(-1))));
+  // Axis labels: drop the middle one when it would collide with either end.
+  const gap = 64;
   svg.appendChild(el('text', {x: X(0), y: H - 8}, history[0].day));
-  svg.appendChild(el('text', {x: X(n - 1), y: H - 8, 'text-anchor': 'middle'}, 'today'));
-  svg.appendChild(el('text', {x: X(total - 1), y: H - 8, 'text-anchor': 'end'}, 'period end'));
+  if (X(n - 1) - X(0) > gap && X(total - 1) - X(n - 1) > gap)
+    svg.appendChild(el('text', {x: X(n - 1), y: H - 8, 'text-anchor': 'middle'}, nowLabel));
+  svg.appendChild(el('text', {x: X(total - 1), y: H - 8, 'text-anchor': 'end'},
+    X(total - 1) - X(n - 1) > gap ? 'period end' : `${nowLabel} · period end`));
 
   const hit = el('rect', {x: m.l, y: m.t, width: iw, height: ih, fill: 'transparent'});
   hit.addEventListener('mousemove', ev => {

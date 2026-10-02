@@ -1,9 +1,11 @@
 {
   "_comment": "Qualitative 1-5 ratings for the Compare view. Judgement from model size, age and known behaviour in agentic coding. Not benchmark scores; edit freely. Keys match model ids in pricing.json or ids in free_models.json.",
   "ratings": {
+    "claude-fable-5-1":          {"tools": 5, "reasoning": 5, "multifile": 5, "speed": "Slower; long turns", "best_for": "The hardest problems; priced well above Opus"},
+    "claude-opus-5-5":           {"tools": 5, "reasoning": 5, "multifile": 5, "speed": "Fast", "best_for": "Hard bugs, architecture, reviews; cheaper than Opus 5"},
     "claude-opus-5":             {"tools": 5, "reasoning": 5, "multifile": 5, "speed": "Fast", "best_for": "Hard bugs, architecture, reviews"},
-    "claude-sonnet-5":           {"tools": 5, "reasoning": 4, "multifile": 5, "speed": "Fast", "best_for": "Everyday coding: best value"},
-    "claude-fable-5-1":          {"tools": 5, "reasoning": 4, "multifile": 4, "speed": "Fast", "best_for": "Same price tier as Sonnet"},
+    "claude-sonnet-5-5":         {"tools": 5, "reasoning": 4, "multifile": 5, "speed": "Fast", "best_for": "Everyday coding: best value"},
+    "claude-sonnet-5":           {"tools": 5, "reasoning": 4, "multifile": 5, "speed": "Fast", "best_for": "Everyday coding (previous Sonnet)"},
     "claude-haiku-4-5-20251001": {"tools": 4, "reasoning": 3, "multifile": 3, "speed": "Fastest", "best_for": "Lookups, Explore subagents, small edits"},
     "qwen-openrouter":           {"tools": 3, "reasoning": 3, "multifile": 3, "speed": "Medium, throttled on free tier", "best_for": "Free general coding, if sending code to OpenRouter is OK"},
     "qwen38-local":              {"tools": 3, "reasoning": 3, "multifile": 3, "speed": "Needs 32 GB+ RAM", "best_for": "Strongest local option on a big machine"},

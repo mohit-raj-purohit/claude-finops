@@ -347,6 +347,20 @@ Everything the app writes lives outside the install folder, in one state directo
   secrets.local.json      provider API keys (0600)
 ```
 
+Days, "today" and the billing period follow this computer's time zone (Claude Code
+stamps transcripts in UTC; finops converts them). Set `CLAUDE_FINOPS_TZ` to an IANA name
+such as `Asia/Kolkata` to use another one, then press **Sync**.
+
+Claude Code deletes transcripts older than its `cleanupPeriodDays` (30 by default). A
+sync keeps the sessions it already had when their transcript disappears, re-costed at
+current prices, so your history outlives that cleanup. If you delete transcripts on
+purpose and want them gone from the dashboard too, set
+`"history": {"keep_deleted_transcripts": false}` in `settings.local.json`.
+
+While the dashboard runs it re-reads your transcripts by itself once the data is an hour
+old, so recent days don't read as idle. `CLAUDE_FINOPS_AUTOSYNC_MINUTES` changes the
+interval; `0` turns it off and leaves only the **Sync** button.
+
 Set `CLAUDE_FINOPS_HOME=/some/path` to put it elsewhere. The install folder holds
 only code and the shared defaults in `config/`, so it can be replaced on upgrade —
 or shipped as a package — without touching your data. An older in-tree `data/`
@@ -443,6 +457,29 @@ files on Windows.
 - **Install** under Live warnings (Budgets, block ③, or `--install-guard`) adds one `PreToolUse` hook entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. Your other hooks are left
   alone, and uninstalling removes only that entry.
+- **Start experiment** (Subagent models) adds `env.CLAUDE_CODE_SUBAGENT_MODEL` to
+  `~/.claude/settings.json`, keeping a `.finops-backup` copy, after showing you the exact change.
+  It won't overwrite a value you set yourself. **Stop** removes it only if it still holds the
+  value finops wrote.
+
+---
+
+## Subagent models
+
+Subagents are the one place a model switch costs no cache rewrite: each run starts its own cache,
+and Claude Code lets you choose its model. The **Subagent models** page (sidebar, Optimize):
+
+- **Headline:** what subagents cost and their share of your Claude Code spend. That share is the
+  most routing could ever save, even if every run were free.
+- **By type and model:** each subagent type, the models it ran on, and the median cost, turns,
+  output and context per run. Measured from runs that happened, never repriced, and no savings
+  total. A cheaper model is suggested only when both models have at least `subagents.min_runs`
+  runs of that type (5, in `config/settings.json`) and the cheaper one cost less per run. Your own
+  agent files get the exact `model:` line to add; built-in types point to an experiment. Forks get
+  context advice instead, since they always use your conversation's model and context.
+- **Experiment:** run subagents on one model (`haiku`, `sonnet`, `opus` or `fable`) for a while,
+  then compare each type's runs before and after the start. Before is the same length of time
+  just before it, at most 30 days. Runs that used another model anyway are counted separately.
 
 ---
 
@@ -475,7 +512,7 @@ Besides Claude Code, the warehouse loads every other coding agent it finds on th
 |---|---|---|
 | Codex | `~/.codex/sessions` | Tokens + model per turn; cost at OpenAI list price |
 | Gemini CLI | `~/.gemini/tmp/*/chats` | Tokens + model per reply; cost at Gemini list price |
-| Cursor | `~/.cursor/projects/*/agent-transcripts`, Cursor IDE `state.vscdb` (read-only) | Prompts + tool calls; tokens only where Cursor stored them; no model, not priced |
+| Cursor | Cursor IDE `state.vscdb` (read-only) | Prompts, times and tokens as the IDE stored them; no model, not priced. Agent transcripts are skipped: they carry no times or tokens |
 
 Pick agents with the chips at the top: click for one, Cmd/Ctrl-click to combine, **All** for
 everything. Every page follows the selection, and **Agents** shows them side by side.

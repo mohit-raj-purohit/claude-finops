@@ -13,6 +13,7 @@ CATEGORIES = [
     ("documentation", 2.3, r"\b(document|documentation|docs?|readme|changelog|comment(s)? (for|on)|docstring|write up|write-up)\b"),
     ("architecture", 2.2, r"\b(architect|architecture|design (the|a) (system|schema|api)|system design|data model|schema|scal(e|ing|ability)|trade[- ]?offs?|high level design)\b"),
     ("planning", 2.1, r"\b(plan|roadmap|break (this )?down|steps to|approach|strategy|estimate|milestone|backlog|prioriti[sz]e)\b"),
+    ("version_control", 2.0, r"\b(commit|push|merge|rebase|cherry[- ]?pick|stash|branch|git)\b"),
     ("automation", 2.0, r"\b(script|automat|cron|pipeline|ci/?cd|workflow|deploy|jenkins|github action|makefile|bash script)\b"),
     ("research", 1.9, r"\b(research|compare|find out|look up|investigate|what (is|are)|explore options|alternatives|pros and cons|benchmark|which (library|tool|framework))\b"),
     ("learning", 1.8, r"\b(explain|how does|teach me|understand|what does .* mean|walk me through|help me learn|tutorial|eli5)\b"),
@@ -42,6 +43,11 @@ def classify(text):
             scores[name] = weight * (1 + 0.25 * min(n - 1, 4))
             evidence[name] = sorted({s.lower().strip() for s in flat if s})[:5]
     if not scores:
+        # Most unmatched prompts are short steering turns inside a task ("do that",
+        # "fix all", "status?", or a reply in another language). They are not
+        # unknown work, they continue the turn before; say so rather than "other".
+        if len(text.strip()) < 160:
+            return "follow_up", 0.5, ["short instruction"]
         return "other", 0.0, []
     best = max(scores, key=scores.get)
     total = sum(scores.values())

@@ -61,6 +61,13 @@ const BADGE = {actual: '<span class="badge">Actual</span>',
   estimated: '<span class="badge est">Estimated</span>',
   forecast: '<span class="badge fc">Forecast</span>',
   recommendation: '<span class="badge rec">Recommendation</span>'};
+// Shown where a projection depends on recent days: days after the last sync are
+// unread, so they are projected rather than counted as zero.
+const staleNote = x => x && x.unread_days > 0 ? `<div class="note">Your data runs to <b>${esc(x.synced_through)}</b>.
+  The ${x.unread_days} day${x.unread_days === 1 ? '' : 's'} since then ${x.unread_days === 1 ? 'is' : 'are'} projected, not counted as $0.
+  Press <b>Sync</b> to read them.</div>` : '';
+// A rule that claims no excess says so, instead of a "$0.0000 excess" that reads like a measurement.
+const excessText = f => f.est_excess_usd > 0 ? `${fmtUSD(f.est_excess_usd)} excess` : 'no excess claimed';
 const statusGlyph = s => dot({healthy: 'green', high: 'yellow', approaching: 'orange', critical: 'red'}[s] || 'grey');
 const statusChip = (s, txt) => `<span class="status ${s}"><span class="glyph">${statusGlyph(s)}</span>${esc(txt || s)}</span>`;
 const modelColor = m => {
@@ -146,6 +153,7 @@ const NAV = [
   ['Optimize', [
     ['diagnose', 'scan', 'Why so many tokens?', 'priced'],
     ['attribution', 'users', 'Who used the tokens', 'priced'],
+    ['subagents', 'bot', 'Subagent models', 'claude'],
     ['waste', 'trash', 'Waste detection'],
     ['freemodels', 'gift', 'Free models', 'claude'],
     ['jev', 'sparkles', 'Jev (fast decisions)'],
@@ -384,7 +392,8 @@ async function scopeStrip() {
     cell('Est. spend', fmtUSD(o.est_cost_usd), 'Estimated at list prices for the current filters') +
     cell('Sessions', fmtInt(o.sessions)) +
     cell('Prompts', fmtInt(o.prompts)) +
-    cell('Requests', fmtNum(o.requests), fmtInt(o.requests) + ' model requests') +
+    cell('Requests', fmtNum(o.requests), fmtInt(o.requests) + ' model requests'
+      + (o.unpriced_requests ? `, of which ${fmtInt(o.unpriced_requests)} have no price data and count as $0` : '')) +
     cell('Active days', fmtInt(o.active_days));
 }
 
@@ -427,7 +436,9 @@ const RANGES = [['today', 'Today'], ['7d', '7 days'], ['14d', '14 days'], ['30d'
 
 function applyRange(r) {
   S.range = r;
-  const last = S.opts.date_range.last, bp = S.opts.billing_period;
+  // Ranges end today (your local date), not on the last day that happens to have data:
+  // "Today" with no usage yet should read as empty, not as some earlier day.
+  const last = S.opts.date_range.today || S.opts.date_range.last, bp = S.opts.billing_period;
   const dayShift = n => { const d = new Date(last + 'T00:00:00Z');
     d.setUTCDate(d.getUTCDate() - n + 1); return d.toISOString().slice(0, 10); };
   if (r === 'today') { S.filter.start = last; S.filter.end = last; }
@@ -573,10 +584,18 @@ document.addEventListener('keydown', e => {
     toggleRecent();
 });
 
+// Lists honour the date range; a drawer shows the whole prompt or session, plus what fell
+// inside the selected dates when the two differ, so both list and drawer numbers make sense.
+const wholeNote = (what, x) => {
+  const r = x && x.in_range;
+  if (!r || (Math.abs(r.cost - (x.est_cost_usd || 0)) < 0.005 && r.requests === (x.request_count ?? r.requests))) return '';
+  return `<div class="note">In the selected dates: <b>${fmtUSD(r.cost)}</b> across ${fmtInt(r.requests)} requests
+    (the list shows this). The totals below cover the whole ${what}, including other days.</div>`;
+};
 async function openPrompt(id) {
   const d = drawer('Prompt detail', '<div class="loading">Loading…</div>');
-  const p = await fetch(`/api/prompt/${id}`).then(r => r.json());
-  d.querySelector('.content').innerHTML = `
+  const p = await fetch(`/api/prompt/${id}?${qs()}`).then(r => r.json());
+  d.querySelector('.content').innerHTML = `${wholeNote('prompt', p)}
     <div class="grid g4">
       ${kpi('Estimated cost', fmtUSD(p.est_cost_usd), null, {badge: BADGE.estimated})}
       ${kpi('Billable tokens', fmtInt(p.billable_tokens))}
@@ -629,9 +648,9 @@ async function openPrompt(id) {
 
 async function openSession(id) {
   const d = drawer('Session detail', '<div class="loading">Loading…</div>', esc(shortId(id)));
-  const s = await fetch(`/api/session/${encodeURIComponent(id)}`).then(r => r.json());
+  const s = await fetch(`/api/session/${encodeURIComponent(id)}?${qs()}`).then(r => r.json());
   const cont = d.querySelector('.content');
-  cont.innerHTML = `
+  cont.innerHTML = `${wholeNote('session', s)}
     <div class="grid g4">
       ${kpi('Estimated cost', fmtUSD(s.est_cost_usd), null, {badge: BADGE.estimated})}
       ${kpi('Billable tokens', fmtInt(s.billable_tokens))}
@@ -752,7 +771,7 @@ VIEWS.overview = async (page) => {
 
     <div class="grid g2">
       ${card('Model cost', `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-        <div class="chart" id="mdonut"></div><div style="flex:1;min-width:230px" id="mtable"></div></div>`,
+        <div class="chart" id="mdonut" style="width:auto;flex:none"></div><div style="flex:1;min-width:max-content" id="mtable"></div></div>`,
         {badge: BADGE.estimated})}
       ${card('Project cost', '<div class="chart" id="pbars"></div>', {badge: BADGE.estimated,
         hint: 'top 10 · click to drill in'})}
@@ -769,11 +788,12 @@ VIEWS.overview = async (page) => {
         `<div class="item sev-${f.severity}"><div class="hd">${statusGlyph(
           f.severity === 'high' ? 'critical' : f.severity === 'medium' ? 'high' : 'healthy')}
           ${esc(f.title)}<span class="spacer"></span>
-          <span style="font-variant-numeric:tabular-nums">${fmtUSD(f.est_excess_usd)} excess</span></div>
+          <span style="font-variant-numeric:tabular-nums">${excessText(f)}</span></div>
           <div class="dt">${esc(f.detail)}</div></div>`).join('')}</div>`,
         {badge: BADGE.estimated,
          hint: `${fmtPct(waste.high_severity_pct)} high-severity exposure`,
          footer: esc(waste.note)})}
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
       ${card('Optimization opportunities', `<div class="stack">${
         b.recommendations.recommendations.length
         ? b.recommendations.recommendations.slice(0, 5).map(r => `<div class="item">
@@ -782,11 +802,6 @@ VIEWS.overview = async (page) => {
             <div class="note">${esc(r.caveat)}</div></div>`).join('')
         : '<div class="empty">No recommendation met the evidence threshold</div>'}</div>`,
         {badge: BADGE.recommendation})}
-    </div>
-
-    <div class="grid g2">
-      ${card('Forecast', '<div class="chart" id="fan"></div><div class="legend" id="fanleg"></div>',
-        {badge: BADGE.forecast, hint: forecast.available ? forecast.method : ''})}
       ${card('FinOps score', `<div class="scorewrap">
         <div><div class="scorenum">${scorecard.score}</div>
           <div class="scoregrade">out of 100</div></div>
@@ -796,6 +811,12 @@ VIEWS.overview = async (page) => {
           <div class="meter ${d.score >= 75 ? 'healthy' : d.score >= 50 ? 'high'
             : d.score >= 30 ? 'approaching' : 'critical'}"><i style="width:${d.score}%"></i></div></div>`).join('')}
         </div></div>`, {badge: BADGE.estimated})}
+      </div>
+    </div>
+
+    <div class="grid">
+      ${card('Forecast', '<div class="chart" id="fan"></div><div class="legend" id="fanleg"></div>',
+        {badge: BADGE.forecast, hint: forecast.available ? forecast.method : ''})}
     </div>`;
 
   // burn gauge + notes
@@ -874,7 +895,7 @@ VIEWS.overview = async (page) => {
 
   if (forecast.available && !forecast.insufficient_history) {
     C.forecastFan($('#fan', page), {history: burn.series, scenarios: forecast.scenarios,
-      remainingDays: forecast.remaining_days});
+      remainingDays: forecast.remaining_days, nowLabel: forecast.unread_days ? 'last sync' : 'today'});
     $('#fanleg', page).innerHTML = `<span class="it"><span class="swatch"
       style="background:var(--s1)"></span>Cumulative actual (estimated cost)</span>
       <span class="it"><span class="swatch" style="background:var(--s1);opacity:.35"></span>
@@ -1091,7 +1112,7 @@ VIEWS.usage = async (page) => {
       ${kpi('Output', fmtNum(ov.output_tokens), `${fmtNum(ov.thinking_tokens)} thinking`)}
       ${kpi('Cache read', fmtNum(ov.cache_read_tokens))}
       ${kpi('Cache write', fmtNum(ov.cache_write_tokens))}
-      ${kpi('Requests', fmtInt(ov.requests))}
+      ${kpi('Requests', fmtInt(ov.requests), ov.unpriced_requests ? `${fmtInt(ov.unpriced_requests)} with no price data ($0)` : null)}
       ${kpi('Sessions', fmtInt(ov.sessions))}
       ${kpi('Prompts', fmtInt(ov.prompts))}
       ${kpi('Active days', fmtInt(ov.active_days))}
@@ -1108,8 +1129,8 @@ VIEWS.usage = async (page) => {
       <div class="chart" id="tl"></div>`,
       {badge: S.metric === 'cost' ? BADGE.estimated : BADGE.actual,
        hint: 'click a bucket to drill into that day',
-       footer: 'Days are bucketed in UTC, as Claude Code timestamps its transcripts. '
-             + 'If you work late in a timezone ahead of UTC, that work lands on the previous day here.',
+       footer: 'Days are your local calendar days (this computer\'s time zone, or CLAUDE_FINOPS_TZ). '
+             + 'Claude Code stamps its transcripts in UTC; finops converts them when it reads them.',
        flush: 0})}
     ${card('Peak hours', '<div class="chart" id="heat"></div>',
       {badge: hmMetric === 'cost' ? BADGE.estimated : BADGE.actual,
@@ -1137,7 +1158,9 @@ VIEWS.usage = async (page) => {
   const byDay = new Map();
   const mlist = models.rows.filter(r => r.cost > 0).map(r => r.model);
   const perModel = await Promise.all(mlist.map(async m => {
-    const r = await fetch(`/api/timeline?${qs()}&models=${encodeURIComponent(m)}`)
+    // replace the model filter (not add to it): each series is exactly one model
+    const q = new URLSearchParams(qs()); q.set('models', m);
+    const r = await fetch(`/api/timeline?${q}`)
       .then(x => x.json()).catch(() => []);
     return [m, Array.isArray(r) ? r : []];
   }));
@@ -1175,7 +1198,7 @@ VIEWS.burn = async (page) => {
     .then(r => r.json()).catch(e => ({ok: false, reason: e.message}))]);
   const bp = burn.period;
   const rows = Object.entries(burn.allowances);
-  page.innerHTML = `
+  page.innerHTML = `${staleNote(burn)}
     <div class="grid g4">
       ${kpi('Period', `${bp.start} → ${bp.end}`, `${bp.elapsed_days} of ${bp.total_days} days elapsed`,
         {small: 1, badge: BADGE.actual})}
@@ -1296,7 +1319,7 @@ VIEWS.models = async (page) => {
     ${card('Model FinOps table', '<div id="mt"></div>', {badge: BADGE.estimated,
       hint: 'models detected from your data — nothing hardcoded',
       footer: 'Pricing from config/pricing.json (updated ' + esc(S.opts.pricing.updated)
-        + '). Models with no price entry fall back to default pricing and are marked.'})}
+        + '). A Claude model with no price entry is priced as the newest model of its family and marked; any other unlisted model counts as $0. Add it to config/pricing.json to price it exactly.'})}
     ${card('Price table in effect', table([
       {h: 'Model', f: r => `<span class="swatch" style="background:${modelColor(r[0])}"></span>${esc(r[1].display_name || r[0])}`},
       {h: 'Tier', f: r => `<span class="pill">${esc(r[1].tier)}</span>`},
@@ -1306,7 +1329,8 @@ VIEWS.models = async (page) => {
       {h: 'Cache write 1h /M', num: 1, f: r => '$' + r[1].cache_write_1h},
       {h: 'Cache read /M', num: 1, f: r => '$' + r[1].cache_read},
       {h: 'Context window', num: 1, f: r => r[1].context_window ? fmtNum(r[1].context_window) : '—'},
-    ], Object.entries(S.opts.pricing.models)), {hint: 'edit config/pricing.json to update — no code changes needed'})}`;
+    ], Object.entries(S.opts.pricing.models).filter(([k]) => (S.opts.pricing.used || []).includes(k))),
+      {hint: `the ${(S.opts.pricing.used || []).length} models in your data, of ${Object.keys(S.opts.pricing.models).length} priced · edit config/pricing.json to update`})}`;
 
   const priced = rows.filter(r => r.cost > 0);
   C.donut($('#md', page), {rows: priced, label: r => r.display_name, value: r => r.cost, size: 200,
@@ -1319,9 +1343,11 @@ VIEWS.models = async (page) => {
     sub: r => `<div class="row"><span class="k">Share</span><span class="v">${r.token_pct}%</span></div>`});
   $('#mt', page).innerHTML = table([
     {h: 'Model', f: r => `<span class="swatch" style="background:${modelColor(r.model)}"></span>${esc(r.display_name)}
-      ${r.pricing_known ? '' : '<span class="badge na" title="no price entry — default pricing used">default price</span>'}`},
-    {h: 'Tier', f: r => r.tier === 'unknown'
-      ? `<span class="pill">unpriced</span><span class="badge na" title="no price in pricing.json">no price in pricing.json</span>`
+      ${r.pricing_known || r.tier === 'free' ? ''
+        : r.priced_as_family ? `<span class="badge na" title="no entry of its own in config/pricing.json; priced as the newest model of its family">priced as ${esc(r.priced_as_family)}</span>`
+        : '<span class="badge na" title="no price entry in config/pricing.json, so its cost counts as $0">not priced: $0</span>'}`},
+    {h: 'Tier', f: r => r.tier === 'unknown' || r.tier === 'unpriced'
+      ? `<span class="pill">unpriced</span>`
       : `<span class="pill">${esc(r.tier)}</span>`},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
     {h: 'Sessions', num: 1, f: r => fmtInt(r.sessions)},
@@ -1332,7 +1358,8 @@ VIEWS.models = async (page) => {
     {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
     {h: 'Avg context', num: 1, f: r => fmtNum(r.avg_context)},
     {h: 'Ctx util', num: 1, f: r => (r.utilization_pct == null ? '—' : fmtPct(r.utilization_pct))
-      + (r.over_window_requests ? ` <span class="note" title="requests over a window this price table cannot explain">· ${fmtInt(r.over_window_requests)} over</span>` : '')},
+      + (r.over_window_requests ? ` <span class="note" title="requests over a window this price table cannot explain">· ${fmtInt(r.over_window_requests)} over</span>` : '')
+      + (r.unknown_window_requests && r.utilization_pct == null ? ` <span class="note" title="no context window known for this model">· window unknown</span>` : '')},
     {h: 'Avg latency', num: 1, f: r => r.avg_latency_ms ? (r.avg_latency_ms/1000).toFixed(1)+'s' : '—'},
     {h: '$/1K out', num: 1, f: r => r.cost_per_1k_output ? '$' + r.cost_per_1k_output.toFixed(3) : '—'},
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
@@ -1544,7 +1571,10 @@ VIEWS.rankings = async (page) => {
     <div class="tabs">${RANK_TABS.map(([k, l]) =>
       `<button class="${tab === k ? 'on' : ''}" data-rt="${k}">${l}</button>`).join('')}</div>
     <div id="rt" style="margin-top:8px"></div>`,
-    {badge: BADGE.estimated, hint: 'every row is clickable'});
+    {badge: BADGE.estimated, hint: isSess
+      ? 'duration is first to last message of the whole session, idle time included; tokens and cost are in range'
+      : tab === 'cheapest' ? 'prompts with a cost; $0 runs on free or local models are left out'
+      : 'every row is clickable'});
   page.querySelectorAll('[data-rt]').forEach(b => b.onclick = () => {
     S.rankTab = b.dataset.rt; render(); });
   const cols = isSess ? [
@@ -1552,7 +1582,7 @@ VIEWS.rankings = async (page) => {
     {h: 'Session', trunc: 1, f: r => esc(stitle(r))},
     {h: '', f: r => rowActs(r, live)},
     {h: 'Project', f: r => esc(r.project)},
-    {h: 'Duration', num: 1, f: r => dur(r.duration_s)},
+    {h: 'Duration (whole session)', num: 1, f: r => dur(r.duration_s)},
     {h: 'Prompts', num: 1, f: r => fmtInt(r.prompts)},
     {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
     {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
@@ -1654,7 +1684,7 @@ VIEWS.hygiene = async (page) => {
     </div>
     <div class="grid g3">
       ${kpi('Spend near or over the context window', fmtPct(fit.near_or_over_cost_pct),
-        `≥ ${fit.threshold_pct}% of the window in use · ${fmtInt(fit.near_requests + fit.over_requests)} requests`,
+        `≥ ${fit.threshold_pct}% of the window in use · ${fmtInt(fit.near_requests + fit.over_requests)} requests, subagent turns included (they can fill their own window)`,
         {badge: BADGE.actual, tone: grade(fit.near_or_over_cost_pct, FIT), title: bandTip(FIT)})}
       ${kpi('Sessions in range', fmtInt(hy.sessions), `${fmtInt(hy.requests)} main-thread requests`, {badge: BADGE.actual, tone: 'info'})}
       ${kpi('Spend in range', fmtUSD(hy.cost_usd), 'subagent turns excluded (own prefix)', {badge: BADGE.estimated, tone: 'info'})}
@@ -1666,7 +1696,7 @@ VIEWS.hygiene = async (page) => {
        footer: hy.note + ' Subagent turns are excluded because they run against their own prefix.'})}`;
 
   const drawTraj = s => {
-    const rows = s.context_trajectory.map((c, i) => ({i: i + 1, ctx: c, cum: s.cumulative_cost[i]}));
+    const rows = s.context_trajectory.map((c, i) => ({i: (s.trajectory_index || [])[i] || i + 1, ctx: c, cum: s.cumulative_cost[i]}));
     C.timeSeries($('#hy-traj', page), {rows, x: 'i', type: 'area', height: 210, fmt: fmtNum,
       series: [{key: 'ctx', label: 'Context tokens', color: seriesVar(0)}],
       xLabel: v => `#${v}`});
@@ -1738,10 +1768,9 @@ VIEWS.context = async (page) => {
     <div class="grid g5">
       ${kpi('Avg context / request', fmtNum(ctx.avg_context), null, {badge: BADGE.actual})}
       ${kpi('Max context seen', fmtNum(ctx.max_context),
-        ctx.typical_context_window ? `window ${fmtNum(ctx.typical_context_window)}` : '')}
-      ${kpi('Context utilization', ctx.typical_context_window
-        ? fmtPct(100 * ctx.avg_context / ctx.typical_context_window) : null,
-        'average vs largest configured window')}
+        ctx.typical_context_window ? `most requests ran on a ${fmtNum(ctx.typical_context_window)} window` : '')}
+      ${kpi('Context utilization', ctx.context_utilization_pct == null ? null : fmtPct(ctx.context_utilization_pct),
+        'average, against each request\'s own model window') }
       ${kpi('Tokens / request', fmtNum(eff.tokens_per_request))}
       ${kpi('Cache hit ratio', ca.reads ? fmtPct(eff.cache_hit_ratio * 100) : null,
         'reads ÷ (reads + writes), by token', {badge: BADGE.actual})}
@@ -1754,7 +1783,7 @@ VIEWS.context = async (page) => {
         <p class="note" style="margin:0 0 10px">Writes are
           <strong>${fmtPct(100 * (1 - cs.read_token_share))}</strong> of your cache tokens but
           <strong>${fmtPct(100 * cs.write_cost_share)}</strong> of your cache cost${
-            mult ? `, because a write token costs ${mult.toFixed(1)}x a read token` : ''}.
+            mult ? `, because a write token costs ${mult.toFixed(1)}x a read token on average across your models` : ''}.
           The token ratio above is the flattering number; this is the one that moves the bill.</p>
         <dl class="kv">
           <dt>Cache reads</dt><dd>${fmtNum(cs.read_tokens)} tokens · ${fmtUSD(cs.read_cost_usd)}
@@ -1838,7 +1867,7 @@ VIEWS.waste = async (page) => {
   page.innerHTML = `
     <div class="grid g4">
       ${kpi('Estimated excess', fmtUSD(w.estimated_excess_usd),
-        `${fmtPct(w.excess_pct)} of ${fmtUSD(w.total_cost_usd)} — the actual waste figure`,
+        `${fmtPct(w.excess_pct)} of ${fmtUSD(w.total_cost_usd)}, the estimated waste`,
         {badge: BADGE.estimated})}
       ${kpi('Exposed spend', fmtUSD(w.exposed_cost_usd),
         `${fmtPct(w.exposed_pct)} sits in items a rule touched`, {badge: BADGE.estimated})}
@@ -1860,13 +1889,13 @@ VIEWS.waste = async (page) => {
       return card(title, `<div class="stack">${list.map((f, i) => `
         <div class="item sev-${sev}">
           <div class="hd">${esc(f.title)}<span class="spacer"></span>
-            <span style="font-variant-numeric:tabular-nums">${fmtUSD(f.est_excess_usd)} excess</span>
+            <span style="font-variant-numeric:tabular-nums">${excessText(f)}</span>
             <span class="note" style="font-variant-numeric:tabular-nums">of ${fmtUSD(f.est_cost_usd)} exposed</span></div>
           <div class="dt">${esc(f.detail)}</div>
           <div class="dt"><b>Excess measured as:</b> ${esc(f.excess_basis)}</div>
           <div class="dt"><b>Recommended:</b> ${esc(f.recommended_action)}</div>
           <details style="margin-top:5px"><summary style="cursor:pointer;font-size:11.5px;color:var(--s1)">
-            Show ${f.evidence.length} flagged items</summary>
+            ${f.count > f.evidence.length ? `Show the ${f.evidence.length} costliest of ${fmtInt(f.count)} flagged items` : `Show ${f.evidence.length} flagged items`}</summary>
             <div class="ev" data-kind="${esc(f.kind)}" style="margin-top:6px"></div></details>
         </div>`).join('')}</div>`, {badge: BADGE.estimated, icon});
     }).join('')}
@@ -1882,7 +1911,7 @@ VIEWS.waste = async (page) => {
       {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
       {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens ?? r.reads)},
       {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
-      {h: 'Est. excess', num: 1, f: r => fmtUSD(r.excess)},
+      {h: 'Est. excess', num: 1, f: r => r.excess > 0 ? fmtUSD(r.excess) : '—'},
     ] : [
       {h: 'Prompt', trunc: 1, title: r => pt(r.preview), f: r => esc(pt(r.preview))},
       {h: 'Detail', f: r => r.n ? `repeated ${r.n}×` : r.char_len ? fmtInt(r.char_len) + ' chars'
@@ -1890,7 +1919,7 @@ VIEWS.waste = async (page) => {
         : r.out_tokens != null ? fmtInt(r.out_tokens) + ' output tokens' : '—'},
       {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
       {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
-      {h: 'Est. excess', num: 1, f: r => fmtUSD(r.excess)},
+      {h: 'Est. excess', num: 1, f: r => r.excess > 0 ? fmtUSD(r.excess) : '—'},
     ];
     host.innerHTML = table(cols, f.evidence, {onRow: 1});
     wireTable(host, f.evidence, r => r.prompt_id ? openPrompt(r.prompt_id)
@@ -1933,11 +1962,11 @@ VIEWS.attribution = async (page) => {
       ${kpi('Connectors used', fmtInt(b.connectors.length), `${fmtUSD(sum(b.connectors, 'carried_cost'))} est. carry cost`, {badge: BADGE.estimated})}
     </div>
     <div class="note">${esc(b.note)}</div>
-    ${card('Sessions: main agent vs subagents', `<div id="at-sess"></div>`, {badge: BADGE.actual, flush: 1, hint: 'Top 30 by tokens; click to drill in'})}
-    ${card('Subagents by type', `<div id="at-types"></div>`, {badge: BADGE.actual, flush: 1})}
-    ${card('Most expensive subagent runs', `<div id="at-runs"></div>`, {badge: BADGE.actual, flush: 1})}
+    ${card('Sessions: main agent vs subagents', `<div id="at-sess"></div>`, {badge: BADGE.estimated, flush: 1, hint: 'Top 30 by tokens; click to drill in'})}
+    ${card('Subagents by type', `<div id="at-types"></div>`, {badge: BADGE.estimated, flush: 1})}
+    ${card('Most expensive subagent runs', `<div id="at-runs"></div>`, {badge: BADGE.estimated, flush: 1})}
     ${card('Skills', `<div id="at-skills"></div>`, {badge: BADGE.estimated, flush: 1, hint: 'Invoked by Claude via the Skill tool'})}
-    ${card('Slash commands & user-invoked skills', `<div id="at-slash"></div>`, {badge: BADGE.actual, flush: 1, hint: 'Whole turn attributed'})}
+    ${card('Slash commands & user-invoked skills', `<div id="at-slash"></div>`, {badge: BADGE.estimated, flush: 1, hint: 'Whole turn attributed'})}
     ${card('MCP servers', `<div id="at-mcp"></div>${toolDetail(b.mcp)}`, {badge: BADGE.estimated, flush: 1})}
     ${card('Connectors (claude.ai)', `<div id="at-conn"></div>${toolDetail(b.connectors)}`, {badge: BADGE.estimated, flush: 1})}
     ${b.configured_unused_mcp.length ? `<div class="note">Configured but never called: <b>${esc(b.configured_unused_mcp.join(', '))}</b>. Their tool definitions still load into every session. Remove them with <code>claude mcp remove &lt;name&gt;</code>.</div>` : ''}`;
@@ -2357,8 +2386,8 @@ VIEWS.anomalies = async (page) => {
         <div class="hd">${I(x.severity === 'high' ? 'siren' : 'alert')} ${esc(x.title)}
           <span class="spacer"></span><span class="pill">${esc(x.type)}</span></div>
         <div class="dt">${esc(x.detail)}</div>
-        <div class="mt"><span>observed ${fmtNum(x.metric_value)}</span>
-          <span>baseline ${fmtNum(x.baseline)}</span><span>ratio ${x.ratio}×</span>
+        <div class="mt"><span>observed ${x.type === 'session_outlier' ? fmtNum(x.metric_value) + ' tokens' : fmtUSD(x.metric_value)}</span>
+          <span>baseline ${x.type === 'session_outlier' ? fmtNum(x.baseline) + ' tokens' : fmtUSD(x.baseline)}</span><span>ratio ${x.ratio}×</span>
           <span style="color:var(--s1)">click to inspect →</span></div></div>`).join('')
       : '<div class="empty">No anomalies detected in this range</div>'}</div>`,
       {badge: BADGE.estimated,
@@ -2380,16 +2409,16 @@ VIEWS.forecast = async (page) => {
   const [f, burn] = await Promise.all([api('forecast'), api('burn')]);
   if (!f.available) { page.innerHTML = card('Forecast', `<div class="empty">${esc(f.message)}</div>`);
     return; }
-  page.innerHTML = `
+  page.innerHTML = `${staleNote(f)}
     <div class="grid g4">
       ${kpi('End of billing period', fmtUSD(f.scenarios.expected.end_of_period_cost),
         `${f.remaining_days} days remaining`, {badge: BADGE.forecast})}
-      ${kpi('Estimated monthly cost', fmtUSD(f.estimated_monthly_cost), null, {badge: BADGE.forecast})}
+      ${kpi('A typical 30 days', fmtUSD(f.estimated_monthly_cost), 'at the recent daily mean', {badge: BADGE.forecast})}
       ${kpi('Period to date', fmtUSD(f.period_used), fmtNum(f.period_used_tokens) + ' tokens',
         {badge: BADGE.estimated})}
       ${kpi('Projected tokens', fmtNum(f.end_of_period_tokens), null, {badge: BADGE.forecast})}
       ${kpi('Daily mean ± σ', `${fmtUSD(f.daily_mean)} ± ${fmtUSD(f.daily_stdev)}`,
-        `over ${f.sample_days} days`, {small: 1})}
+        `last ${f.window_days} calendar days, ${f.sample_days} with spend`, {small: 1})}
       ${f.limit_exhaustion_date === S.opts.unavailable_label
         ? kpi('Limit exhaustion date', null, 'Requires a configured allowance')
         : kpi('Limit exhaustion date', esc(f.limit_exhaustion_date),
@@ -2400,7 +2429,7 @@ VIEWS.forecast = async (page) => {
         : '<div class="chart" id="fan2"></div><div class="legend" id="fl2"></div>',
       {badge: BADGE.forecast,
       hint: f.method,
-      footer: 'Scenarios are the 14-calendar-day mean daily spend minus, at, and plus one standard deviation, projected across the remaining days of the billing period. Days you did not use Claude count as zero, since the projection runs over calendar days. They assume your recent pattern continues.'})}
+      footer: 'Expected is the 14-calendar-day mean daily spend projected across the remaining days. Conservative and high add minus and plus one standard deviation × √(days remaining), the spread of a sum of independent days; the daily rate shown is what each scenario implies. Days you did not use Claude count as zero. They assume your recent pattern continues.'})}
     ${card('Scenarios', table([
       {h: 'Scenario', f: r => `<b>${esc(r[0])}</b>`},
       {h: 'Daily rate', num: 1, f: r => fmtUSD(r[1].daily_rate)},
@@ -2409,7 +2438,7 @@ VIEWS.forecast = async (page) => {
     ], Object.entries(f.scenarios)), {badge: BADGE.forecast})}`;
   if (!f.insufficient_history) {
     C.forecastFan($('#fan2', page), {history: burn.series, scenarios: f.scenarios,
-      remainingDays: f.remaining_days, height: 300});
+      remainingDays: f.remaining_days, height: 300, nowLabel: f.unread_days ? 'last sync' : 'today'});
     $('#fl2', page).innerHTML = `<span class="it"><span class="swatch" style="background:var(--s1)"></span>
       Cumulative actual (estimated cost)</span>
       <span class="it"><span class="swatch" style="background:var(--s1);opacity:.35"></span>
@@ -3129,7 +3158,7 @@ VIEWS.developer = async (page) => {
         {h: 'Tokens', num: 1, f: r => fmtNum(r.tokens)},
         {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
       ], d.branches), {badge: BADGE.estimated,
-        hint: 'branch recorded per session in the transcript'})}
+        hint: `${d.branches.length} branches · recorded per session in the transcript`})}
       ${card('Most-touched files', table([
         {h: 'File', trunc: 1, title: r => r.path, f: r => `<span class="mono">${esc(r.path)}</span>`},
         {h: 'Ops', f: r => esc(r.ops)},
@@ -3154,28 +3183,30 @@ VIEWS.search = async (page) => {
   if (term.trim().length < 2) { page.innerHTML = '<div class="empty">Type at least 2 characters</div>';
     return; }
   const r = await fetch(`/api/search?q=${encodeURIComponent(term)}`).then(x => x.json());
+  // "40+" when the list was cut at its limit, rather than a count that looks complete
+  const cnt = k => r[k].length ? r[k].length + (r[k + '_more'] ? '+' : '') : 0;
   const sec = (title, html, n) => card(`${title} (${n})`, n ? html
     : '<div class="empty">No matches</div>');
   page.innerHTML = `
     <div class="note">Global search for "<b>${esc(term)}</b>" — searches prompt text, session IDs
       and titles, git branches, project names and paths, model IDs, tool names and targets,
       and dates. Independent of the global filters.</div>
-    ${sec('Prompts', '<div id="sp"></div>', r.prompts.length)}
-    ${sec('Sessions', '<div id="ss"></div>', r.sessions.length)}
+    ${sec('Prompts', '<div id="sp"></div>', cnt('prompts'))}
+    ${sec('Sessions', '<div id="ss"></div>', cnt('sessions'))}
     <div class="grid g3">
       ${sec('Projects', table([{h: 'Project', f: x => esc(x.name)},
         {h: 'Path', trunc: 1, f: x => `<span class="mono sub">${esc(x.path || '—')}</span>`}],
-        r.projects), r.projects.length)}
+        r.projects), cnt('projects'))}
       ${sec('Models', table([{h: 'Model', f: x => esc(modelName(x.model))},
         {h: 'Requests', num: 1, f: x => fmtInt(x.requests)},
-        {h: 'Est. cost', num: 1, f: x => fmtUSD(x.cost)}], r.models), r.models.length)}
+        {h: 'Est. cost', num: 1, f: x => fmtUSD(x.cost)}], r.models), cnt('models'))}
       ${sec('Days', table([{h: 'Day', f: x => esc(x.day)},
         {h: 'Requests', num: 1, f: x => fmtInt(x.requests)},
-        {h: 'Est. cost', num: 1, f: x => fmtUSD(x.cost)}], r.days), r.days.length)}
+        {h: 'Est. cost', num: 1, f: x => fmtUSD(x.cost)}], r.days), cnt('days'))}
     </div>
     ${sec('Tools & targets', table([{h: 'Tool', f: x => esc(x.name)},
       {h: 'Target', trunc: 1, title: x => x.target || '', f: x => `<span class="mono">${esc(x.target || '—')}</span>`},
-      {h: 'Calls', num: 1, f: x => fmtInt(x.n)}], r.tools), r.tools.length)}`;
+      {h: 'Calls', num: 1, f: x => fmtInt(x.n)}], r.tools), cnt('tools'))}`;
   if (r.prompts.length) {
     $('#sp', page).innerHTML = table([
       {h: 'When', f: x => `<span class="mono">${esc((x.ts || '').slice(0, 16).replace('T', ' '))}</span>`},
@@ -3200,7 +3231,7 @@ VIEWS.search = async (page) => {
 
 /* ---------- exports & data provenance ---------- */
 const EXPORTS = [['usage', 'Usage timeline'], ['prompts', 'Prompts'], ['sessions', 'Sessions'],
-  ['models', 'Model breakdown'], ['projects', 'Projects'], ['costs', 'Costs'],
+  ['models', 'Model breakdown'], ['projects', 'Projects'], ['costs', 'Cost by day and model'],
   ['waste', 'Waste findings'], ['recommendations', 'FinOps recommendations'],
   ['forecast', 'Forecast scenarios']];
 VIEWS.exports = async (page) => {
@@ -3640,7 +3671,8 @@ VIEWS.agents = async (page) => {
       Click an agent chip above to see only it; <b>Cmd/Ctrl-click</b> to add more, or <b>All</b> for every agent together.
       Every other page follows the same selection.</div>
     <div class="grid g4">${d.agents.map(a => kpi(a.name,
-      a.cost ? fmtUSD(a.cost) : fmtNum(a.tokens) + ' tok',
+      // an agent with no price data leads with what it does have, never "0 tok"
+      a.cost ? fmtUSD(a.cost) : a.tokens ? fmtNum(a.tokens) + ' tokens' : fmtInt(a.requests) + ' requests',
       `${fmtInt(a.sessions)} sessions · ${fmtInt(a.prompts)} prompts · ${fmtInt(a.active_days)} active days`,
       {badge: a.cost ? BADGE.estimated : ''})).join('')}</div>
     ${card('Side by side', `<div id="ag-tbl"></div>`, {flush: 1, badge: BADGE.estimated,
@@ -3756,7 +3788,8 @@ VIEWS.freemodels = async (page) => {
            <div><button class="act" data-test="${esc(m.id)}">${I('play')} Test it</button>
              <button class="act ghost" data-rm="${esc(m.id)}">Remove</button></div>
            <div data-testlog="${esc(m.id)}"></div>`
-        : `<div><button class="act" data-add="${esc(m.id)}" ${m.fits_ram ? '' : 'title="Less RAM than recommended"'}>${I('plus')} Add ${esc(m.command)}</button></div>`}
+        : `${m.downloaded ? `<div class="dt">${I('checkCircle')} Already downloaded in Ollama. Add creates the <code>${esc(m.command)}</code> command; nothing is downloaded again.</div>` : ''}
+           <div><button class="act" data-add="${esc(m.id)}" ${m.fits_ram ? '' : 'title="Less RAM than recommended"'}>${I('plus')} Add ${esc(m.command)}</button></div>`}
     </div>`, {badge: m.installed ? '<span class="badge">Added</span>' : ''})).join('')}</div>`;
   page.querySelectorAll('[data-go]').forEach(a => a.onclick = () => go(a.dataset.go));
   page.querySelectorAll('[data-add]').forEach(b => b.onclick = () => addFreeModel(b.dataset.add));
@@ -3825,7 +3858,7 @@ async function addFreeModel(id) {
 
 /* ---------- compare Claude vs free models ---------- */
 VIEWS.compare = async (page) => {
-  const d = await fetch('/api/compare?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json());
+  const d = await fetch('/api/compare?' + qs()).then(r => r.json());
   if (d.error) throw new Error(d.error);
   const hasFree = d.rows.some(r => r.kind === 'free');
   const stars = n => n == null ? '<span class="na">—</span>' : I('star').repeat(Math.floor(n)) + (n % 1 ? I('starHalf') : '') +
@@ -3861,6 +3894,120 @@ VIEWS.compare = async (page) => {
     rows: d.rows, label: r => r.name.replace(/ \((local|free).*\)$/, ''), value: r => r.price_out || 0,
     color: r => r.kind === 'free' ? seriesVar(2) : seriesVar(0)}),
     {hint: hasFree ? 'Free models cost $0; Claude prices are list prices' : 'List prices', after: ':scope > .card'});
+};
+
+/* ---------- subagent models: measured $/run per type and model, plus a settings experiment ---------- */
+let SUB_MSG = null;          // {ok, text}: shown once after the page redraws
+VIEWS.subagents = async (page) => {
+  const d = await api('subagents');
+  const k = d.kpis, x = d.experiment;
+  const say = s => {
+    const t = esc(s.type);
+    switch (s.kind) {
+      case 'fork': return `Forks carry your whole conversation (median ${fmtNum(s.med_context)} tokens of context here).
+        Their cost comes from context, not the model: run <code>/compact</code> before forking, or use a fresh subagent with a short brief.`;
+      case 'unpriced': return `Can't compare: ${esc(s.models.join(', '))} isn't priced. Add it to <code>config/pricing.json</code>.`;
+      case 'cheapest': return `Already on the cheapest model this type has used (${esc(s.model)}).`;
+      case 'not_enough': return `Not enough runs to compare: a cheaper model needs ${s.min_runs} runs of this type, and so does
+        ${esc(s.model)}. An experiment below would collect them.`;
+      case 'switch': return `On ${esc(s.to)}, ${t} runs cost a median <b>${fmtUSD(s.to_med)}</b> (${s.to_runs} runs) vs
+        <b>${fmtUSD(s.from_med)}</b> on ${esc(s.from)} (${s.from_runs} runs). The runs did different tasks, so this is evidence, not proof.
+        ${s.fix.kind === 'file'
+          ? `<br>Fix: add <code>model: ${esc(s.alias)}</code> to <code>${esc(s.fix.path)}</code>${s.fix.current ? ` (it now says <code>model: ${esc(s.fix.current)}</code>)` : ''}.`
+          : `<br>Built-in subagents have no documented per-type model setting. Test it with an experiment on <b>${esc(s.alias)}</b> below.`}`;
+    }
+    return '';
+  };
+  const typeBlock = t => `<div class="item"><div class="hd">${esc(t.type)}${t.custom ? ' <span class="pill">your agent file</span>' : ''}
+      <span class="spacer"></span><span style="font-variant-numeric:tabular-nums">${fmtInt(t.runs)} run${t.runs === 1 ? '' : 's'} · ${fmtUSD(t.cost)}</span></div>
+    ${table([
+      {h: 'Model', f: c => esc(c.name) + (c.priced ? '' : ' <span class="pill">not priced</span>')},
+      {h: 'Runs', num: 1, f: c => fmtInt(c.runs)},
+      {h: 'Median $/run', num: 1, f: c => c.priced ? fmtUSD(c.med_cost) : '—'},
+      {h: 'Turns/run', num: 1, f: c => fmtNum(c.med_turns)},
+      {h: 'Output/run', num: 1, f: c => fmtNum(c.med_output)},
+      {h: 'Context/run', num: 1, f: c => fmtNum(c.med_context)},
+      {h: 'Spend', num: 1, f: c => c.priced ? fmtUSD(c.cost) : '—'},
+    ], t.rows)}
+    <div class="dt" style="margin-top:6px">${say({...t.suggestion, type: t.type})}</div></div>`;
+  const side = (s, n) => s.runs ? `${fmtUSD(s.med_cost)} <span class="sub">${fmtInt(s.runs)} run${s.runs === 1 ? '' : 's'} · ${fmtNum(s.med_turns)} turns</span>` : '<span class="na">no runs</span>';
+  const results = r => r.types.length ? table([
+    {h: 'Type', f: t => esc(t.type)},
+    {h: 'Before (median $/run)', num: 1, f: t => side(t.before)},
+    {h: `After, on ${r.model}`, num: 1, f: t => side(t.after)},
+    {h: 'Change', num: 1, f: t => t.ready ? `${t.change < 0 ? '−' : t.change > 0 ? '+' : ''}${fmtUSD(Math.abs(t.change))}`
+      : `<span class="na">collecting ${Math.min(t.before.runs, t.after.runs)} of ${d.min_runs}</span>`},
+    {h: 'Ignored', num: 1, f: t => t.ignored ? `${fmtInt(t.ignored)}` : '—', title: () => 'Runs after the start that used another model (an agent file or the main model picked it)'},
+  ], r.types) : '<div class="empty">No subagent runs in the before or after window yet</div>';
+  const span = r => `${esc(r.started_at.slice(0, 10))} → ${r.stopped_at ? esc(r.stopped_at.slice(0, 10)) : 'now'}`;
+  const pick = (d.types.map(t => t.suggestion).find(s => s.kind === 'switch' && s.fix.kind === 'experiment') || {}).alias || 'haiku';
+  const json = m => `"env": {\n  "${x.env_var}": "${m}"\n}`;
+  const exp = x.settings_error ? `<span class="lb-state warn">${esc(x.settings_error)}</span>`
+    : x.active ? `<div class="lb-head"><span class="lb-state on">● Running on <b>${esc(x.active.model)}</b> since ${esc(x.active.started_at.slice(0, 10))}</span>
+          <span class="spacer"></span><button class="act" id="sx-stop">Stop experiment</button></div>
+        ${x.warning ? `<p class="fld-hint" style="color:var(--warning-ink)">${esc(x.warning)}</p>` : ''}
+        <p class="fld-hint">Before is the same length of time just before the start (at most 30 days). These windows ignore the date range above.</p>`
+    : x.current_value ? `<span class="lb-state warn"><code>${esc(x.env_var)}</code> is already set to <b>${esc(x.current_value)}</b> in
+        <span class="mono">${esc(x.settings_path)}</span>. finops won't change a value it didn't set.</span>`
+    : `<p class="blk-intro">Run subagents on one model for a while, then compare each type's runs before and after.
+        This is the only way to see what a switch does on your own work.</p>
+      <div class="lb-head"><label for="sx-model">Model</label>
+        <select id="sx-model" style="width:auto">${x.model_choices.map(m => `<option${m === pick ? ' selected' : ''}>${m}</option>`).join('')}</select>
+        <button class="act" id="sx-start">Start experiment</button></div>
+      <div class="livebox" id="sx-confirm" hidden>
+        <p><b>This changes Claude Code's settings for all your projects.</b> It adds this to
+          <span class="mono">${esc(x.settings_path)}</span> (a backup is saved first):</p>
+        <pre class="mono" id="sx-json" style="margin:6px 0;white-space:pre-wrap">${esc(json(pick))}</pre>
+        <p class="blk-sub">New Claude Code sessions then run subagents on this model. Sessions already open keep their model,
+          and so do agent files with their own <code>model:</code> line and calls where the main model picks one.
+          Stop removes it again.</p>
+        <div class="live-actions"><button class="chip on" id="sx-go">Confirm and start</button>
+          <button class="act ghost" id="sx-cancel">Cancel</button></div></div>`;
+  page.innerHTML = !d.claude_selected
+    ? `<div class="empty">Subagent models covers Claude Code only. Add Claude Code to the agents above.</div>`
+    : `
+    <div class="grid g4">
+      ${kpi('Subagent spend', fmtUSD(k.sub_cost), `${fmtPct(k.share_pct)} of Claude Code spend in range`, {badge: BADGE.estimated})}
+      ${kpi('Subagent share of spend', fmtPct(k.share_pct), 'the upper bound on what routing can change, not a saving', {badge: BADGE.estimated})}
+      ${kpi('Subagent runs', fmtInt(k.runs), 'one run = one subagent call', {badge: BADGE.actual})}
+      ${kpi('Subagent types', fmtInt(k.types), 'built-in or your own agent files', {badge: BADGE.actual})}
+    </div>
+    ${card('By type and model', d.types.length ? `<div class="stack">${d.types.map(typeBlock).join('')}</div>`
+        : '<div class="empty">No subagent runs in this range</div>',
+      {badge: BADGE.estimated, hint: `medians per run · a cheaper model is suggested only with ${d.min_runs}+ runs on each side`,
+       footer: 'Measured from runs that happened, never repriced. No savings total is shown: runs of the same type did different tasks.'})}
+    ${card('Experiment', `<div class="cfg"><section class="blk">${exp}
+        ${SUB_MSG ? `<div class="fld-hint ${SUB_MSG.ok ? 'ok' : ''}" style="${SUB_MSG.ok ? '' : 'color:var(--critical-ink)'}">${esc(SUB_MSG.text)}</div>` : ''}
+        ${x.shell_value ? `<p class="fld-hint">Your shell also sets <code>${esc(x.env_var)}=${esc(x.shell_value)}</code>, which may take priority.</p>` : ''}
+      </section>
+      ${x.active && !x.settings_error ? results(x.active) : ''}
+      ${x.history.length ? `<div class="sec" style="margin-top:12px">Past experiments</div>${x.history.map(h =>
+        `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:12px">${esc(h.model)} · ${span(h)}</summary>${results(h)}</details>`).join('')}` : ''}
+      </div>`, {badge: BADGE.recommendation, hint: `sets ${x.env_var} in Claude Code's settings`})}`;
+  SUB_MSG = null;
+  const redraw = msg => { SUB_MSG = msg; bust(); render(); };
+  const run = async (body, btn) => {
+    if (btn) btn.disabled = true;
+    try { const r = await doAction('subagent_experiment', body); redraw({ok: r.ok, text: r.message}); }
+    catch (e) { redraw({ok: false, text: e.message}); }
+  };
+  const sel = $('#sx-model', page), box = $('#sx-confirm', page);
+  if (sel) sel.onchange = () => { $('#sx-json', page).textContent = json(sel.value); };
+  const start = $('#sx-start', page);
+  if (start) start.onclick = () => { box.hidden = false; $('#sx-go', page).focus(); };
+  if (box) {
+    $('#sx-cancel', page).onclick = () => { box.hidden = true; };
+    $('#sx-go', page).onclick = e => run({action: 'start', model: sel.value}, e.currentTarget);
+  }
+  const stop = $('#sx-stop', page);
+  if (stop) stop.onclick = () => {
+    if (!stop.dataset.armed) {
+      stop.dataset.armed = '1'; stop.textContent = 'Click again to stop';
+      setTimeout(() => { if (stop.isConnected) { delete stop.dataset.armed; stop.textContent = 'Stop experiment'; } }, 4000);
+      return;
+    }
+    run({action: 'stop'}, stop);
+  };
 };
 
 /* ---------- skills & MCP from recurring work ---------- */
@@ -3980,7 +4127,7 @@ claude plugin install typesafe@typesafe-ai</pre>
 };
 
 VIEWS.toolkit = async (page) => {
-  const d = await fetch('/api/suggestions').then(r => r.json());
+  const d = await fetch('/api/suggestions?' + qs()).then(r => r.json());
   const ev = x => (x || []).map(e => `<code>${esc(e)}</code>`).join(' ');
   page.innerHTML = `
     <div class="note">${esc(d.note)}</div>
@@ -4147,7 +4294,7 @@ const TOURS = {
     {el: 'kpis', t: 'Headline numbers', see: 'Estimated spend, billable tokens, plan usage, remaining allowance and the period forecast.', get: 'A quick read on how much you use and what it costs, for the filters above.', act: 'Change the date range and watch every number follow it.'},
     {el: 'card:Usage burn rate', t: 'Burn rate', see: 'Period to date, daily average, 7-day rate and the projected period total, with a gauge against your allowance.', get: 'Whether today\'s pace lands you inside or outside your plan.', act: 'Set monthly_cost_allowance_usd in config/settings.json to make the gauge exact.'},
     {el: 'card:Cost trend', t: 'Cost trend', see: 'Spend per day across the range.', get: 'The days that drove the bill.', act: 'Hover a point for the exact day, then narrow the range to that week.'},
-    {el: 'card:Model cost', t: 'Model cost', see: 'How spend splits across the models you used.', get: 'Whether an expensive model is doing routine work.', act: 'A big share on a top-tier model? Check <b>Model switch</b>.'},
+    {el: 'card:Model cost', t: 'Model cost', see: 'How spend splits across the models you used.', get: 'Whether an expensive model is doing routine work.', act: 'A big share on a top-tier model? Check <b>Compare models</b>, and <b>Subagent models</b> for subagent work.'},
     {el: 'card:Project cost', t: 'Project cost', see: 'Spend per repository.', get: 'Which codebase costs the most to work in.', act: 'Click a project to filter every dashboard to it.'},
     {el: 'card:Top 10 most expensive prompts', t: 'Most expensive prompts', see: 'The ten single prompts that cost the most.', get: 'The requests worth rewriting or splitting.', act: 'Click a prompt to see every step it triggered.'},
     {el: 'card:Most expensive sessions', t: 'Most expensive sessions', see: 'The longest-running, highest-cost sessions.', get: 'The marathon sessions where context kept being re-read.', act: 'Click one to see where it grew.'},
@@ -4187,7 +4334,7 @@ const TOURS = {
     {el: 'kpis', t: 'Model headlines', see: 'How many models you used and what the mix costs.', get: 'A first read on whether the mix is right.', act: `Filter to one model with <b>Model ${I('chevDown')}</b> above.`},
     {el: 'card:Cost share', t: 'Cost share', see: 'Spend split across models.', get: 'The model that owns your bill.', act: 'Check whether that model is doing work a cheaper one could.'},
     {el: 'card:Token share', t: 'Token share', see: 'The same split by tokens instead of money.', get: 'The gap between the two charts is the price difference at work.', act: 'A model with a small token share but a big cost share is your expensive one.'},
-    {el: 'card:Model FinOps table', t: 'Model FinOps table', see: 'Per model: cost, tokens, context, output and cost per 1K output.', get: 'What each model really costs for the work you give it.', act: 'Sort by cost per 1K output, then open <b>Model switch</b>.'},
+    {el: 'card:Model FinOps table', t: 'Model FinOps table', see: 'Per model: cost, tokens, context, output and cost per 1K output.', get: 'What each model really costs for the work you give it.', act: 'Sort by cost per 1K output, then open <b>Subagent models</b> to see which subagents could run cheaper.'},
     {el: 'card:Price table in effect', t: 'Prices in effect', see: 'The per-model prices used for every estimate in this dashboard.', get: 'Transparency: you can check the maths.', act: 'Edit the price file if your rates differ.'}],
   context: [
     {el: 'kpis', t: 'Context & cache', see: 'Average and peak context per request, and how much is served from cache.', get: 'How much re-reading history costs you, and what caching saves.', act: 'Large average context? Clear or compact sessions more often.'},
@@ -4215,7 +4362,7 @@ const TOURS = {
   categories: [
     {el: 'card:Cost by activity', t: 'Cost by activity', see: 'Spend per kind of work: coding, debugging, docs, review and so on.', get: 'Which kinds of work cost most.', act: 'Cheap, repetitive categories are the ones to move to a smaller model.'},
     {el: 'card:Prompts by activity', t: 'Prompts by activity', see: 'How many prompts fall into each category.', get: 'Volume next to cost: a category can be frequent but cheap.', act: 'Compare this with the cost chart to find the expensive outliers.'},
-    {el: 'card:Activity breakdown', t: 'Activity breakdown', see: 'Per category: prompts, tokens, cost and the model used.', get: 'Concrete evidence for routing work to a cheaper model.', act: 'Then open <b>Model switch</b> to see the options.'}],
+    {el: 'card:Activity breakdown', t: 'Activity breakdown', see: 'Per category: prompts, tokens, cost and the model used.', get: 'Concrete evidence for routing work to a cheaper model.', act: 'Then open <b>Compare models</b> to see the options.'}],
   developer: [
     {el: 'card:Cost per repository', t: 'Cost per repository', see: 'Spend per repo checked out on this machine.', get: 'Which codebase is expensive to work in.', act: 'Click a repo to filter the dashboards.'},
     {el: 'card:Tool usage', t: 'Tool usage', see: 'Each tool the agent called and how often.', get: 'Tools with huge call counts: they fill context and cost money.', act: 'Big Read or Grep counts? Add project memory so the agent re-reads less.'},
@@ -4265,6 +4412,10 @@ const TOURS = {
   freemodels: [
     {el: 'card:How to use and test a free model', t: 'How it works', see: 'How to plug a local or free cloud model into Claude Code, and how to test it.', get: 'Zero-cost options for simple or private work.', act: 'Read the RAM guidance before you pick a model.'},
     {el: 'card1', t: 'A model', see: 'Each model with its size, RAM needs, strengths and limits.', get: 'A realistic idea of what runs on your machine.', act: `Click <b>${I('plus')} Add</b> on a model that fits your RAM.`}],
+  subagents: [
+    {el: 'kpis', t: 'The ceiling', see: 'What subagents cost, and their share of your Claude Code spend.', get: 'An upper bound on what routing subagents can change at all.', act: 'If the share is small, your money is in the main conversation; see <b>Context hygiene</b>.'},
+    {el: 'card:By type and model', t: 'Measured per run', see: 'Each subagent type, the models it ran on, and the median cost, turns, output and context per run.', get: 'A cheaper model suggested only when it has enough runs and really cost less per run.', act: 'Read the line under each type. Custom agents get the exact model: line to add.'},
+    {el: 'card:Experiment', t: 'Experiment', see: 'Run subagents on one model for a while, then compare before and after.', get: 'Evidence from your own work instead of a guess.', act: 'Pick a model, Start, check the change it makes, then Confirm. Stop puts it back.'}],
   compare: [
     {el: 'card0', t: 'Models side by side', see: 'Price, context window, ratings and your own usage per model.', get: 'A clear pick for each kind of work.', act: 'Sort by output price, the one that usually dominates the bill.'},
     {el: 'card:Use Claude for', t: 'Use the big model for', see: 'The work that genuinely needs a top model.', get: 'Where paying more actually pays off.', act: 'Keep multi-file and agentic work here.'},

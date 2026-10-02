@@ -14,9 +14,10 @@ import sys
 from datetime import datetime, timezone
 
 from .classify import classify
+from . import localtime
 from .pricing import Pricing
 
-from .paths import ROOT, DB_PATH, DESKTOP_SESSIONS
+from .paths import ROOT, DB_PATH, DESKTOP_SESSIONS, SETTINGS_PATH, LOCAL_SETTINGS_PATH
 DEFAULT_SOURCE = os.path.expanduser("~/.claude/projects")
 
 SCHEMA_VERSION = 3   # 3: cross-session request_id dedup (resumed sessions copy history)
@@ -202,9 +203,23 @@ def _slug_to_name(slug):
     return os.path.basename(p.rstrip("/")) or slug
 
 
+def keep_deleted_history():
+    """history.keep_deleted_transcripts (default on), local settings winning over shared."""
+    val = True
+    for path in (SETTINGS_PATH, LOCAL_SETTINGS_PATH):
+        try:
+            with open(path) as fh:
+                h = (json.load(fh) or {}).get("history") or {}
+            if isinstance(h.get("keep_deleted_transcripts"), bool):
+                val = h["keep_deleted_transcripts"]
+        except (OSError, ValueError, AttributeError):
+            pass
+    return val
+
+
 class Loader:
     def __init__(self, db_path=DB_PATH, source=DEFAULT_SOURCE, pricing=None, other_agents=True,
-                 desktop_roots=None):
+                 desktop_roots=None, keep_from=None):
         self.other_agents = other_agents
         # An explicit source means "load exactly this"; only the default also picks up
         # the desktop app's Cowork sessions (same JSONL format, different config dir).
@@ -220,11 +235,30 @@ class Loader:
         self.pending_results = {}
         self.group = None
         self.seen_request_ids = set()   # dedup request_id across sessions (resumed sessions)
+        # The warehouse this build replaces: sessions whose transcript has since been
+        # deleted are carried over from it, so history outlives Claude Code's cleanup.
+        self.keep_from = keep_from
 
     # ---------- infrastructure ----------
     def build(self, verbose=True):
+        prev = self.keep_from
+        moved = None
         if os.path.exists(self.db_path):
-            os.remove(self.db_path)
+            if prev is None and keep_deleted_history():
+                moved = prev = self.db_path + ".prev"
+                # fold the write-ahead log into the file first: moving the file without
+                # its -wal leaves a database SQLite can no longer read
+                try:
+                    c = sqlite3.connect(self.db_path)
+                    c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    c.close()
+                except sqlite3.Error:
+                    pass
+                for suffix in ("", "-wal", "-shm"):
+                    if os.path.exists(self.db_path + suffix):
+                        os.replace(self.db_path + suffix, moved + suffix)
+            else:
+                os.remove(self.db_path)
         for suffix in ("-wal", "-shm"):
             p = self.db_path + suffix
             if os.path.exists(p):
@@ -237,7 +271,16 @@ class Loader:
             for n in names:
                 if n.endswith(".jsonl"):
                     files.append(os.path.join(dirpath, n))
-        files.sort()
+
+        def created(fp):
+            # A resumed session copies earlier responses into a new, later file; reading
+            # files oldest-created first credits each response to the session that made it.
+            try:
+                st = os.stat(fp)
+                return (getattr(st, "st_birthtime", None) or st.st_mtime, fp)
+            except OSError:
+                return (float("inf"), fp)
+        files.sort(key=created)
         marker = os.sep + os.path.join(".claude", "projects") + os.sep
         desktop = sorted(os.path.join(d, n) for root in self.desktop_roots
                          for d, _, names in os.walk(root) for n in names
@@ -257,16 +300,34 @@ class Loader:
             if verbose and counts:
                 print("  other agents: " + ", ".join(f"{k} {v:,} requests" for k, v in counts.items()),
                       file=sys.stderr)
+        carried = 0
+        if prev and keep_deleted_history() and os.path.exists(prev):
+            self.db.commit()              # the fresh read is safe whatever happens next
+            try:
+                carried = self.carry_over(prev)
+            except Exception as exc:     # an old or damaged warehouse must not stop a build
+                print(f"  ! kept no deleted history: {exc}", file=sys.stderr)
+                self.db.rollback()
+            if verbose and carried:
+                print(f"  kept {carried} sessions whose transcripts were deleted", file=sys.stderr)
+        if moved:
+            for suffix in ("", "-wal", "-shm"):
+                if os.path.exists(moved + suffix):
+                    os.remove(moved + suffix)
         self.rollup()
         self.db.execute(
             "INSERT INTO meta VALUES (?,?)",
             ("built_at", datetime.now(timezone.utc).isoformat()),
         )
+        self.db.execute("INSERT INTO meta VALUES (?,?)", ("kept_deleted_sessions", str(carried)))
         for k, v in (
             ("source_dir", self.source),
             ("transcript_files", str(len(files))),
             ("desktop_transcript_files", str(len(desktop))),
             ("pricing_updated", str(self.pricing.updated)),
+            # day/hour columns are local calendar days (finops/localtime.py); older
+            # warehouses cut them at UTC and the readers fall back accordingly
+            ("day_basis", "local"),
             ("pricing_source", str(self.pricing.source)),
             ("cost_basis", "estimated"),
             ("schema_version", str(SCHEMA_VERSION)),
@@ -452,7 +513,7 @@ class Loader:
             "INSERT INTO prompts (uuid, session_id, project_id, ts, day, text, char_len,"
             " word_len, category, category_confidence, category_evidence, source, norm_hash)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (r.get("uuid"), session_id, pid, ts, (ts or "")[:10], text, len(text),
+            (r.get("uuid"), session_id, pid, ts, localtime.day(ts), text, len(text),
              len(text.split()), cat, conf, json.dumps(ev), src, norm_hash))
         return cur.lastrowid
 
@@ -520,7 +581,7 @@ class Loader:
             " tool_call_count, is_sidechain, agent_id, agent_type, agent_desc)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (first.get("uuid"), request_id, session_id, pid,
-             prompt_id, ts, (ts or "")[:10], (t.hour if t else None), model,
+             prompt_id, ts, localtime.day(ts), localtime.hour(ts), model,
              1 if self.pricing.is_known(model) else 0, first.get("effort"),
              u.get("service_tier"), msg.get("stop_reason"), inp, out, think, cr,
              c5, c1, cw, billable, context, cost, cost_no_cache,
@@ -530,7 +591,7 @@ class Loader:
                else (None, "inline" if first.get("isSidechain") else None, None))))
         rpk = cur.lastrowid
 
-        day = (ts or "")[:10]
+        day = localtime.day(ts)
         for c in tools:
             name = c.get("name")
             args = c.get("input") or {}
@@ -570,6 +631,109 @@ class Loader:
                     (session_id, pid, prompt_id, args["file_path"], FILE_TOOLS[name], ts))
 
     # ---------- aggregates ----------
+    def carry_over(self, prev):
+        """Copy sessions whose transcript no longer exists from the previous warehouse.
+
+        Claude Code deletes old transcripts (cleanupPeriodDays), and a rebuild reads only
+        what is on disk, so without this every sync would erase that history. Rows are
+        re-derived where the rules may have changed since: cost from the current price
+        table, day and hour in local time, and the prompt category. A session whose
+        file still exists is never carried (the fresh read wins), and a request already
+        loaded from another file is not copied twice.
+        """
+        d = self.db
+        d.execute("ATTACH DATABASE ? AS old", (prev,))
+        try:
+            d.row_factory = sqlite3.Row
+            cols = lambda db, t: [r[1] for r in d.execute(f"PRAGMA {db}.table_info({t})")]
+            common = lambda t: [c for c in cols("main", t) if c in set(cols("old", t)) and c != "id"]
+            gone = [r for r in d.execute(
+                "SELECT * FROM old.sessions WHERE id NOT IN (SELECT id FROM main.sessions)")
+                if r["source_file"] and not os.path.exists(r["source_file"])]
+            if not gone:
+                return 0
+            sids = [r["id"] for r in gone]
+            ph = ",".join("?" * len(sids))
+
+            proj = {}
+            for r in d.execute(f"SELECT * FROM old.projects WHERE id IN "
+                               f"(SELECT project_id FROM old.sessions WHERE id IN ({ph}))", sids):
+                hit = d.execute("SELECT id FROM main.projects WHERE slug=?", (r["slug"],)).fetchone()
+                if hit:
+                    proj[r["id"]] = hit[0]
+                else:
+                    c = common("projects")
+                    cur = d.execute(f"INSERT INTO main.projects ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                                    [r[k] for k in c])
+                    proj[r["id"]] = cur.lastrowid
+
+            c = common("sessions") + ["id"]
+            for r in gone:
+                v = {k: r[k] for k in c}
+                v["project_id"] = proj.get(r["project_id"], r["project_id"])
+                d.execute(f"INSERT INTO main.sessions ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                          [v[k] for k in c])
+
+            pmap = {}
+            c = common("prompts")
+            for r in d.execute(f"SELECT * FROM old.prompts WHERE session_id IN ({ph})", sids).fetchall():
+                v = {k: r[k] for k in c}
+                v["project_id"] = proj.get(r["project_id"], r["project_id"])
+                v["day"] = localtime.day(r["ts"])
+                if r["text"]:
+                    v["category"], v["category_confidence"], ev = classify(r["text"])
+                    v["category_evidence"] = json.dumps(ev)
+                cur = d.execute(f"INSERT INTO main.prompts ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                                [v[k] for k in c])
+                pmap[r["id"]] = cur.lastrowid
+
+            rmap = {}
+            c = common("requests")
+            for r in d.execute(f"SELECT * FROM old.requests WHERE session_id IN ({ph})", sids).fetchall():
+                rid = r["request_id"]
+                if rid and (rid in self.seen_request_ids or d.execute(
+                        "SELECT 1 FROM main.requests WHERE request_id=?", (rid,)).fetchone()):
+                    continue
+                v = {k: r[k] for k in c}
+                v["project_id"] = proj.get(r["project_id"], r["project_id"])
+                v["prompt_id"] = pmap.get(r["prompt_id"])
+                v["day"], v["hour"] = localtime.day(r["ts"]), localtime.hour(r["ts"])
+                priced = r["priced_as"] or r["model"]
+                cost = self.pricing.estimate(priced, r["input_tokens"] or 0, r["output_tokens"] or 0,
+                                             r["cache_read_tokens"] or 0, r["cache_write_5m"] or 0,
+                                             r["cache_write_1h"] or 0)
+                no_cache, with_cache = self.pricing.uncached_baseline(
+                    priced, r["cache_read_tokens"] or 0, r["cache_write_5m"] or 0, r["cache_write_1h"] or 0)
+                v["est_cost_usd"], v["est_cost_no_cache_usd"] = cost, cost - with_cache + no_cache
+                v["model_known"] = 1 if self.pricing.is_known(r["model"]) else 0
+                cur = d.execute(f"INSERT INTO main.requests ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                                [v[k] for k in c])
+                rmap[r["id"]] = cur.lastrowid
+                if rid:
+                    self.seen_request_ids.add(rid)
+
+            c = common("tool_calls")
+            for r in d.execute(f"SELECT * FROM old.tool_calls WHERE session_id IN ({ph})", sids).fetchall():
+                if r["request_pk"] not in rmap:
+                    continue
+                v = {k: r[k] for k in c}
+                v.update(request_pk=rmap[r["request_pk"]], prompt_id=pmap.get(r["prompt_id"]),
+                         project_id=proj.get(r["project_id"], r["project_id"]), day=localtime.day(r["ts"]))
+                d.execute(f"INSERT INTO main.tool_calls ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                          [v[k] for k in c])
+
+            c = common("files_touched")
+            for r in d.execute(f"SELECT * FROM old.files_touched WHERE session_id IN ({ph})", sids).fetchall():
+                v = {k: r[k] for k in c}
+                v.update(prompt_id=pmap.get(r["prompt_id"]), project_id=proj.get(r["project_id"], r["project_id"]))
+                d.execute(f"INSERT INTO main.files_touched ({','.join(c)}) VALUES ({','.join('?' * len(c))})",
+                          [v[k] for k in c])
+            d.commit()
+            return len(gone)
+        finally:
+            d.row_factory = None
+            d.execute("DETACH DATABASE old")
+
     def rollup(self):
         d = self.db
         d.execute("""
