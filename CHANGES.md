@@ -2,7 +2,7 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
-## Unreleased — Subagent models
+## 0.15.0 — Subagent models, numbers you can trust, history that outlives cleanup
 
 **Which subagents could run on a cheaper model, measured.** A new **Subagent models** page
 (Optimize) shows each subagent type, the models it ran on, and what a run cost, how many turns it
