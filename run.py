@@ -161,6 +161,8 @@ HELP = """Claude FinOps Command Center
 Environment:
   PORT=9000                     serve on another port (default 8787)
   CLAUDE_FINOPS_HOME=/path      where your data lives (default ~/.claude-finops)
+  CLAUDE_FINOPS_TZ=Asia/Kolkata which time zone days are cut in (default: this computer's)
+  CLAUDE_FINOPS_AUTOSYNC_MINUTES=60  re-read transcripts when data is this old (0 = never)
   CLAUDE_PROJECTS=/path         where to read transcripts from
   CLAUDE_FINOPS_PYTHON=/path    which Python the npm wrapper should use
   NO_UPDATE_NOTIFIER=1          never check npm for a newer release

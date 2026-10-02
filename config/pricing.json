@@ -2,8 +2,8 @@
   "_comment": "Model pricing in USD per 1,000,000 tokens. Kept SEPARATE from usage data so it can be updated without touching the dashboard. Any cost derived from these numbers is ESTIMATED, never actual billed cost.",
   "currency": "USD",
   "unit": "per_million_tokens",
-  "updated": "2026-09-28",
-  "source": "Anthropic list prices (platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-28)",
+  "updated": "2026-10-02",
+  "source": "Anthropic list prices (platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-28; Sonnet 5.5 added 2026-10-02); OpenAI (developers.openai.com/api/docs/pricing) and Google (ai.google.dev/gemini-api/docs/pricing) checked 2026-10-02",
   "models": {
     "claude-opus-5": {
       "display_name": "Claude Opus 5",
@@ -50,6 +50,17 @@
       "context_window": 1000000,
       "provider": "anthropic",
       "_note": "Research-preview fast mode, 2x standard. Selected when usage.speed == 'fast'."
+    },
+    "claude-sonnet-5-5": {
+      "display_name": "Claude Sonnet 5.5",
+      "tier": "balanced",
+      "input": 2.0,
+      "output": 10.0,
+      "cache_write_5m": 2.5,
+      "cache_write_1h": 4.0,
+      "cache_read": 0.2,
+      "context_window": 1000000,
+      "provider": "anthropic"
     },
     "claude-sonnet-5": {
       "display_name": "Claude Sonnet 5",
@@ -311,7 +322,7 @@
       "provider": "google",
       "input": 0.3,
       "output": 2.5,
-      "cache_read": 0.075,
+      "cache_read": 0.03,
       "cache_write_5m": 0.3,
       "cache_write_1h": 0.3,
       "context_window": 1048576,
@@ -323,7 +334,7 @@
       "provider": "google",
       "input": 1.25,
       "output": 10.0,
-      "cache_read": 0.3125,
+      "cache_read": 0.125,
       "cache_write_5m": 1.25,
       "cache_write_1h": 1.25,
       "context_window": 1048576,
@@ -335,7 +346,7 @@
       "provider": "google",
       "input": 1.5,
       "output": 9.0,
-      "cache_read": 0.375,
+      "cache_read": 0.15,
       "cache_write_5m": 1.5,
       "cache_write_1h": 1.5,
       "context_window": 1048576
@@ -346,7 +357,7 @@
       "provider": "google",
       "input": 0.75,
       "output": 3.75,
-      "cache_read": 0.1875,
+      "cache_read": 0.075,
       "cache_write_5m": 0.75,
       "cache_write_1h": 0.75,
       "context_window": 1048576,

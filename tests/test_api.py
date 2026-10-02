@@ -211,6 +211,38 @@ class TestParityRoutes(ServerFixture):
         self.assertEqual(self.post("/api/do/statusline", {})[0], 403)
 
 
+class TestSubagents(ServerFixture):
+    def setUp(self):
+        from unittest import mock
+        from finops import integrate, subagents
+        d = tempfile.mkdtemp(prefix="finops-test-sub-")
+        self.p = [mock.patch.object(integrate, "SETTINGS", os.path.join(d, "settings.json")),
+                  mock.patch.object(subagents, "LOCAL_SETTINGS_PATH", os.path.join(d, "local.json"))]
+        for p in self.p:
+            p.start()
+
+    def tearDown(self):
+        for p in self.p:
+            p.stop()
+
+    def test_route(self):
+        code, body = self.get("/api/subagents")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["types"], [])
+        self.assertIsNone(body["experiment"]["active"])
+
+    def test_experiment_needs_action_header(self):
+        self.assertEqual(self.post("/api/do/subagent_experiment", {"action": "stop"})[0], 403)
+
+    def test_experiment_start_and_stop(self):
+        h = {"X-FinOps-Action": "1"}
+        self.assertEqual(self.post("/api/do/subagent_experiment", {"action": "start", "model": "gpt"}, h)[0], 400)
+        code, body = self.post("/api/do/subagent_experiment", {"action": "start", "model": "haiku"}, h)
+        self.assertTrue(body["ok"])
+        self.assertEqual(self.get("/api/subagents")[1]["experiment"]["active"]["model"], "haiku")
+        self.assertTrue(self.post("/api/do/subagent_experiment", {"action": "stop"}, h)[1]["ok"])
+
+
 class TestKeys(ServerFixture):
     """API keys set from the Budgets page: stored 0600, never sent back."""
     KEY = "sk-ant-admin01-" + "x" * 30 + "WXYZ"

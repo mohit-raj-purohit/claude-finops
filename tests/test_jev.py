@@ -176,7 +176,10 @@ class TestFit(unittest.TestCase):
         f = jev.fit(a, {})
         self.assertEqual(f["prompts"], 2)
         self.assertAlmostEqual(f["claude_cost"], 0.30)
-        self.assertAlmostEqual(f["jev_cost"], 2 * 10000 * jev.JEV_USD_PER_INPUT_TOKEN)
+        # priced on the prompt text (~4 chars a token), not Claude Code's whole context
+        texts = ["Is this a bug or a feature request? yes or no",
+                 "classify this ticket as billing, auth or other: /Users/me/x.txt"]
+        self.assertAlmostEqual(f["jev_cost"], sum(len(t) / 4 for t in texts) * jev.JEV_USD_PER_INPUT_TOKEN)
         self.assertAlmostEqual(f["share_pct"], 100 * 0.30 / 3.00, places=3)
         self.assertEqual(f["total_prompts"], 6)
 

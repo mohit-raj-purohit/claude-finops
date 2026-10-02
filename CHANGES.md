@@ -2,6 +2,93 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## Unreleased — Subagent models
+
+**Which subagents could run on a cheaper model, measured.** A new **Subagent models** page
+(Optimize) shows each subagent type, the models it ran on, and what a run cost, how many turns it
+took and how much it wrote, as medians. It suggests a cheaper model only when that model has at
+least 5 runs of the same type and really cost less per run. Your own agent files get the exact
+`model:` line to add. Forks get context advice instead, since they always use your conversation's
+model and carry its whole context.
+
+**It tells you the ceiling first.** The headline is subagents' share of your spend: the most
+routing could ever save, even if every run were free. There is no savings estimate. The old Model
+switch view was removed for repricing work that never ran, and this page doesn't do that.
+
+**Try a model and see.** **Start experiment** sets `CLAUDE_CODE_SUBAGENT_MODEL` in Claude Code's
+settings (after showing you the change, with a backup), and the page compares each subagent type
+before and after. **Stop** puts it back. finops never overwrites a value you set yourself.
+
+**Fixed.** Three guided-tour steps still sent you to the removed Model switch page.
+
+**Overview layout.** The Model cost table sits next to its chart again, and Optimization
+opportunities and FinOps score no longer stretch to match the cards beside them.
+
+**Fixed numbers, from a full audit of every page.** Totals were already right everywhere;
+these were not:
+
+- **Waste detection** counted at most 15 items per rule and showed that cap as the count
+  ("15 very long prompts" when there were 420). Every rule now counts and totals all
+  matches and shows the 15 costliest as examples. The headline excess could be smaller
+  than one rule's own excess; it now adds up. Duplicate prompts honour the 60-minute
+  window in settings and never count the first ask. Rules that claim no excess say so
+  instead of "$0.0000 excess".
+- **Your own calendar days.** Days were cut at UTC midnight, so in India everything
+  between midnight and 05:30 landed on the previous day, and "Today" meant the last day
+  with data. Days, "today" and the billing period now follow this computer's time zone
+  (or `CLAUDE_FINOPS_TZ`). Press **Sync** once to re-read your history this way.
+- **Burn rate and Forecast** no longer change with the page's date range, and days after
+  your last sync are projected instead of counted as $0; both pages say when that applies.
+  Scenarios show the daily rate each one implies, and "A typical 30 days" replaces a
+  figure that repeated the end-of-period one.
+- **Claude Sonnet 5.5** is priced ($2 / $10 per million, like Sonnet 5) instead of $0.
+  Press **Sync** to re-cost it. Compare models now lists every Claude model you used,
+  Opus 5.5 included, with your usage in the selected range.
+- **Skills & MCP** suggestions come from Claude Code's own prompts and commands in the
+  selected range, not from other agents' templates.
+- **The same figure everywhere.** The context share on What should I do? now matches
+  Context hygiene and the scorecard (main conversation, at or above 150K). Context
+  utilisation is measured against each model's own window.
+- **Smaller fixes.** Usage timeline keeps idle days and counts each prompt once; the
+  model-mix chart is right with a model filter on; Prompt intelligence averages are per
+  prompt; project file counts, most-touched files and git branches follow the filters;
+  "Cheapest" skips $0 local runs; "Most token-efficient" needs a real sample; anomalies
+  rank by severity and show dollars as dollars; search treats `_` and `%` literally;
+  the scorecard says how much caching actually saved; tool tokens in Why so many tokens?
+  count each request once; estimated cards say Estimated; prompt and session drawers say
+  when they show the whole item rather than the selected dates; Jev's cost uses the
+  prompt, not Claude Code's whole context; Free models notices a model you already
+  downloaded; Budgets suggestions use your last 30 synced days.
+- **Stays fresh by itself.** While the dashboard runs it re-reads your transcripts once
+  the data is an hour old (`CLAUDE_FINOPS_AUTOSYNC_MINUTES`, `0` to turn off).
+- **New Claude models aren't $0 any more.** A model missing from `pricing.json` is priced
+  as the newest listed model of its family and marked "priced as …" until it gets its own
+  entry. Requests that still have no price (for example Cursor's) are counted on the
+  Requests figure so you can see them.
+- **Fewer prompts in "other".** Short steering turns ("do that", "fix all", a reply in
+  another language) are now *follow-up*, and commit/push/merge work is *version control*.
+  Sync to re-sort your history.
+- **Drawers show both numbers.** A prompt or session opened from a filtered list shows
+  what it cost in the selected dates next to its whole total.
+- **Billed vs local** compares on UTC days, as the vendors report them. Hourly charts and
+  the heatmap follow `CLAUDE_FINOPS_TZ` too. The forecast chart's labels no longer print
+  on top of each other, and a zero amount reads "$0".
+- **Cursor agent transcripts are no longer read.** They carry no times and no token
+  counts, so 18,975 rows were dated by each file's last save and every assistant line was
+  counted as a request. Cursor now shows only what its IDE recorded: real times and
+  tokens (635 requests here).
+- **Waste rules say who sent what.** Very long prompts are split into ones you sent and
+  ones a script sent through the SDK (each with advice that fits), Claude Code's own
+  continuation summaries are no longer counted as your prompts, and a pipeline re-sending
+  its template is no longer a "repeated prompt". The advice for frontier-model prompts no
+  longer suggests switching models mid-session, which rewrites the cache.
+- **Your history survives Claude Code's cleanup.** Claude Code deletes old transcripts,
+  and every sync used to rebuild from what was left, so those sessions vanished from the
+  dashboard. A sync now keeps sessions whose transcript is gone, re-costed at current
+  prices. `history.keep_deleted_transcripts: false` restores the old behaviour.
+- **Gemini cache reads** are priced at Google's current rate (10% of input, not 25%).
+  OpenAI and Gemini prices were checked against the vendors' pages.
+
 ## 0.14.0 — Limits for one conversation, a simpler Budgets page, Jev
 
 **A token limit for each Claude Code conversation.** Set a per-session token budget on the

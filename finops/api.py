@@ -194,6 +194,14 @@ def filters_from(qs):
     return f
 
 
+def _costs_by_day_model(a, f):
+    """One row per day and model: the cost export, distinct from the usage timeline."""
+    w, p = a.where(f)
+    return a.q(f"""SELECT r.day, r.model, COUNT(*) requests, SUM(r.billable_tokens) tokens,
+                   SUM(r.est_cost_usd) est_cost_usd FROM requests r
+                   WHERE {w} AND r.day <> '' GROUP BY 1, 2 ORDER BY 1, 5 DESC""", p)
+
+
 def flatten(rows):
     keys = []
     for r in rows:
@@ -337,10 +345,7 @@ class Handler(BaseHTTPRequestHandler):
         """POST /api/do/...: actions that change this machine. Always user-initiated."""
         from . import actions as X
         if parts == ["sync"]:
-            cur = X.JOBS.get(_SYNC["job"] or "")
-            if not cur or cur["state"] != "running":
-                _SYNC["job"] = X._job(_sync_job)["id"]
-            return self.send_json({"job": _SYNC["job"]})
+            return self.send_json({"job": _start_sync()})
         if len(parts) == 3 and parts[0] == "free_model" and parts[2] == "install":
             j = X._job(X.free_model_install, parts[1], bool(payload.get("consent")),
                        payload.get("api_key"))
@@ -386,6 +391,16 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["guard"]:
             from .integrate import install_guard
             return self.send_json(install_guard(remove=bool(payload.get("remove"))))
+        if parts == ["subagent_experiment"]:
+            from . import subagents as SA
+            try:
+                if payload.get("action") == "start":
+                    return self.send_json(SA.start_experiment(payload.get("model")))
+                if payload.get("action") == "stop":
+                    return self.send_json(SA.stop_experiment())
+            except (ValueError, SA.SettingsError) as e:
+                raise BadRequest(str(e))
+            raise BadRequest("action must be start or stop")
         if len(parts) == 2 and parts[0] == "mcp":
             return self.send_json(X.add_mcp(parts[1], payload))
         return self.send_json({"error": "unknown action"}, 404)
@@ -401,12 +416,12 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 a = A
             qs = parse_qs(urlparse(self.path).query)
-            ags = [x for x in (qs.get("agents", [""])[0]).split(",") if x]
-            return self.send_json(X.compare(a, ags or None))
+            f = filters_from(qs)
+            return self.send_json(X.compare(a, f["agents"] or None, f))
         if parts == ["suggestions"]:
             with _lock:
                 a = A
-            return self.send_json(X.suggestions(a))
+            return self.send_json(X.suggestions(a, filters_from(parse_qs(urlparse(self.path).query))))
         if parts[0] == "job" and len(parts) == 2:
             return self.send_json(X.job_status(parts[1]))
         if parts == ["sync"]:
@@ -577,6 +592,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
         if route.startswith("guard/session/"):
             return self.send_json(_session_limit_status(a, route[len("guard/session/"):]))
+        if route == "subagents":
+            from .subagents import report
+            return self.send_json(report(a, f))
         if route == "jev":
             from . import jev
             return self.send_json({"status": jev.status(), "key": jev.key_status(), "fit": jev.fit(a, f)})
@@ -595,13 +613,15 @@ class Handler(BaseHTTPRequestHandler):
                 pid = int(route.split("/")[1])
             except ValueError:
                 raise BadRequest("id must be an integer")
-            return self.send_json(a.prompt_detail(pid))
+            d = a.prompt_detail(pid, f)
+            return self.send_json(d, 404 if isinstance(d, dict) and d.get("error") else 200)
         if route.startswith("session/"):
-            return self.send_json(a.session_detail(route.split("/", 1)[1]))
+            d = a.session_detail(route.split("/", 1)[1], f)
+            return self.send_json(d, 404 if isinstance(d, dict) and d.get("error") else 200)
         if route == "bundle":
             return self.send_json({
                 "overview": a.overview(f), "burn": a.burn(f), "timeline": a.timeline(f),
-                "models": a.models(f), "projects": a.projects(f)[:40],
+                "models": a.models(f), "projects": a.projects(f),
                 "categories": a.categories(f), "efficiency": a.efficiency(f),
                 "context": a.context_analysis(f), "waste": a.waste(f),
                 "recommendations": a.recommendations(f), "forecast": a.forecast(f),
@@ -623,8 +643,9 @@ class Handler(BaseHTTPRequestHandler):
             "usage": lambda: a.timeline(f),
             "models": lambda: a.models(f)["rows"],
             "projects": lambda: a.projects(f),
-            "costs": lambda: a.timeline(f),
-            "waste": lambda: [dict(x, evidence=len(x["evidence"])) for x in a.waste(f)["findings"]],
+            "costs": lambda: _costs_by_day_model(a, f),
+            "waste": lambda: [dict(x, evidence=x.get("count", len(x["evidence"])))
+                              for x in a.waste(f)["findings"]],
             "recommendations": lambda: a.recommendations(f)["recommendations"],
             "forecast": lambda: [dict(name=k, **v) for k, v in
                                  (a.forecast(f).get("scenarios") or {}).items()],
@@ -696,6 +717,36 @@ def _sync_job(log):
     return {"built_at": A.q("SELECT value FROM meta WHERE key='built_at'")[0]["value"]}
 
 
+def _start_sync():
+    """Start a sync unless one is already running; returns the job id."""
+    from . import actions as X
+    cur = X.JOBS.get(_SYNC["job"] or "")
+    if not cur or cur["state"] != "running":
+        _SYNC["job"] = X._job(_sync_job)["id"]
+    return _SYNC["job"]
+
+
+def _auto_sync_loop(minutes):
+    """Keep the warehouse fresh without anyone pressing Sync.
+
+    Every few minutes, if the last build is older than `minutes`, run the same sync the
+    Sync button runs. A stale warehouse is what made recent days read as idle and
+    projections read low; this keeps "today" honest on a dashboard left open.
+    """
+    import time as _t
+    from datetime import datetime as _dt, timezone as _tz
+    while True:
+        try:
+            with _lock:
+                built = A.meta.get("built_at") if A else None
+            age = (_dt.now(_tz.utc) - _dt.fromisoformat(built)).total_seconds() / 60 if built else 1e9
+            if age >= minutes:
+                _start_sync()
+        except Exception:
+            log.exception("auto-sync check failed")
+        _t.sleep(min(minutes, 15) * 60)
+
+
 def _notify_update():
     from .update import notify
     notify()
@@ -737,6 +788,12 @@ def serve(port=8787, db=DB_PATH, background=None):
     from .update import disabled
     if not disabled():
         threading.Thread(target=_notify_update, daemon=True).start()
+    try:
+        auto = float(os.environ.get("CLAUDE_FINOPS_AUTOSYNC_MINUTES", "60"))
+    except ValueError:
+        auto = 60.0
+    if auto > 0:
+        threading.Thread(target=_auto_sync_loop, args=(auto,), daemon=True).start()
     # The socket is already listening, so the page's first request just waits for
     # serve_forever. Off the main thread: some platforms block while the browser starts.
     threading.Thread(target=_open_browser, args=(f"http://127.0.0.1:{port}",), daemon=True).start()

@@ -31,6 +31,9 @@ class FixedWindowPricing:
     def tier(self, model):
         return "balanced"
 
+    def rates(self, model):
+        return {}
+
 
 class TestModelsUtilisation(unittest.TestCase):
     """models() utilisation is measured against the window that served each request."""

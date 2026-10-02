@@ -274,6 +274,8 @@ table.tbl tbody tr.clickable { cursor:pointer; }
 table.tbl tbody tr.clickable:hover { background: var(--surface-3); }
 table.tbl td.trunc { max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 table.tbl .sub { font-size:10.5px; color:var(--muted); }
+/* Model cost card: compact cells so the table fits beside the donut */
+#mtable table.tbl th, #mtable table.tbl td { padding-left:6px; padding-right:6px; }
 .swatch { width:9px; height:9px; border-radius:2.5px; display:inline-block; flex:none;
           margin-right:6px; vertical-align:baseline; }
 .mono { font-family: var(--mono); font-size:11px; }

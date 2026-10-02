@@ -48,10 +48,37 @@ class Pricing:
                 return k
         return m
 
+    FAMILIES = ("opus", "sonnet", "haiku", "fable", "mythos")
+
+    def family_fallback(self, model):
+        """The price-table key for the newest listed model of the same Claude family.
+
+        A new Claude model shows up in transcripts before anyone adds it to
+        pricing.json. Costing it at $0 silently understates spend; within a family the
+        price is usually unchanged or close, so it is priced as the newest sibling and
+        flagged (model_known stays 0) until it gets its own entry.
+        """
+        m = self.normalize(model)
+        fam = next((f for f in self.FAMILIES if m.startswith(f"claude-{f}")), None)
+        if not fam:
+            return None
+
+        def version(k):
+            return tuple(int(x) for x in re.findall(r"\d+", k[len(f"claude-{fam}"):])[:2])
+        sibs = [k for k, v in self.models.items() if k.startswith(f"claude-{fam}") and "[" not in k
+                and v.get("provider", "anthropic") == "anthropic" and not re.search(r"-\d{8}$", k)]
+        sibs = sibs or [k for k in self.models if k.startswith(f"claude-{fam}") and "[" not in k]
+        return max(sibs, key=version) if sibs else None
+
     def rates(self, model):
         m = self.normalize(model)
         if m in self.models:
             return self.models[m]
+        fb = self.family_fallback(m) if m.startswith("claude") else None
+        if fb:
+            base = self.models[fb]
+            return dict(base, display_name=m, fallback_from=fb,
+                        fallback_name=base.get("display_name") or fb)
         # An unlisted non-Claude model reached through Claude Code (e.g. a local Ollama or
         # free OpenRouter model via a claude-qwen launcher) has no Anthropic price: $0.
         if m and not m.startswith("claude") and m != "unknown":

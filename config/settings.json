@@ -39,6 +39,14 @@
     "projects": {},
     "sessions": {}
   },
+  "history": {
+    "_comment": "Claude Code deletes old transcripts (cleanupPeriodDays, 30 days by default). With keep_deleted_transcripts on, a sync keeps the sessions it already had instead of dropping them; turn it off if you delete transcripts on purpose and want them gone from the dashboard too.",
+    "keep_deleted_transcripts": true
+  },
+  "subagents": {
+    "_comment": "Subagent models page: a cheaper model is only suggested, and an experiment only compared, once each side has at least min_runs subagent runs.",
+    "min_runs": 5
+  },
   "waste_rules": {
     "long_prompt_chars": 6000,
     "large_context_tokens": 150000,

@@ -169,7 +169,9 @@ def fit(a, f=None):
                   f"WHERE {w} AND r.agent='claude' AND r.prompt_id IS NOT NULL", p)["n"]
     cost = sum(r["cost"] or 0 for r in hits)
     return {"prompts": len(hits), "total_prompts": n_all, "claude_cost": cost,
-            "jev_cost": sum(r["ctx"] or 0 for r in hits) * JEV_USD_PER_INPUT_TOKEN,
+            # A Jev call carries the question, not Claude Code's system prompt, tools and
+            # history, so it is priced on the prompt text (~4 characters a token).
+            "jev_cost": sum(len(r["text"] or "") / 4 for r in hits) * JEV_USD_PER_INPUT_TOKEN,
             "share_pct": 100.0 * cost / total if total else 0.0, "total_cost": total,
             "examples": [{"text": _mask(r["text"]), "cost": r["cost"] or 0}
                          for r in sorted(hits, key=lambda r: -(r["cost"] or 0))[:5]]}
