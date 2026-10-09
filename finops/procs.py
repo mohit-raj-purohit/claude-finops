@@ -71,6 +71,12 @@ def _is_claude(p):
     return base in ("claude", "claude.exe", "claude.cmd") or cmd.endswith("/claude")
 
 
+def _same_start(reg, p):
+    """True unless the registry's procStart names a different start time than ps reports.
+    Whitespace is normalised: the registry pads single-digit days ("Oct  9"), ps output is re-joined ("Oct 9")."""
+    return not reg.get("procStart") or reg["procStart"].split() == p["lstart"].split()
+
+
 def _ancestors(pid, procs):
     seen = set()
     while pid in procs and pid not in seen and pid > 1:
@@ -128,8 +134,7 @@ def list_sessions(pricing):
             continue
         pid = reg.get("pid")
         p = procs.get(pid)
-        alive = bool(p) and _is_claude(p) and (
-            not reg.get("procStart") or reg["procStart"] == p["lstart"])
+        alive = bool(p) and _is_claude(p) and _same_start(reg, p)
         if not alive:
             continue
         st = _transcript_stats(reg.get("sessionId"), pricing)
@@ -160,7 +165,7 @@ def act(pid, action):
     p = procs.get(pid)
     if not p or not _is_claude(p):
         return {"ok": False, "error": "Process is no longer running."}
-    if reg.get("procStart") and reg["procStart"] != p["lstart"]:
+    if not _same_start(reg, p):
         return {"ok": False, "error": "PID was reused by another process; refusing."}
     sig, msg = ACTIONS[action]
     try:
@@ -642,7 +647,7 @@ def compact(pid, opts=None):
     p = _ps().get(pid)
     if not p or not _is_claude(p):
         return {"ok": False, "error": "Process is no longer running.", "copy": text}
-    if reg.get("procStart") and reg["procStart"] != p["lstart"]:
+    if not _same_start(reg, p):
         return {"ok": False, "error": "PID was reused by another process; refusing.", "copy": text}
 
     tty = _tty_of(pid)

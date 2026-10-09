@@ -2,6 +2,13 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.15.1 — Running sessions show up again
+
+**Fixed.** Running sessions disappeared on days 1 to 9 of every month. Claude Code writes a
+session's start time as `Oct  9` (two spaces) and the dashboard read it as `Oct 9`, so every
+session looked like a dead process whose ID had been reused. Close, Force kill and Compact
+refused for the same reason. The times are now compared without caring about the spacing.
+
 ## 0.15.0 — Subagent models, numbers you can trust, history that outlives cleanup
 
 **Which subagents could run on a cheaper model, measured.** A new **Subagent models** page
