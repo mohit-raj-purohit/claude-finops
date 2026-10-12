@@ -168,6 +168,11 @@ def act(pid, action):
     if not _same_start(reg, p):
         return {"ok": False, "error": "PID was reused by another process; refusing."}
     sig, msg = ACTIONS[action]
+    if action == "interrupt":
+        pane = _herdr_pane(pid)
+        if pane and subprocess.run(["herdr", "pane", "send-keys", pane["pane_id"], "esc"],
+                                   capture_output=True, timeout=10).returncode == 0:
+            return {"ok": True, "message": "Pressed Esc in that session's herdr pane: the current turn stops."}
     try:
         os.kill(pid, sig)
     except ProcessLookupError:
@@ -449,11 +454,19 @@ def _render_brief(reg, b, task=None, part=None):
     return "\n".join(L)
 
 
-def _launch_terminal(cwd, prompt_path):
-    """Open a new Terminal window running a fresh `claude` seeded with the brief."""
+def _launch_terminal(cwd, prompt_path, herdr_pane=None):
+    """Open a new Terminal window running a fresh `claude` seeded with the brief.
+    herdr_pane: the old session's herdr pane; the new session opens as a tab next to it."""
     q = lambda s: "'" + s.replace("'", "'\\''") + "'"
     seed = f"Read the handover brief at {prompt_path} and continue from it."
     cmd = f"cd {q(cwd)} && claude {q(seed)}"
+    if herdr_pane:
+        tab = _herdr("tab", "create", "--workspace", herdr_pane.get("workspace_id") or "",
+                     "--cwd", cwd, "--label", "handover", "--focus")
+        new = (tab.get("root_pane") or {}).get("pane_id")
+        if new and subprocess.run(["herdr", "pane", "run", new, cmd],
+                                  capture_output=True, timeout=10).returncode == 0:
+            return True, ""
     if sys.platform == "darwin":
         osa = 'tell application "Terminal"\nactivate\ndo script ' + json.dumps(cmd) + "\nend tell"
         r = subprocess.run(["osascript", "-e", osa], capture_output=True, text=True)
@@ -489,13 +502,14 @@ def handover(pid, opts):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     os.makedirs(HANDOFFS, exist_ok=True)
     out, jobs = [], tasks or [None]
+    pane = _herdr_pane(pid) if opts.get("launch", True) else None
     for i, t in enumerate(jobs, 1):
         path = os.path.join(HANDOFFS, f"{stamp}-{reg.get('sessionId', 'x')[:8]}-{i}.md")
         with open(path, "w") as fh:
             fh.write(_render_brief(reg, b, t, f"{i} of {len(jobs)}" if len(jobs) > 1 else None))
         item = {"brief": path, "task": t, "launched": False}
         if opts.get("launch", True):
-            item["launched"], err = _launch_terminal(reg.get("cwd") or HOME, path)
+            item["launched"], err = _launch_terminal(reg.get("cwd") or HOME, path, pane)
             if err:
                 item["error"] = err
         out.append(item)
@@ -512,7 +526,7 @@ def handover(pid, opts):
 # /compact is typed *into* the running session — there is no signal for it. Nothing
 # can write to another process's terminal directly (TIOCSTI is off on macOS and on
 # modern Linux), so the keystrokes are handed to whatever owns that terminal:
-# tmux if the session runs inside one, else Terminal.app or iTerm2 via
+# tmux or herdr if the session runs inside one, else Terminal.app or iTerm2 via
 # AppleScript, else Windows Terminal/console via SendKeys. When none of those owns
 # it, the UI falls back to copying the command for you to paste.
 
@@ -556,6 +570,44 @@ def _send_tmux(tty, pid, text):
         subprocess.run(["tmux", "send-keys", "-t", target, "Enter"], capture_output=True)
         return True, "tmux"
     return False, ""
+
+
+def _herdr(*args):
+    """Run a herdr CLI call and return its `result` ({} on any failure)."""
+    try:
+        r = subprocess.run(["herdr", *args], capture_output=True, text=True, timeout=10)
+        return (json.loads(r.stdout).get("result") or {}) if r.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
+def _herdr_pane(pid):
+    """The herdr pane (terminal workspace for AI agents) whose processes include this
+    session, or None when herdr isn't installed or the session runs elsewhere."""
+    if not shutil.which("herdr"):
+        return None
+    mine = _ancestors(pid, _ps()) | {pid}
+    for pane in _herdr("pane", "list").get("panes") or []:
+        if not pane.get("pane_id"):
+            continue
+        info = _herdr("pane", "process-info", "--pane", pane["pane_id"]).get("process_info") or {}
+        pids = {fp.get("pid") for fp in info.get("foreground_processes") or []} | {info.get("shell_pid")}
+        if pid in pids or info.get("shell_pid") in mine:
+            return pane
+    return None
+
+
+def _send_herdr(pid, text):
+    """herdr: type the text and Enter into the session's pane."""
+    pane = _herdr_pane(pid)
+    if not pane:
+        return False, ""
+    try:
+        r = subprocess.run(["herdr", "pane", "run", pane["pane_id"], text],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return (True, "herdr") if r.returncode == 0 else (False, (r.stderr or "").strip())
 
 
 def _send_macos(tty, text):
@@ -653,6 +705,7 @@ def compact(pid, opts=None):
     tty = _tty_of(pid)
     hint = ""
     for send in (lambda: _send_tmux(tty, pid, text),
+                 lambda: _send_herdr(pid, text),
                  lambda: _send_macos(tty, text),
                  lambda: _send_windows(pid, text)):
         ok, info = send()
@@ -666,3 +719,55 @@ def compact(pid, opts=None):
     return {"ok": False, "sent": False, "copy": text,
             "error": (hint or "Couldn't reach that session's terminal") +
                      f" — `{text}` is on your clipboard; paste it in that window."}
+
+
+def rename(pid, opts=None):
+    """Type `/rename <name>` into a running Claude Code session's terminal, so Claude Code
+    saves the name itself (registry and transcript), exactly as if you typed it there.
+
+    opts: name – the new name (one line, at most 80 characters)
+    """
+    name = " ".join("".join(c if c.isprintable() else " "
+                            for c in str((opts or {}).get("name") or "")).split())[:80]
+    if not name:
+        return {"ok": False, "error": "Type a name first."}
+    text = f"/rename {name}"
+    try:
+        with open(os.path.join(REG, f"{pid}.json")) as fh:
+            reg = json.load(fh)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "Not a registered Claude Code session.", "copy": text}
+    p = _ps().get(pid)
+    if not p or not _is_claude(p):
+        return {"ok": False, "error": "Process is no longer running.", "copy": text}
+    if not _same_start(reg, p):
+        return {"ok": False, "error": "PID was reused by another process; refusing.", "copy": text}
+
+    tty = _tty_of(pid)
+    hint = ""
+    for send in (lambda: _send_tmux(tty, pid, text),
+                 lambda: _send_herdr(pid, text),
+                 lambda: _send_macos(tty, text),
+                 lambda: _send_windows(pid, text)):
+        ok, info = send()
+        if ok:
+            pane = _herdr_pane(pid) if info == "herdr" else None
+            if pane:   # herdr's agents sidebar keeps its own label; name it the same
+                _herdr("agent", "rename", pane["pane_id"], name)
+            return {"ok": True, "message": f"Sent `{text}` to the session"
+                                           f"{f' via {info}' if info else ''}. "
+                                           "The new name shows here once that session takes it.",
+                    "sent": True, "copy": text, "name": name}
+        if info and not hint:
+            hint = info
+    return {"ok": False, "sent": False, "copy": text,
+            "error": (hint or "Couldn't reach that session's terminal") +
+                     f" — `{text}` is on your clipboard; paste it in that window."}
+
+
+def session_prompts(fp, n=5):
+    """The first prompt and the last few, so you can tell which session is which."""
+    b = brief_from_transcript(fp)
+    recent = b["recent"][1:] if b["turns"] <= 6 else b["recent"]
+    return {"first": _clip(b["goal"], 1000), "recent": [_clip(t, 1000) for t in recent[-n:]],
+            "turns": b["turns"]}

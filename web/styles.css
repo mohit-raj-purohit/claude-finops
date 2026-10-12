@@ -497,6 +497,8 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
   border: 1px solid var(--border); background: transparent; color: inherit; resize: vertical; }
 .handover .ho-out { display: grid; gap: 4px; }
 .handover .ho-out code { word-break: break-all; }
+.handover .prompt-txt { white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; padding: 6px 8px; border-radius: 6px; background: var(--surface-2); }
+.handover .rn-in { flex: 1; min-width: 180px; font: inherit; font-size: 12.5px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: inherit; }
 
 /* ---------- walkthrough ---------- */
 #tour { position: fixed; inset: 0; z-index: 1000; pointer-events: none; }

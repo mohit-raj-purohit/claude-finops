@@ -438,18 +438,24 @@ files on Windows.
   "Add" runs `claude mcp add -s user …`; "Create skill" writes `~/.claude/skills/<name>/SKILL.md`.
   The strongest skill suggestions also appear in **⚡ Act now** on the overview.
 - **Compact** (Running sessions, Recent, Act now, session rows) types `/compact` into that session's
-  terminal: tmux, Terminal.app, iTerm2 or the Windows console. Anywhere else it copies the
+  terminal: tmux, herdr, Terminal.app, iTerm2 or the Windows console. Anywhere else it copies the
   command for you to paste. It asks you to click twice.
 - **Hand over / split** (Running sessions) writes a brief of the session to
-  `~/.claude/finops-handoffs/` and opens fresh session(s) in new terminals, one per sub-task if
-  you list them; it can close the old session (resumable).
+  `~/.claude/finops-handoffs/` and opens fresh session(s) in new terminals (a new herdr tab in the
+  same workspace when the session runs in herdr), one per sub-task if you list them; it can close
+  the old session (resumable).
+- **Prompts** (Running sessions) shows a session's first prompt and its latest five, so you can
+  tell which session is which before you close it.
+- **Rename** (Running sessions) types `/rename <name>` into that session's terminal, so Claude
+  Code saves the name itself. In herdr, the agents sidebar gets the same name. Anywhere it can't
+  type, the command lands on your clipboard.
 - **Recent** (clock icon in the top bar, or press `R`) opens a side panel on any page: running sessions first,
   with Resume, Compact and Stop (Interrupt), then past sessions newest first. Click a session to
   list its prompts, and click a prompt for its full details. Search matches your prompt text.
   It covers all dates but keeps the agent and project filters. Close and Force kill stay on
   Running sessions.
-- **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal.
-  Each asks you to click twice. Interrupt is macOS/Linux only: on Windows there is no way to
+- **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal
+  (in herdr, Interrupt presses Esc in the session's pane instead). Each asks you to click twice. Interrupt is macOS/Linux only: on Windows there is no way to
   interrupt one console process without hitting the others in its window.
 - **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
