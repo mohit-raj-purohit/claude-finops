@@ -2107,6 +2107,21 @@ async function drawLimit(box, x, i) {
   box.querySelector('[data-lim-off]')?.addEventListener('click', () => send({off: true}, 'The guard is off for this conversation.'));
 }
 
+// The Prompts panel: the session's first prompt and its latest few, so you can tell sessions apart.
+async function drawPrompts(box, sid) {
+  box.innerHTML = '<div class="note">Reading prompts…</div>';
+  let d;
+  try {
+    const r = await fetch(`/api/session_prompts/${encodeURIComponent(sid)}`);
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Could not read this session.');
+  } catch (e) { box.innerHTML = `<div class="live-msg err">${esc(e.message)}</div>`; return; }
+  if (!d.turns) { box.innerHTML = '<div class="note">No prompts yet.</div>'; return; }
+  const one = t => `<div class="dt prompt-txt">${esc(pt(t))}</div>`;
+  box.innerHTML = `<div class="note"><b>First prompt</b> · ${fmtInt(d.turns)} prompt${d.turns === 1 ? '' : 's'} in all</div>${one(d.first)}
+    ${d.recent.length ? `<div class="note"><b>Latest prompt${d.recent.length === 1 ? '' : 's'}</b> (newest last)</div>${d.recent.map(one).join('')}` : ''}`;
+}
+
 VIEWS.live = async (page) => {
   const [res, usage0] = await Promise.all([
     fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
@@ -2129,7 +2144,7 @@ VIEWS.live = async (page) => {
     </div>
     <div class="note"><b>Idle sessions don't use tokens</b>; they only cost again when you send the next message,
       which re-reads their whole context. <b>Interrupt</b> stops the current turn (like Esc).
-      <b>Compact</b> types <code>/compact</code> into that session's terminal (tmux, Terminal.app, iTerm2 or
+      <b>Compact</b> types <code>/compact</code> into that session's terminal (tmux, herdr, Terminal.app, iTerm2 or
       Windows console; anywhere else it lands on your clipboard to paste).
       <b>Close</b> exits the session cleanly; copy its resume command to bring it back.
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
@@ -2140,7 +2155,7 @@ VIEWS.live = async (page) => {
       <div class="item sev-${sevOf(x)}" data-i="${i}">
         <div class="hd">${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
           <span class="pill">${esc(agentName(x.agent))}</span>
-          ${esc((!MASKED && x.name) || shortId(x.session_id))} <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
+          <span class="sname">${esc((!MASKED && x.name) || shortId(x.session_id))}</span> <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
           ${x.hosts_dashboard ? '<span class="status high">runs this dashboard</span>' : ''}
           ${x.agent === 'claude' ? limitBadge(x.session_id) : ''}
           <span class="spacer"></span>
@@ -2159,6 +2174,8 @@ VIEWS.live = async (page) => {
           ${x.resume ? `<button class="act ghost" data-copy="${esc(x.resume)}">Copy resume command</button>` : ''}
           ${x.agent === 'claude' ? '<button class="act ghost" data-ho="1">' + I('handover') + ' Hand over / split</button>' : ''}
           ${x.agent === 'claude' && x.session_id ? '<button class="act ghost" data-lim="1">' + I('gauge') + ' Set limit</button>' : ''}
+          ${x.agent === 'claude' && x.session_id ? '<button class="act ghost" data-pr="1">' + I('message') + ' Prompts</button>' : ''}
+          ${x.agent === 'claude' && x.signalable ? '<button class="act ghost" data-rn="1">' + I('tag') + ' Rename</button>' : ''}
           <span class="live-msg"></span>
         </div>
         ${x.agent !== 'claude' ? '' : `<div class="handover" hidden>
@@ -2174,6 +2191,15 @@ VIEWS.live = async (page) => {
           <div class="ho-out note"></div>
         </div>`}
         ${x.agent === 'claude' && x.session_id ? `<div class="handover limitbox" hidden></div>` : ''}
+        ${x.agent === 'claude' && x.session_id ? `<div class="handover promptbox" hidden></div>` : ''}
+        ${x.agent === 'claude' && x.signalable ? `<div class="handover renamebox" hidden>
+          <div class="dt">Types <code>/rename &lt;name&gt;</code> into that session's terminal, so Claude Code saves the
+            name itself (in herdr, the agents sidebar gets the same name). If the terminal can't be reached, the command lands on your clipboard to paste.</div>
+          <div class="live-actions">
+            <input type="text" class="rn-in" maxlength="80" placeholder="New name for this session" value="${esc(MASKED ? '' : (x.name || ''))}">
+            <button class="act rn-go">Rename</button>
+            <span class="live-msg rn-msg" role="status"></span>
+          </div></div>` : ''}
       </div>`).join('') || `<div class="empty">No ${esc(agentWord())} sessions are running</div>`}</div>`;
   $('#live-refresh', page).onclick = () => render();
   const ub = $('#usage-refresh', page);
@@ -2207,13 +2233,37 @@ VIEWS.live = async (page) => {
       ho.querySelector('.ho-go').onclick = e => runHandover(true, e.currentTarget);
       ho.querySelector('.ho-brief').onclick = e => runHandover(false, e.currentTarget);
     }
-    row.querySelectorAll('button.act:not(.ho-go):not(.ho-brief)').forEach(b => {
+    const rn = row.querySelector('.renamebox');
+    if (rn) {
+      const inp = rn.querySelector('.rn-in'), go = rn.querySelector('.rn-go'), rmsg = rn.querySelector('.rn-msg');
+      const doRename = async () => {
+        if (!inp.value.trim()) { rmsg.className = 'live-msg rn-msg err'; rmsg.textContent = 'Type a name first.'; return; }
+        go.disabled = true; go.textContent = 'Working…';
+        try {
+          const r = await sessionAction(pid, 'rename', {name: inp.value});
+          if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
+          rmsg.className = 'live-msg rn-msg ' + (r.ok ? 'ok' : 'err');
+          rmsg.textContent = r.ok ? r.message : `Failed: ${r.error}`;
+          if (r.ok && !MASKED) row.querySelector('.sname').textContent = r.name;
+        } catch (e) { rmsg.className = 'live-msg rn-msg err'; rmsg.textContent = 'Failed: ' + e.message; }
+        go.disabled = false; go.textContent = 'Rename';
+      };
+      go.onclick = doRename;
+      inp.onkeydown = e => { if (e.key === 'Enter') doRename(); };
+    }
+    row.querySelectorAll('button.act:not(.ho-go):not(.ho-brief):not(.rn-go)').forEach(b => {
       if (b.dataset.ho) { b.onclick = () => { ho.hidden = !ho.hidden; if (!ho.hidden) ta.focus(); }; return; }
       if (b.dataset.lim) {
         const box = row.querySelector('.limitbox');
         b.onclick = () => { box.hidden = !box.hidden; if (!box.hidden) drawLimit(box, x, +row.dataset.i); };
         return;
       }
+      if (b.dataset.pr) {
+        const box = row.querySelector('.promptbox');
+        b.onclick = () => { box.hidden = !box.hidden; if (!box.hidden) drawPrompts(box, x.session_id); };
+        return;
+      }
+      if (b.dataset.rn) { b.onclick = () => { rn.hidden = !rn.hidden; if (!rn.hidden) rn.querySelector('.rn-in').focus(); }; return; }
       if (b.dataset.copy) { b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); msg.textContent = 'Copied'; } catch { msg.textContent = b.dataset.copy; } }; return; }
       const label = b.textContent;
       b.onclick = async () => {
@@ -4315,7 +4365,7 @@ const TOURS = {
   live: [
     {el: 'kpis', t: 'Running now', see: 'Sessions running right now, which are working (spending) at this moment, the largest live context and what live sessions have spent.', get: 'What is costing you money this second.', act: 'Only <b>working</b> sessions consume tokens; idle ones cost again on your next message.'},
     {el: '#live-refresh', t: 'Refresh & the rules', see: 'The note explains what Interrupt, Close and Force kill do, and how non-Claude agents are detected.', get: 'Confidence before you stop something.', act: `Click <b>${I('reload')} Refresh</b> for the latest state.`},
-    {el: '.item[data-i]', t: 'A session', see: 'Agent, project, context size, steps, cost and last activity, plus advice when a session gets heavy.', get: 'Control over sessions that are quietly growing expensive.', act: 'Interrupt, Close or Force kill it (each needs two clicks), copy its resume command, or <b>Hand over</b> a Claude session to a fresh one.'}],
+    {el: '.item[data-i]', t: 'A session', see: 'Agent, project, context size, steps, cost and last activity, plus advice when a session gets heavy.', get: 'Control over sessions that are quietly growing expensive.', act: 'Interrupt, Close or Force kill it (each needs two clicks), copy its resume command, <b>Hand over</b> a Claude session to a fresh one, see its <b>Prompts</b> or <b>Rename</b> it.'}],
   scorecard: [
     {el: 'card:AI FinOps Score', t: 'Your score', see: 'The overall score with a component breakdown: cache use, model mix, waste and budget.', get: 'Where your habits are strong and where they cost money.', act: 'Hover a component to see how it is calculated.'},
     {el: 'card:What is good', t: 'What is good', see: 'The components you already score well on.', get: 'The habits worth keeping.', act: 'Keep these when you change your setup.'},

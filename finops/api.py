@@ -433,7 +433,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"error": "unknown route"}, 404)
 
     def session_action(self, path):
-        """POST /api/live/<pid>/<interrupt|close|kill|compact|handover>.
+        """POST /api/live/<pid>/<interrupt|close|kill|compact|handover|rename>.
 
         Guarded against cross-site requests: a custom header can't be sent by another
         origin without a CORS preflight (which this server never approves), and any
@@ -451,7 +451,7 @@ class Handler(BaseHTTPRequestHandler):
         agent = (self._payload or {}).get("agent") or "claude"
         if agent != "claude":
             from .procs import act_agent
-            if parts[3] in ("handover", "compact"):
+            if parts[3] in ("handover", "compact", "rename"):
                 return self.send_json({"ok": False,
                                        "error": f"{parts[3].capitalize()} is only available for Claude Code."})
             return self.send_json(act_agent(int(parts[2]), parts[3], agent))
@@ -461,6 +461,9 @@ class Handler(BaseHTTPRequestHandler):
         if parts[3] == "compact":
             from .procs import compact
             return self.send_json(compact(int(parts[2]), self._payload))
+        if parts[3] == "rename":
+            from .procs import rename
+            return self.send_json(rename(int(parts[2]), self._payload))
         return self.send_json(act(int(parts[2]), parts[3]))
 
     def do_GET(self):
@@ -590,6 +593,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not want or any(x != "claude" for x in want) else []
             rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
+        if route.startswith("session_prompts/"):
+            from .procs import session_prompts
+            return self.send_json(session_prompts(_session_transcript(route[len("session_prompts/"):])))
         if route.startswith("guard/session/"):
             return self.send_json(_session_limit_status(a, route[len("guard/session/"):]))
         if route == "subagents":

@@ -2,6 +2,19 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.16.0 — See and name your running sessions
+
+**See which session is which.** Each running session has a **Prompts** button. It shows the first
+prompt and the latest five, so you know what a session was doing before you close it.
+
+**Name a session from the dashboard.** **Rename** types `/rename <name>` into that session's
+terminal, so Claude Code saves the name itself. The new name shows on the dashboard right away.
+
+**Works in herdr.** Sessions running inside herdr can now be reached. Compact and Rename type into
+the session's herdr pane, Rename also renames it in herdr's agents sidebar, Interrupt presses Esc
+there, and Hand over opens the new session as a herdr tab in the same workspace. Before, these
+failed or fell back to your clipboard or a Terminal.app window.
+
 ## 0.15.1 — Running sessions show up again
 
 **Fixed.** Running sessions disappeared on days 1 to 9 of every month. Claude Code writes a
