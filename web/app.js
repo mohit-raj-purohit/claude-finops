@@ -278,7 +278,7 @@ function shell() {
         <div class="sub">Command Center</div></div>
       <nav class="nav">${NAV.map(([g, items], gi) => `<div class="group g${gi}">${g}</div>` +
         items.map(([id, ic, label]) =>
-          `<a data-view="${id}" class="g${gi}${id === 'diagnose' ? ' start' : ''}"><span class="ic">${I(ic)}</span>${label}<span class="nb" data-nb="${id}"></span></a>`).join('')).join('')}
+          `<a href="/${id}" data-view="${id}" class="g${gi}${id === 'diagnose' ? ' start' : ''}"><span class="ic">${I(ic)}</span>${label}<span class="nb" data-nb="${id}"></span></a>`).join('')).join('')}
       </nav>
       <div class="who" id="who"></div></aside>
     <div class="main">
@@ -306,7 +306,7 @@ function shell() {
     </div></div>`;
 
   document.querySelectorAll('.nav a').forEach(a =>
-    a.onclick = () => go(a.dataset.view));
+    a.onclick = e => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return; e.preventDefault(); go(a.dataset.view); });
   $('#tour-btn').onclick = () => tourForView();
   $('#theme').onclick = () => {
     const cur = document.documentElement.getAttribute('data-theme');
@@ -561,7 +561,10 @@ function openCustom(btn) {
 function closeDrawer() {
   document.querySelectorAll('.scrim,.drawer').forEach(e => e.remove());
   S.drawerStack = [];
+  if (S.drawerRoute) { S.drawerRoute = null; syncURL(true); }
 }
+// An open drawer is part of the URL (?session=…), so refresh and Back bring it back.
+function setDrawerRoute(k, id) { S.drawerRoute = {k, id: String(id)}; syncURL(true); }
 function drawer(title, bodyHtml, sub) {
   C.hideTip();
   document.querySelectorAll('.scrim,.drawer').forEach(e => e.remove());
@@ -594,6 +597,7 @@ const wholeNote = (what, x) => {
 };
 async function openPrompt(id) {
   const d = drawer('Prompt detail', '<div class="loading">Loading…</div>');
+  setDrawerRoute('prompt', id);
   const p = await fetch(`/api/prompt/${id}?${qs()}`).then(r => r.json());
   d.querySelector('.content').innerHTML = `${wholeNote('prompt', p)}
     <div class="grid g4">
@@ -648,6 +652,7 @@ async function openPrompt(id) {
 
 async function openSession(id) {
   const d = drawer('Session detail', '<div class="loading">Loading…</div>', esc(shortId(id)));
+  setDrawerRoute('session', id);
   const s = await fetch(`/api/session/${encodeURIComponent(id)}?${qs()}`).then(r => r.json());
   const cont = d.querySelector('.content');
   cont.innerHTML = `${wholeNote('session', s)}
@@ -3487,7 +3492,63 @@ function applyAgentChrome() {
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([id, , l]) => [id, l])));
 TITLES.search = 'Global search';
 
-function go(view) { S.view = view; closeDrawer(); render(); }
+function go(view) {
+  const changed = view !== S.view;
+  S.view = view; S.drawerRoute = null; closeDrawer();
+  syncURL(changed);   // a new page is a history entry; a new search on the same page is not
+  render();
+}
+
+/* Each page has its own URL: /<view>, plus ?session= / ?prompt= / ?add_model= for an open
+   drawer, ?recent=1 for the Recent panel and ?q= for a search. Refresh keeps you there,
+   Back/Forward walk through it. ?view=<name> still works for old links. */
+const HOME_VIEW = S.view;
+const DRAWER_KEYS = ['session', 'prompt', 'add_model'];
+let ROUTE_APPLYING = false;
+function routeURL() {
+  const q = new URLSearchParams();
+  if (S.view === 'search' && S.searchTerm) q.set('q', S.searchTerm);
+  if (S.drawerRoute) q.set(S.drawerRoute.k, S.drawerRoute.id);
+  if (RECENT.open) q.set('recent', '1');
+  const s = q.toString();
+  return '/' + S.view + (s ? '?' + s : '');
+}
+function syncURL(push) {
+  if (ROUTE_APPLYING) return;
+  const url = routeURL();
+  if (url !== location.pathname + location.search) history[push ? 'pushState' : 'replaceState'](null, '', url);
+}
+function readRoute() {
+  const p = new URLSearchParams(location.search);
+  let view = decodeURIComponent(location.pathname.replace(/^\/+|\/+$/g, '')) || p.get('view') || '';
+  // The repriced Model switch view was removed; its links now open the measured comparison.
+  if (view === 'modelswitch') view = 'compare';
+  const known = NAV.some(([, items]) => items.some(([id]) => id === view)) || (view === 'search' && p.get('q'));
+  const k = DRAWER_KEYS.find(k => p.get(k));
+  return {view: known ? view : null, q: p.get('q') || '', drawer: k ? {k, id: p.get(k)} : null,
+          recent: p.get('recent') === '1'};
+}
+function openDrawerRoute(d) {
+  if (d.k === 'session') openSession(d.id);
+  else if (d.k === 'prompt') openPrompt(d.id);
+  else if (d.k === 'add_model') addFreeModel(d.id);
+}
+// Back/Forward: show what the URL says, without writing new history.
+addEventListener('popstate', async () => {
+  const r = readRoute(), v = r.view || HOME_VIEW, have = S.drawerRoute;
+  const viewChanged = v !== S.view || (v === 'search' && r.q !== S.searchTerm);
+  const reopen = r.drawer && (viewChanged || !have || have.k !== r.drawer.k || have.id !== r.drawer.id);
+  ROUTE_APPLYING = true;
+  try {
+    if (viewChanged || reopen || !r.drawer) closeDrawer();
+    if (r.recent !== RECENT.open) toggleRecent(r.recent);
+    S.view = v;
+    if (v === 'search') S.searchTerm = r.q;
+    S.drawerRoute = r.drawer;   // keep it in the URL while the page re-renders
+  } finally { ROUTE_APPLYING = false; }
+  if (viewChanged) await render();
+  if (reopen) openDrawerRoute(r.drawer);
+});
 
 async function render() {
   C.hideTip();   // a tooltip whose chart is about to be replaced must not linger
@@ -3499,6 +3560,7 @@ async function render() {
   page.id = 'page';
   stale.replaceWith(page);
   applyAgentChrome();
+  syncURL(false);
   document.querySelectorAll('.nav a').forEach(a =>
     a.classList.toggle('on', a.dataset.view === S.view));
   $('#ttl').textContent = TITLES[S.view] || S.view;
@@ -3537,7 +3599,9 @@ const recentQs = () => { const p = new URLSearchParams(qs());
 const fmtWhen = iso => iso ? `${ago(iso)} · ${esc(iso.slice(0, 16).replace('T', ' '))}` : '';
 
 function toggleRecent(force) {
+  const was = RECENT.open;
   RECENT.open = force ?? !RECENT.open;
+  if (was !== RECENT.open) syncURL(true);
   document.querySelectorAll('.recent,.recent-scrim').forEach(e => e.remove());
   $('#recent-btn')?.classList.toggle('on', RECENT.open);
   if (!RECENT.open) return;
@@ -3682,14 +3746,16 @@ function wireRecent(root) {
   S.opts = await fetch('/api/options').then(r => r.json());
   S.filter.agents = defaultAgents();
   applyRange('30d');
-  // ?view=<name> opens straight to one screen, so a link (or a screenshot run)
-  // can point at a specific report rather than always landing on the overview.
-  let want = new URLSearchParams(location.search).get('view');
-  // The repriced Model switch view was removed; its links now open the measured comparison.
-  if (want === 'modelswitch') want = 'compare';
-  if (want && NAV.some(([, items]) => items.some(([id]) => id === want))) S.view = want;
+  // The URL picks the screen (and any open drawer), so a refresh or a link lands where it points.
+  const route = readRoute();
+  if (route.view) S.view = route.view;
+  if (route.view === 'search') S.searchTerm = route.q;
+  S.drawerRoute = route.drawer;   // kept in the URL until the drawer opens below
+  RECENT.open = route.recent;
   await render();
-  if (!want) maybeFirstTour();   // arriving on a deep link is not a first visit
+  if (route.recent) toggleRecent(true);
+  if (route.drawer) openDrawerRoute(route.drawer);
+  if (!route.view) maybeFirstTour();   // arriving on a deep link is not a first visit
   let t; addEventListener('resize', () => { clearTimeout(t); t = setTimeout(render, 220); });
 })();
 
@@ -3869,6 +3935,7 @@ async function testFreeModel(id, host, btn) {
 // Show exactly what will happen, collect anything needed, run only after the user confirms.
 async function addFreeModel(id) {
   const d = drawer('Add free model', '<div class="loading">Checking prerequisites…</div>');
+  setDrawerRoute('add_model', id);
   const c = d.querySelector('.content');
   const plan = await fetch(`/api/free_models/${id}/plan`).then(r => r.json());
   if (plan.blocked) { c.innerHTML = `<div class="item sev-high"><div class="dt" style="white-space:pre-wrap">${esc(plan.blocked)}</div></div>`; return; }

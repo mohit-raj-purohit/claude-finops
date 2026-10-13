@@ -476,6 +476,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.api(path[5:], qs)
             rel = "index.html" if path in ("/", "") else path.lstrip("/")
             fp = os.path.normpath(os.path.join(WEB, rel))
+            # Every dashboard has its own URL (/live, /sessions …): a path that isn't a
+            # file and has no extension is a page of the app, so serve the app.
+            if not os.path.isfile(fp) and "." not in os.path.basename(path.rstrip("/")):
+                fp = os.path.join(WEB, "index.html")
             if os.path.commonpath([fp, WEB]) != WEB or not os.path.isfile(fp):
                 return self.send_text("not found", "text/plain", code=404)
             ext = os.path.splitext(fp)[1]
