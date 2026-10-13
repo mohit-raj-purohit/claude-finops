@@ -3456,14 +3456,18 @@ function applyAgentChrome() {
   whoBlock();
   // Stamp the version onto the logo. Two copies of this app can be installed at
   // once (npm global, a checkout) and the browser cannot tell them apart.
+  const from = S.opts?.served_from;
+  const verText = S.opts?.version ? 'v' + S.opts.version + (from ? (from.kind === 'source'
+    ? ` · source${from.commit ? ' ' + from.commit : ''}` : ' · npm') : '') : '';
+  const verTitle = 'Version serving this page' + (from?.path ? ` (${from.path})` : '');
   const ver = $('#ver');
-  if (ver && S.opts?.version) {
-    ver.textContent = 'v' + S.opts.version;
-    ver.title = 'Version serving this page';
+  if (ver && verText) {
+    ver.textContent = verText;
+    ver.title = verTitle;
   }
   const mark = $('.brand .mark');
   if (mark) mark.innerHTML = `<span class="dot"></span>${esc(label)} FinOps` +
-    (S.opts?.version ? `<span class="ver" id="ver" title="Version serving this page">v${esc(S.opts.version)}</span>` : '');
+    (verText ? `<span class="ver" id="ver" title="${esc(verTitle)}">${esc(verText)}</span>` : '');
   const sub = $('.brand .sub');
   if (sub) sub.textContent = a.length > 1 ? a.map(x => x.name).join(' + ') : 'Command Center';
   document.title = `${label} FinOps Command Center`;

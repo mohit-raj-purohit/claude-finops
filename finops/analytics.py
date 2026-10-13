@@ -64,6 +64,21 @@ def _version():
         return ""
 
 
+def _served_from():
+    """Which copy is serving: a git checkout (with its commit) or an npm install."""
+    from .paths import ROOT
+    out = {"kind": "npm", "path": ROOT, "commit": None}
+    if os.path.exists(os.path.join(ROOT, ".git")):
+        out["kind"] = "source"
+        try:
+            import subprocess
+            out["commit"] = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
+                                           capture_output=True, text=True, timeout=3).stdout.strip() or None
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return out
+
+
 def detect_account():
     """Who Claude Code is signed in as, read from ~/.claude.json (actual, not guessed).
 
@@ -2199,5 +2214,6 @@ class Analytics:
                             "SELECT DISTINCT model FROM requests")} & set(self.pricing.models))},
             "settings": self.settings,
             "version": _version(),
+            "served_from": _served_from(),
             "unavailable_label": UNAVAILABLE,
         }
