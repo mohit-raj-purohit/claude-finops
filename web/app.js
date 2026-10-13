@@ -2125,7 +2125,7 @@ async function drawPrompts(box, sid) {
 VIEWS.live = async (page) => {
   const [res, usage0] = await Promise.all([
     fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
-    fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message}))]);
+    hasClaude() ? fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message})) : null]);
   const list = res.sessions || [];
   const liveActions = res.actions || ['interrupt', 'close', 'kill'];
   const canInterrupt = liveActions.includes('interrupt');
@@ -2133,9 +2133,9 @@ VIEWS.live = async (page) => {
   const busy = list.filter(x => x.status === 'busy');
   const sevOf = x => x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low';
   page.innerHTML = `
-    ${card('Plan usage right now', `<div id="live-usage">${usageBody(usage0)}</div>`,
+    ${usage0 ? card('Plan usage right now', `<div id="live-usage">${usageBody(usage0)}</div>`,
       {badge: BADGE.actual, hint: 'Claude Code\'s own /usage: plan limits, not cost. Costs no tokens.',
-       actions: `<button class="btn pb-copy" id="usage-refresh">${I('reload')} Refresh usage</button>`})}
+       actions: `<button class="btn pb-copy" id="usage-refresh">${I('reload')} Refresh usage</button>`}) : ''}
     <div class="grid g4">
       ${kpi('Running sessions', fmtInt(list.length), `${busy.length} working right now`, {badge: BADGE.actual})}
       ${kpi('Working (spending now)', fmtInt(busy.length), 'Only these consume tokens right now')}
@@ -2203,7 +2203,7 @@ VIEWS.live = async (page) => {
       </div>`).join('') || `<div class="empty">No ${esc(agentWord())} sessions are running</div>`}</div>`;
   $('#live-refresh', page).onclick = () => render();
   const ub = $('#usage-refresh', page);
-  ub.onclick = async () => {
+  if (ub) ub.onclick = async () => {
     ub.disabled = true; ub.textContent = 'Reading…';
     try {
       const u = await fetch('/api/usage?refresh=1').then(r => r.json());

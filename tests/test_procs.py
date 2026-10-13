@@ -118,5 +118,73 @@ class TestSessionPrompts(unittest.TestCase):
         d = procs.session_prompts(self._transcript([str(i) for i in range(10)]))
         self.assertEqual((d["first"], d["recent"]), ("0", ["5", "6", "7", "8", "9"]))
 
+
+class TestCursorLive(unittest.TestCase):
+    SID = "5aec5f49-9f24-473f-8197-25d3dd95221a"
+
+    def _fixture(self, composer, lines):
+        import sqlite3
+        d = tempfile.mkdtemp()
+        db = os.path.join(d, "state.vscdb")
+        con = sqlite3.connect(db)
+        con.execute("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+        if composer is not None:
+            con.execute("INSERT INTO cursorDiskKV VALUES (?, ?)",
+                        ("composerData:" + self.SID, json.dumps(composer)))
+        con.commit(); con.close()
+        # The slug drops spaces, so it can't be turned back into the real path.
+        tdir = os.path.join(d, "projects", "Users-me-Documents-CK-Repos", "agent-transcripts", self.SID)
+        os.makedirs(tdir)
+        fp = os.path.join(tdir, self.SID + ".jsonl")
+        with open(fp, "w") as fh:
+            fh.write("\n".join(json.dumps(l) for l in lines) + "\n")
+        return db, fp
+
+    def _live(self, composer, lines):
+        db, fp = self._fixture(composer, lines)
+        with mock.patch.object(procs, "_cursor_db", return_value=db):
+            return procs._cursor_live(fp, None)
+
+    COMPOSER = {"name": "Production environment switch", "status": "completed",
+                "modelConfig": {"modelName": "grok-4.7"}, "contextTokensUsed": 52245,
+                "workspaceIdentifier": {"uri": {"fsPath": "/Users/me/Documents/CK Repos"}}}
+    TURN = [{"role": "user", "message": {"content": [{"type": "text", "text": "hi"}]}},
+            {"role": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}]
+
+    def test_reads_name_model_context_and_real_path_from_ide_store(self):
+        st = self._live(self.COMPOSER, self.TURN + [{"type": "turn_ended", "status": "success"}])
+        self.assertEqual(st["name"], "Production environment switch")
+        self.assertEqual(st["model"], "grok-4.7")
+        self.assertEqual(st["context"], 52245)
+        self.assertEqual(st["cwd"], "/Users/me/Documents/CK Repos")
+        self.assertEqual(st["project_hint"], "CK Repos")
+        self.assertEqual(st["steps"], 1)
+
+    def test_finished_turn_is_idle_even_if_just_written(self):
+        st = self._live(self.COMPOSER, self.TURN + [{"type": "turn_ended", "status": "success"}])
+        self.assertTrue(st["turn_ended"])
+        st = self._live(self.COMPOSER, self.TURN)
+        self.assertFalse(st["turn_ended"])
+
+    def test_generating_chat_is_busy(self):
+        st = self._live(dict(self.COMPOSER, status="generating"), self.TURN)
+        self.assertTrue(st["generating"])
+
+    def test_missing_ide_store_falls_back_to_transcript(self):
+        db, fp = self._fixture(None, self.TURN)
+        with mock.patch.object(procs, "_cursor_db", return_value=db + ".missing"):
+            st = procs._cursor_live(fp, None)
+        self.assertEqual((st["model"], st["context"], st["steps"]), (None, None, 1))
+
+    def test_status_uses_turn_end_not_only_file_age(self):
+        db, fp = self._fixture(self.COMPOSER, self.TURN + [{"type": "turn_ended", "status": "success"}])
+        with mock.patch.object(procs, "_cursor_db", return_value=db), \
+             mock.patch.dict(procs.LIVE_SOURCES, {"cursor": (fp, procs._cursor_live)}, clear=True):
+            rows = procs.list_agent_sessions(procs._NoPricing(), ["cursor"], procs={})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["status"], rows[0]["name"], rows[0]["project"]),
+                         ("idle", "Production environment switch", "CK Repos"))
+
+
 if __name__ == "__main__":
     unittest.main()

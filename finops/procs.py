@@ -283,17 +283,48 @@ def _gemini_live(fp, pricing):
             "tokens": tokens, "context": ctx, "est_cost_usd": cost}
 
 
+def _cursor_db():
+    from .agents import _cursor_state_db
+    return _cursor_state_db()
+
+
+def _cursor_composer(sid):
+    """The IDE's record of one chat (name, model, live context, workspace, status).
+    Read-only, one key lookup; mode=ro (not immutable) so the WAL's latest writes count."""
+    import sqlite3
+    db = _cursor_db()
+    if not os.path.exists(db):
+        return {}
+    try:
+        con = sqlite3.connect("file:" + db.replace("\\", "/") + "?mode=ro", uri=True, timeout=1)
+        try:
+            row = con.execute("SELECT value FROM cursorDiskKV WHERE key=?", ("composerData:" + sid,)).fetchone()
+        finally:
+            con.close()
+        return json.loads(row[0]) if row and row[0] else {}
+    except (sqlite3.Error, ValueError):
+        return {}
+
+
 def _cursor_live(fp, pricing):
-    steps = 0
+    steps, last = 0, None
     with open(fp, errors="replace") as fh:
         for line in fh:
             if '"tool_use"' in line:
                 steps += line.count('"tool_use"')
-    slug = os.path.relpath(fp, os.path.join(HOME, ".cursor", "projects")).split(os.sep)[0]
-    guess = "/" + slug.replace("-", "/")
-    return {"session_id": os.path.splitext(os.path.basename(fp))[0],
-            "cwd": guess if os.path.isdir(guess) else None, "project_hint": slug.rsplit("-", 1)[-1],
-            "model": None, "steps": steps, "tokens": None, "context": None, "est_cost_usd": None}
+            if line.strip():
+                last = line
+    sid = os.path.splitext(os.path.basename(fp))[0]
+    c = _cursor_composer(sid)
+    # The project slug drops spaces and slashes alike, so the real path comes from the IDE.
+    cwd = (((c.get("workspaceIdentifier") or {}).get("uri") or {}).get("fsPath")) or None
+    slug = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(fp))))
+    return {"session_id": sid, "name": c.get("name") or None,
+            "cwd": cwd, "project_hint": os.path.basename(cwd) if cwd else slug.rsplit("-", 1)[-1],
+            "model": (c.get("modelConfig") or {}).get("modelName") or None,
+            "steps": steps, "tokens": None, "context": c.get("contextTokensUsed") or None,
+            "est_cost_usd": None, "turn_ended": bool(last and '"turn_ended"' in last),
+            "generating": c.get("status") == "generating"}
 
 
 LIVE_SOURCES = {
@@ -328,9 +359,10 @@ def list_agent_sessions(pricing, agents=None, procs=None):
             cwd = st.get("cwd")
             out.append({
                 "agent": agent, "pid": match[0] if match else None,
-                "signalable": bool(match), "session_id": st.get("session_id"), "name": None,
+                "signalable": bool(match), "session_id": st.get("session_id"), "name": st.get("name"),
                 "cwd": cwd, "project": os.path.basename(cwd or "") or st.get("project_hint") or agent,
-                "status": "busy" if age <= BUSY_WINDOW_S else "idle", "version": st.get("version"),
+                "status": "busy" if st.get("generating") or (age <= BUSY_WINDOW_S and not st.get("turn_ended"))
+                          else "idle", "version": st.get("version"),
                 "model": st.get("model"), "uptime": match[1]["etime"] if match else "",
                 "memory_mb": round(match[1]["rss_kb"] / 1024) if match else None,
                 "hosts_dashboard": False, "transcript": fp, "last_write_s": age,
