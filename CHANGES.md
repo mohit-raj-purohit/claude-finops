@@ -2,6 +2,20 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.17.0 — Claude Code only, a link for every page
+
+**Claude Code only.** The dashboard no longer reads Codex, Gemini CLI or Cursor. The agent chips,
+the Agents page, the Cursor key and Cursor team spend on Billed vs local, and the OpenAI, Gemini
+and Cursor prices are gone. Claude desktop (Cowork) sessions are still read. The next sync drops
+other agents' sessions from the warehouse, so they no longer count in any total.
+
+**A link for every page.** Each dashboard has its own URL, and so does the side panel (a session,
+a prompt). Refresh keeps you where you were instead of going back to Context hygiene, and Back
+and Forward work.
+
+**See which copy is running.** Next to the version, the header says whether the dashboard runs
+from the npm install or from a source checkout (with its commit). Hover it for the path.
+
 ## 0.16.0 — See and name your running sessions
 
 **See which session is which.** Each running session has a **Prompts** button. It shows the first
