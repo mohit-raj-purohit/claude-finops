@@ -230,7 +230,7 @@ without it; it only adds the warning and "continue?" prompt inside Claude Code.
 **Settings** (sidebar, Setup) stores the optional API keys used by **Billed vs local**, in
 `~/.claude-finops/secrets.local.json` (0600, the same file `--set-key` writes). The page only
 ever gets back whether a key is set, where from, and its last four characters. An environment
-variable (`ANTHROPIC_ADMIN_KEY`, `CURSOR_API_KEY`) takes priority over a stored key.
+variable (`ANTHROPIC_ADMIN_KEY`) takes priority over a stored key.
 
 ### Per-session token budget and the session guard
 
@@ -374,8 +374,7 @@ place for you to delete once you are happy.
 **What it reads, all read-only:** Claude Code transcripts in `~/.claude/projects`, and,
 if the Claude desktop app is installed, its Cowork transcripts and
 `plan-usage-history.json` (`~/Library/Application Support/Claude` on macOS,
-`%APPDATA%\Claude` on Windows, `~/.config/Claude` on Linux), plus the other coding
-agents listed under Multi-agent.
+`%APPDATA%\Claude` on Windows, `~/.config/Claude` on Linux).
 
 `~/.claude-finops/data/finops.db` and the prompt/CSV exports contain **your full prompt text**. The
 server binds to `127.0.0.1` only, but treat the database and any export you
@@ -452,7 +451,7 @@ files on Windows.
 - **Recent** (clock icon in the top bar, or press `R`) opens a side panel on any page: running sessions first,
   with Resume, Compact and Stop (Interrupt), then past sessions newest first. Click a session to
   list its prompts, and click a prompt for its full details. Search matches your prompt text.
-  It covers all dates but keeps the agent and project filters. Close and Force kill stay on
+  It covers all dates but keeps the project filters. Close and Force kill stay on
   Running sessions.
 - **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal
   (in herdr, Interrupt presses Esc in the session's pane instead). Each asks you to click twice. Interrupt is macOS/Linux only: on Windows there is no way to
@@ -507,23 +506,6 @@ The **Jev (fast decisions)** page (sidebar, Optimize):
 - **Where Jev fits** counts your Claude Code prompts that were really just a decision (short, no
   tools, worded as "which one", "yes or no", "classify"…) and what they would cost at TypeSafe's
   published price ($0.042 per million input tokens). Read-only.
-
----
-
-## Multi-agent
-
-Besides Claude Code, the warehouse loads every other coding agent it finds on the machine:
-
-| Agent | Read from | What it gives |
-|---|---|---|
-| Codex | `~/.codex/sessions` | Tokens + model per turn; cost at OpenAI list price |
-| Gemini CLI | `~/.gemini/tmp/*/chats` | Tokens + model per reply; cost at Gemini list price |
-| Cursor | Cursor IDE `state.vscdb` (read-only) | Prompts, times and tokens as the IDE stored them; no model, not priced. Agent transcripts are skipped: they carry no times or tokens |
-
-Pick agents with the chips at the top: click for one, Cmd/Ctrl-click to combine, **All** for
-everything. Every page follows the selection, and **Agents** shows them side by side.
-Prices for the other providers live in `config/pricing.json` with their source URLs.
-
 
 ---
 

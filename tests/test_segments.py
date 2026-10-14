@@ -22,7 +22,7 @@ class FakePricing:
         return self._r
 
 
-class GeminiShaped(FakePricing):
+class OtherShaped(FakePricing):
     """Reads at 0.25x and writes at 1x — the shape a hardcoded 0.1/1.25/2.0 would break."""
 
     def __init__(self, base=10.0):
@@ -96,8 +96,8 @@ class TestMultipliers(unittest.TestCase):
         self.assertAlmostEqual(w5, 1.25)
         self.assertAlmostEqual(w1, 2.0)
 
-    def test_non_anthropic_shape_is_not_assumed(self):
-        r, w5, w1 = multipliers(GeminiShaped(), "m1")
+    def test_other_price_shape_is_not_assumed(self):
+        r, w5, w1 = multipliers(OtherShaped(), "m1")
         self.assertAlmostEqual(r, 0.25)
         self.assertAlmostEqual(w5, 1.0)
         self.assertAlmostEqual(w1, 1.0)

@@ -72,13 +72,13 @@ class TestAnomalies(unittest.TestCase):
     def test_zero_cost_days_do_not_make_normal_days_spikes(self):
         dc = days_back(30, 400.0)
         a = Analytics(make_db(dc)); a._today = TODAY
-        # add 60 $0 Cursor days: they are unpriced and must not drag the baseline down
+        # add 60 $0 days on an unpriced model: they must not drag the baseline down
         con = sqlite3.connect(a._db_path)
         for i in range(31, 91):
             d = (TODAY - timedelta(days=i)).isoformat()
             con.execute("""INSERT INTO requests (uuid, session_id, project_id, prompt_id, ts, day, model, priced_as,
                            billable_tokens, est_cost_usd, is_sidechain, agent)
-                           VALUES (?, 's', 1, 1, ?, ?, 'cursor', 'cursor', 0, 0, 0, 'cursor')""",
+                           VALUES (?, 's', 1, 1, ?, ?, 'unpriced-model', 'unpriced-model', 0, 0, 0, 'claude')""",
                         (f"c{i}", d + "T12:00:00Z", d))
         con.commit(); con.close()
         types = [x["type"] for x in a.anomalies({})["anomalies"]]

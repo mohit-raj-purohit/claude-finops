@@ -109,7 +109,7 @@ class TestCounting(Base):
                     asst("r2", usage(), ts="2026-01-01T00:00:03Z"))
         self.append(asst("a1", usage(3, 3, 3, 3)), path=os.path.join(sub, "agent-1.jsonl"))
         db = os.path.join(self.dir, "w.db")
-        Loader(db_path=db, source=self.dir, other_agents=False).build(verbose=False)
+        Loader(db_path=db, source=self.dir).build(verbose=False)
         want = sqlite3.connect(db).execute(
             "SELECT billable_tokens FROM sessions WHERE id='s1'").fetchone()[0]
         self.assertEqual(self.total(), want)
@@ -289,8 +289,7 @@ class TestBudgetLine(unittest.TestCase):
         a = Analytics(path)
         day = a.billing_period()["today"]
         for sid, pid, tokens, agent in (("s1", 1, 4_000_000, "claude"), ("s2", 2, 9_000_000, "claude"),
-                                        ("s3", 3, 2_500_000, "claude"), ("s4", 3, 900_000, "claude"),
-                                        ("s5", 3, 50_000_000, "cursor")):
+                                        ("s3", 3, 2_500_000, "claude"), ("s4", 3, 900_000, "claude")):
             db.execute("INSERT INTO sessions (id, project_id, title, billable_tokens, agent) "
                        "VALUES (?,?,?,?,?)", (sid, pid, sid, tokens, agent))
             db.execute("INSERT INTO requests (uuid, session_id, project_id, ts, day, model, "
@@ -310,13 +309,12 @@ class TestBudgetLine(unittest.TestCase):
         a = self.make({"session_tokens": 2_000_000, "projects": {
             "/work/big": {"session_tokens": 5_000_000}, "/work/quiet": {"off": True}}})
         ln = self.line(a)
-        # s1 80% of its 5M override, s2 skipped (off), s3 125% of 2M, s4 45%, s5 not Claude
+        # s1 80% of its 5M override, s2 skipped (off), s3 125% of 2M, s4 45%
         self.assertEqual(ln["sessions_over"], 1)
         self.assertEqual(ln["top_over"][0]["session_id"], "s3")
         self.assertEqual((ln["actual"], ln["budget"], ln["used_pct"]), (2_500_000, 2_000_000, 125.0))
         rows = {r["session_id"]: r["budget_tokens"] for r in a.sessions({})}
-        self.assertEqual(rows, {"s1": 5_000_000, "s2": None, "s3": 2_000_000, "s4": 2_000_000,
-                                "s5": None})
+        self.assertEqual(rows, {"s1": 5_000_000, "s2": None, "s3": 2_000_000, "s4": 2_000_000})
 
 
 if __name__ == "__main__":

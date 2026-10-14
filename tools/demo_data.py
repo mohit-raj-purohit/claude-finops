@@ -70,10 +70,9 @@ def build(home, days=30, seed=7):
                     fh.write(json.dumps(r) + "\n")
             n += 1
     os.makedirs(os.path.join(home, "data"), exist_ok=True)
-    # other_agents=False and desktop_roots=[]: never pick up this machine's real
-    # Cursor/Codex/Gemini data or Claude desktop (Cowork) sessions
+    # desktop_roots=[]: never pick up this machine's real Claude desktop (Cowork) sessions
     Loader(db_path=os.path.join(home, "data", "finops.db"), source=src,
-           other_agents=False, desktop_roots=[]).build(verbose=False)
+           desktop_roots=[]).build(verbose=False)
     with open(os.path.join(home, "settings.local.json"), "w") as fh:
         json.dump({"budgets": {"monthly_usd": 400, "daily_usd": 25, "monthly_tokens": 900000000},
                    "guard": {"session_tokens": 8000000, "warn_pct": [75, 80],

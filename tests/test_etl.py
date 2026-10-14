@@ -38,7 +38,7 @@ def build(rows):
         for r in rows:
             fh.write(json.dumps(r) + "\n")
     db = tempfile.mktemp(suffix=".db", prefix="finops-test-")
-    Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+    Loader(db_path=db, source=src).build(verbose=False)
     return sqlite3.connect(db)
 
 
@@ -191,7 +191,7 @@ class TestCrossSessionDedup(unittest.TestCase):
                 r = dict(r); r["sessionId"] = "s2"
                 fh.write(json.dumps(r) + "\n")
         db = tempfile.mktemp(suffix=".db", prefix="finops-test-")
-        Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+        Loader(db_path=db, source=src).build(verbose=False)
         con = sqlite3.connect(db)
         n = con.execute("SELECT COUNT(*) FROM requests WHERE request_id='req-shared'").fetchone()[0]
         self.assertEqual(n, 1)
@@ -234,7 +234,7 @@ class TestCoworkTranscripts(unittest.TestCase):
     def _build(self, **kw):
         src = tempfile.mkdtemp(prefix="finops-src-")
         db = tempfile.mktemp(suffix=".db", prefix="finops-test-")
-        Loader(db_path=db, source=src, other_agents=False, **kw).build(verbose=False)
+        Loader(db_path=db, source=src, **kw).build(verbose=False)
         return sqlite3.connect(db)
 
     def test_cowork_loaded_with_readable_name_and_audit_skipped(self):

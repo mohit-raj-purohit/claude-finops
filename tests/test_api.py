@@ -252,7 +252,7 @@ class TestKeys(ServerFixture):
         from finops import cloud
         self.secrets = tempfile.mktemp(suffix=".json", prefix="finops-test-secrets-")
         self.p = [mock.patch.object(cloud, "SECRETS_PATH", self.secrets),
-                  mock.patch.dict(os.environ, {"ANTHROPIC_ADMIN_KEY": "", "CURSOR_API_KEY": ""})]
+                  mock.patch.dict(os.environ, {"ANTHROPIC_ADMIN_KEY": ""})]
         for p in self.p:
             p.start()
 
@@ -296,8 +296,8 @@ class TestKeys(ServerFixture):
 
     def test_env_var_wins_and_is_reported(self):
         from unittest import mock
-        with mock.patch.dict(os.environ, {"CURSOR_API_KEY": "key_" + "e" * 30}):
-            self.assertEqual(self.get("/api/keys")[1]["cursor"]["source"], "env")
+        with mock.patch.dict(os.environ, {"ANTHROPIC_ADMIN_KEY": "sk-ant-admin" + "e" * 30}):
+            self.assertEqual(self.get("/api/keys")[1]["anthropic"]["source"], "env")
 
 
 class TestBudgetSuggestions(ServerFixture):

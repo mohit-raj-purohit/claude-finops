@@ -19,8 +19,8 @@ Boundaries this can see:
 from datetime import datetime
 
 # Multipliers are derived per model from the price table rather than hardcoded: the
-# 0.1x read / 1.25x 5m / 2.0x 1h shape holds for Anthropic, but Gemini reads at 0.25x
-# and OpenAI writes at 1.0x, so a fixed constant would quietly corrupt those agents.
+# 0.1x read / 1.25x 5m / 2.0x 1h shape holds for today's Claude models, but a fixed
+# constant would quietly go wrong the day a model is priced differently.
 READ = "cache_read"
 W5M = "cache_write_5m"
 W1H = "cache_write_1h"

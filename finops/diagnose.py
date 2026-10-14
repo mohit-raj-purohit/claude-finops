@@ -19,7 +19,7 @@ CHARS_PER_TOKEN = 4          # rough, stated wherever it is used
 CLAUDE_MD_WARN_TOKENS = 2500
 MEMORY_WARN_TOKENS = 1500
 EXPLORE_BASH = re.compile(r"^\s*(cd [^;&]+[;&]+\s*)?(ls|find|grep|rg|cat|head|tail|sed -n|tree|wc)\b")
-# What each agent calls the same things, so advice names the right file and command.
+# The names advice uses for Claude Code's files and commands.
 VOCAB = {
     "claude": {"name": "Claude Code", "md": "CLAUDE.md", "md_paths": ("CLAUDE.md", ".claude/CLAUDE.md"),
                "clear": "/clear", "compact": "/compact", "shell": ("Bash",),
@@ -28,18 +28,6 @@ VOCAB = {
                             "\"model\" in ~/.claude/settings.json). Give subagents a cheaper model in "
                             "their agent definition.",
                "cheaper": "Default to Sonnet; switch to Opus only for hard problems"},
-    "codex": {"name": "Codex", "md": "AGENTS.md", "md_paths": ("AGENTS.md",),
-              "clear": "/new", "compact": "/compact", "shell": ("exec_command", "shell", "local_shell"),
-              "explore": (),
-              "model_how": "Use /model to pick a smaller GPT-5 model (or lower reasoning effort) for "
-                           "routine edits, tests and docs; set model = \"...\" in ~/.codex/config.toml.",
-              "cheaper": "Use a cheaper GPT model for routine work"},
-    "gemini": {"name": "Gemini CLI", "md": "GEMINI.md", "md_paths": ("GEMINI.md", ".gemini/GEMINI.md"),
-               "clear": "/clear", "compact": "/compress", "shell": ("run_shell_command",),
-               "explore": ("read_file", "read_many_files", "glob", "search_file_content", "list_directory"),
-               "model_how": "Run gemini -m gemini-2.5-flash (or /model) for routine edits, tests "
-                            "and docs; set \"model\" in ~/.gemini/settings.json.",
-               "cheaper": "Default to Flash; switch to Pro only for hard problems"},
 }
 NOISY_PATH = re.compile(r"(node_modules/|/dist/|/build/|/\.next/|/coverage/|package-lock\.json|"
                         r"yarn\.lock|pnpm-lock\.yaml|\.min\.js|\.map$|/data/.*\.(json|csv)$)")
@@ -300,40 +288,6 @@ class Diagnoser:
                 "custom_agents": sorted(os.listdir(agents)) if os.path.isdir(agents) else [],
                 "default_model": st.get("model"), "issues": issues}
 
-    def agent_global_config(self):
-        """Codex / Gemini equivalent of global_config(): instructions file, default model, MCP."""
-        v, issues, files, model, mcp = self.v, [], [], None, []
-        base = os.path.join(HOME, ".codex" if self.agent == "codex" else ".gemini")
-        for rel in (v["md"], "config.toml", "settings.json"):
-            p = os.path.join(base, rel)
-            if os.path.exists(p):
-                files.append({"path": p, "tokens": _tok(p)})
-        if self.agent == "codex":
-            try:
-                txt = open(os.path.join(base, "config.toml"), errors="replace").read()
-            except OSError:
-                txt = ""
-            m = re.search(r'^\s*model\s*=\s*"([^"]+)"', txt, re.M)
-            model = m.group(1) if m else None
-            mcp = re.findall(r'^\s*\[mcp_servers\.([^\]]+)\]', txt, re.M)
-            where = "model = \"...\" in ~/.codex/config.toml"
-        else:
-            st = _load_json(os.path.join(base, "settings.json"))
-            model = (st.get("model") or {}).get("name") if isinstance(st.get("model"), dict) else st.get("model")
-            mcp = list((st.get("mcpServers") or {}).keys())
-            where = "\"model\": {\"name\": \"...\"} in ~/.gemini/settings.json"
-        g = next((x for x in files if x["path"].endswith(v["md"])), None)
-        if g and g["tokens"] and g["tokens"] > CLAUDE_MD_WARN_TOKENS:
-            issues.append({"severity": "medium", "title": f"Global {v['md']} is large",
-                           "fix": f"~{g['tokens']:,} tokens load into every session in every "
-                                  f"project. Move project-specific parts into that project."})
-        if not model:
-            issues.append({"severity": "low", "title": "No default model set",
-                           "fix": f"Set a cheaper everyday default with {where}; switch up with "
-                                  f"/model when a task needs it."})
-        return {"files": files, "mcp_servers": mcp, "custom_agents": [],
-                "default_model": model, "issues": issues}
-
     def projects(self, f):
         a = self.a
         w, p = a.where(f)
@@ -352,7 +306,6 @@ class Diagnoser:
             ph = ",".join("?" * len(pids))
             exists = bool(path) and os.path.isdir(path)
             v = getattr(self, "v", VOCAB["claude"])
-            claude = v is VOCAB["claude"]
             cm = [os.path.join(path, x) for x in v["md_paths"]] if path else []
             cm_found = [x for x in cm if os.path.exists(x)]
             cm_tok = sum(_tok(x) or 0 for x in cm_found)
@@ -415,18 +368,15 @@ class Diagnoser:
                                       "\"Read(./dist/**)\", \"Read(./**/*.lock)\"]}. Seen: "
                                       + ", ".join(os.path.basename(x["path"]) for x in noisy[:3]),
                                "evidence": noisy})
-            unused = [m for m in mcp_per.get(path, []) if m not in mcp_used] if claude else []
+            unused = [m for m in mcp_per.get(path, []) if m not in mcp_used]
             if unused:
                 issues.append({"severity": "low", "title": "Unused MCP servers enabled",
                                "fix": f"{', '.join(unused)} never called here but their tool "
                                       f"definitions load every session. Remove with "
                                       f"`claude mcp remove <name>`."})
-            if claude and exists and cm_found:
+            if exists and cm_found:
                 issues += self.claude_md_quality(path, cm_found)
-            if claude:
-                issues += self.memory_quality(pj["slug"], heavy)
-            else:                                      # Claude-only files: don't flag them
-                issues = [i for i in issues if not i["title"].startswith(("MEMORY.md", "Generated/large"))]
+            issues += self.memory_quality(pj["slug"], heavy)
             if not exists:
                 issues = []
             out.append({
@@ -440,8 +390,7 @@ class Diagnoser:
                              "deny_rules": len(((s_json or {}).get("permissions") or {}).get("deny") or [])},
                 "mcp_servers": mcp_per.get(path, []),
                 "issues": issues,
-                "harness": self.harness(pj, path, exists, cm_found, s_json, explore_pct, pids, ph)
-                if claude else None,
+                "harness": self.harness(pj, path, exists, cm_found, s_json, explore_pct, pids, ph),
             })
         return out
 
@@ -629,8 +578,7 @@ class Diagnoser:
             "skills": skills, "slash_commands": slash,
             "mcp": [r for r in mcp if r["kind"] == "mcp"],
             "connectors": [r for r in mcp if r["kind"] == "connector"],
-            "configured_unused_mcp": sorted(configured - used)
-            if "claude" in ((f or {}).get("agents") or ["claude"]) else [],
+            "configured_unused_mcp": sorted(configured - used),
             "cache_read_rate_per_mtok": rate * 1e6,
             "note": "Injected = size of what came back into context (actual size, ~4 chars/token). "
                     "Carried = injected × later requests in the same session that re-read it — an "
@@ -971,46 +919,25 @@ class Diagnoser:
         return out[:40]
 
     # ------------------------------------------------------------------ entry point
-    def _agent(self, f):
-        """The agent the advice is written for: the one that spent most tokens in range."""
-        w, p = self.a.where(f)
-        r = self.a.one(f"SELECT r.agent a FROM requests r WHERE {w} AND r.agent IN "
-                       f"('claude','codex','gemini') GROUP BY r.agent "
-                       f"ORDER BY SUM(r.billable_tokens) DESC LIMIT 1", p)
-        return r.get("a") or "claude"
-
     def run(self, f=None):
         f = f or {}
-        self.agent = self._agent(f)
-        self.v = VOCAB[self.agent]
+        self.v = VOCAB["claude"]
         drv = self.drivers(f)
         tr = self.trend(f)
         pj = self.projects(f)
-        gl = self.global_config() if self.agent == "claude" else self.agent_global_config()
+        gl = self.global_config()
         recs = self.recommendations(f, drv, pj)
         top = drv["drivers"][:3]
         headline = ("Your tokens are high mainly because of: "
                     + "; ".join(f"{d['title'].lower()} ({d['share_pct']}%)" for d in top)
                     + ".") if top else "No usage in the selected range."
         from .playbook import attach
-        wants = f.get("agents") or ["claude"]
         res = attach({"headline": headline, "trend": tr, **drv, "recommendations": recs,
-                "live_sessions": self.live_sessions() if "claude" in wants else [], "session_health": self.session_health(f),
+                "live_sessions": self.live_sessions(), "session_health": self.session_health(f),
                 "memory_suggestions": self.memory_suggestions(f),
                 "projects": pj, "global": gl,
                 "note": "Token counts are actual. Dollar figures are estimated. Config checks "
                         f"read files on disk now; token sizes use ~{CHARS_PER_TOKEN} chars/token.",
-                "basis": "mixed", "agent": self.agent, "vocab": {k: v for k, v in self.v.items()
-                                                                  if isinstance(v, str)}})
-        return res if self.agent == "claude" else _swap_md(res, self.v["md"])
+                "basis": "mixed", "vocab": {k: v for k, v in self.v.items() if isinstance(v, str)}})
+        return res
 
-
-def _swap_md(obj, md):
-    """Advice text for a non-Claude agent: point at its instructions file, not CLAUDE.md."""
-    if isinstance(obj, str):
-        return obj.replace("CLAUDE.md", md).replace("Claude Code", "the agent")
-    if isinstance(obj, list):
-        return [_swap_md(x, md) for x in obj]
-    if isinstance(obj, dict):
-        return {k: (x if k in ("path", "paths", "session_id") else _swap_md(x, md)) for k, x in obj.items()}
-    return obj

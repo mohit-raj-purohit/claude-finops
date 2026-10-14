@@ -5,7 +5,7 @@ const {fmtUSD, fmtNum, fmtInt, fmtPct, seriesVar} = C;
 const S = {
   view: 'hygiene',
   opts: null,
-  filter: {start: null, end: null, agents: [], models: [], projects: [], categories: [],
+  filter: {start: null, end: null, models: [], projects: [], categories: [],
            include_sandbox: true, min_cost: null, min_tokens: null},
   range: '30d',
   metric: 'cost',
@@ -34,7 +34,7 @@ const qs = () => {
   const f = S.filter, p = new URLSearchParams();
   if (f.start) p.set('start', f.start);
   if (f.end) p.set('end', f.end);
-  for (const k of ['agents', 'models', 'projects', 'categories'])
+  for (const k of ['models', 'projects', 'categories'])
     if (f[k].length) p.set(k, f[k].join(','));
   if (!f.include_sandbox) p.set('include_sandbox', '0');
   if (f.min_cost) p.set('min_cost', f.min_cost);
@@ -55,7 +55,7 @@ async function api(route, extra = '') {
 const bust = () => S.cache.clear();
 
 /* ============================ formatting helpers ============================ */
-const naLabel = () => `Unavailable from connected ${agentWord()} data`;
+const naLabel = () => 'Unavailable from Claude Code data';
 const NA = () => `<span class="na">${esc(naLabel())}</span>`;
 const BADGE = {actual: '<span class="badge">Actual</span>',
   estimated: '<span class="badge est">Estimated</span>',
@@ -132,13 +132,12 @@ const NAV = [
     ['hygiene', 'gauge', 'Context hygiene'],
     ['overview', 'dashboard', 'Executive overview'],
     ['advisor', 'bulb', 'What should I do?'],
-    ['agents', 'bot', 'Agents'],
     ['live', 'activity', 'Running sessions'],
     ['scorecard', 'award', 'FinOps scorecard'],
   ]],
   ['Usage', [
     ['usage', 'barChart', 'Usage timeline'],
-    ['burn', 'flame', 'Burn rate & limits', 'priced'],
+    ['burn', 'flame', 'Burn rate & limits'],
     ['models', 'cpu', 'Model analysis'],
     ['context', 'layers', 'Context & cache'],
   ]],
@@ -148,23 +147,23 @@ const NAV = [
     ['prompts', 'message', 'Prompt explorer'],
     ['rankings', 'sortDesc', 'Cost rankings'],
     ['categories', 'tag', 'Prompt intelligence'],
-    ['developer', 'code', 'Developer activity', 'priced'],
+    ['developer', 'code', 'Developer activity'],
   ]],
   ['Optimize', [
-    ['diagnose', 'scan', 'Why so many tokens?', 'priced'],
-    ['attribution', 'users', 'Who used the tokens', 'priced'],
-    ['subagents', 'bot', 'Subagent models', 'claude'],
+    ['diagnose', 'scan', 'Why so many tokens?'],
+    ['attribution', 'users', 'Who used the tokens'],
+    ['subagents', 'bot', 'Subagent models'],
     ['waste', 'trash', 'Waste detection'],
-    ['freemodels', 'gift', 'Free models', 'claude'],
+    ['freemodels', 'gift', 'Free models'],
     ['jev', 'sparkles', 'Jev (fast decisions)'],
-    ['compare', 'scale', 'Compare models', 'priced'],
-    ['toolkit', 'wrench', 'Skills & MCP', 'claude'],
+    ['compare', 'scale', 'Compare models'],
+    ['toolkit', 'wrench', 'Skills & MCP'],
     ['recommendations', 'listChecks', 'Recommendations'],
     ['anomalies', 'zap', 'Anomalies'],
   ]],
   ['Plan', [
-    ['forecast', 'trendUp', 'Forecast', 'priced'],
-    ['budgets', 'wallet', 'Budgets', 'priced'],
+    ['forecast', 'trendUp', 'Forecast'],
+    ['budgets', 'wallet', 'Budgets'],
     ['cloud', 'cloud', 'Billed vs local', 'cloud'],
     ['exports', 'download', 'Export & data'],
   ]],
@@ -298,7 +297,7 @@ function shell() {
             <button class="iconbtn sq" id="theme"></button>
             <button class="iconbtn sq" id="refresh" title="Reload this page's numbers from the warehouse. To pick up new sessions, use Sync" aria-label="Reload view">${ICON.reload}</button>
           </div>
-          <button class="act sync" id="sync" title="Re-read every agent's transcripts from disk into the warehouse">${ICON.sync}Sync</button>
+          <button class="act sync" id="sync" title="Re-read Claude Code's transcripts from disk into the warehouse">${ICON.sync}Sync</button>
         </div>
         <div class="filters" id="filters"></div>
       </header>
@@ -452,12 +451,7 @@ function applyRange(r) {
 function filterBar() {
   const f = S.filter, o = S.opts;
   const nSel = a => a.length ? `<span class="n">${a.length}</span>` : '';
-  const ag = o.agents || [];
   $('#filters').innerHTML = `
-    ${ag.length > 1 ? `<div class="seg" role="group" aria-label="Agent"><span class="seg-l">Agent</span>
-      ${ag.map(a => `<button class="${f.agents.includes(a.id) ? 'on' : ''}" data-agent="${esc(a.id)}"
-        title="${esc(a.note)}${a.requests ? '' : ' (no usage recorded)'}. Cmd/Shift-click to combine">${esc(a.name)}${a.requests ? '' : ' ·'}</button>`).join('')}
-      <button class="${f.agents.length === ag.length ? 'on' : ''}" data-agent="*" title="Every agent together">All</button></div>` : ''}
     <div class="seg" role="group" aria-label="Date range"><span class="seg-l">Range</span>
     ${RANGES.map(([k, l]) => `<button class="${S.range === k ? 'on' : ''}"
       data-range="${k}">${l}</button>`).join('')}</div>
@@ -481,17 +475,6 @@ function filterBar() {
   $('#filters').querySelectorAll('[data-range]').forEach(b =>
     b.onclick = e => { if (b.dataset.range === 'custom') { e.stopPropagation(); return openCustom(b); }
       applyRange(b.dataset.range); bust(); render(); });
-  $('#filters').querySelectorAll('[data-agent]').forEach(b => b.onclick = e => {
-    const id = b.dataset.agent;
-    // click = only this agent; Cmd/Ctrl/Shift-click = add or remove it (multi-agent view)
-    if (id === '*') f.agents = ag.map(a => a.id);
-    else if (e.metaKey || e.ctrlKey || e.shiftKey)
-      f.agents = f.agents.includes(id) ? f.agents.filter(x => x !== id) : [...f.agents, id];
-    else f.agents = [id];
-    if (!f.agents.length) f.agents = [id === '*' ? ag[0].id : id];
-    try { localStorage.setItem('finops-agents', JSON.stringify(f.agents)); } catch (_) {}
-    bust(); render();
-  });
   $('#sbx').onclick = () => { f.include_sandbox = !f.include_sandbox; bust(); render(); };
   const clr = $('#clr'); if (clr) clr.onclick = () => {
     f.models = []; f.projects = []; f.categories = []; f.min_cost = null; f.min_tokens = null;
@@ -751,7 +734,7 @@ VIEWS.overview = async (page) => {
       ${alloc.configured
         ? kpi('Remaining', fmtUSD(alloc.remaining),
             `${alloc.days_until_limit ?? '—'} days at current burn`, {badge: BADGE.estimated})
-        : kpi('Remaining allowance', null, `No plan limit exposed by ${agentWord()} data`)}
+        : kpi('Remaining allowance', null, 'No plan limit exposed by Claude Code data')}
       ${kpi('Period forecast', fcExp == null ? null : fmtUSD(fcExp),
         `${bp.remaining_days} days left in ${bp.start} → ${bp.end}`, {badge: BADGE.forecast})}
     </div>
@@ -842,7 +825,7 @@ VIEWS.overview = async (page) => {
     C.gauge(gEl, {pct: pctOfPeriod, status: 'healthy', label: 'of billing period elapsed'});
     $('#burnnotes', page).innerHTML = `<div class="stack">
       <div class="item"><div class="hd">No plan allowance available</div>
-        <div class="dt">${agentWord()} data does not expose plan limits, remaining credits,
+        <div class="dt">Claude Code data does not expose plan limits, remaining credits,
         or message allowances. Set <span class="mono">limits.monthly_cost_allowance_usd</span>
         in <span class="mono">config/settings.json</span> to unlock usage-vs-limit,
         days-until-limit and limit-date projections.</div></div>
@@ -919,7 +902,7 @@ VIEWS.overview = async (page) => {
     page._focusData = d;
     wireFocus(page);
   }).catch(() => {});
-  if (hasClaude()) fetch('/api/act_now').then(r => r.json()).then(d => {
+  fetch('/api/act_now').then(r => r.json()).then(d => {
     if (!page.isConnected || !(d.items || []).length) return;
     const el = h(actNowStrip(d.items));
     page.insertBefore(el, page.firstChild);
@@ -956,7 +939,7 @@ function wireActNow(root, items) {
       b.disabled = true;
       try {
         if (what === 'compact') {
-          const r = await sessionAction(it.pid, 'compact', {agent: 'claude'});
+          const r = await sessionAction(it.pid, 'compact');
           if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
           say(r.ok ? r.message : `Failed: ${r.error}`, r.ok);
           b.disabled = false; return;
@@ -989,7 +972,7 @@ async function jumpTo(view, anchor) {
 /* ---------- row actions: Resume (copy) and, for a running session, Compact ---------- */
 async function liveSessions() {
   try {
-    const d = await fetch('/api/live?agents=claude').then(r => r.json());
+    const d = await fetch('/api/live').then(r => r.json());
     return new Map((d.sessions || []).filter(x => x.signalable && x.pid).map(x => [x.session_id, x.pid]));
   } catch { return new Map(); }
 }
@@ -1012,7 +995,7 @@ function wireRowActs(host) {
     if (!armed(b)) return;
     b.disabled = true;
     try {
-      const r = await sessionAction(+b.dataset.compact, 'compact', {agent: 'claude'});
+      const r = await sessionAction(+b.dataset.compact, 'compact');
       if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
       b.innerHTML = r.ok ? `${I('check')} Sent` : 'Failed'; b.title = r.ok ? r.message : r.error;
     } catch (err) { b.textContent = 'Failed'; b.title = err.message; }
@@ -1066,7 +1049,7 @@ VIEWS.advisor = async (page) => {
           ${kpi('Spend involved', fmtUSD(r.actual_cost_usd), null, {small: 1, badge: BADGE.estimated})}
         </div>
         ${r.alternatives && r.alternatives.length ? `<div class="dt" style="margin-top:6px">
-          <b>Your options${r.agent ? ` within ${esc(r.agent)}` : ''}</b> — pick the trade-off you want:</div>
+          <b>Your options</b> — pick the trade-off you want:</div>
           ${table([
             {h: 'Model', f: a => esc(a.name) + (a.suggested
               ? ' <span class="badge rec">suggested</span>' : '')},
@@ -1382,7 +1365,7 @@ VIEWS.projects = async (page) => {
     ${card('Project FinOps table', '<div id="pt"></div>', {badge: BADGE.estimated,
       hint: 'Project → Session → Prompt drill-down',
       footer: 'Project identity comes from the working directory recorded in each transcript. '
-        + `Repository/remote metadata is not present in ${agentWord()} data.`})}`;
+        + 'Repository/remote metadata is not present in Claude Code data.'})}`;
   C.barsH($('#pb', page), {rows: rows.slice(0, 18), label: r => r.name, value: r => r.cost,
     color: seriesVar(2), onClick: r => { S.filter.projects = [String(r.project_id)];
       bust(); go('sessions'); },
@@ -1626,7 +1609,7 @@ VIEWS.categories = async (page) => {
       ${card('Cost by activity', `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
         <div class="chart" id="cd"></div><div style="flex:1;min-width:220px" class="legend"
         id="cl" style="flex-direction:column;align-items:flex-start"></div></div>`,
-        {badge: BADGE.estimated, hint: `where your ${agentWord()} budget goes`})}
+        {badge: BADGE.estimated, hint: 'where your Claude Code budget goes'})}
       ${card('Prompts by activity', '<div class="chart" id="cb"></div>', {badge: BADGE.actual})}
     </div>
     ${card('Activity breakdown', '<div id="ct"></div>', {badge: BADGE.estimated,
@@ -2129,12 +2112,11 @@ async function drawPrompts(box, sid) {
 
 VIEWS.live = async (page) => {
   const [res, usage0] = await Promise.all([
-    fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json()),   // never cached: always live
-    hasClaude() ? fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message})) : null]);
+    fetch('/api/live').then(r => r.json()),   // never cached: always live
+    fetch('/api/usage').then(r => r.json()).catch(e => ({ok: false, error: e.message}))]);
   const list = res.sessions || [];
   const liveActions = res.actions || ['interrupt', 'close', 'kill'];
   const canInterrupt = liveActions.includes('interrupt');
-  const agentName = id => ((S.opts?.agents || []).find(a => a.id === id) || {}).name || id;
   const busy = list.filter(x => x.status === 'busy');
   const sevOf = x => x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low';
   page.innerHTML = `
@@ -2145,7 +2127,7 @@ VIEWS.live = async (page) => {
       ${kpi('Running sessions', fmtInt(list.length), `${busy.length} working right now`, {badge: BADGE.actual})}
       ${kpi('Working (spending now)', fmtInt(busy.length), 'Only these consume tokens right now')}
       ${kpi('Largest live context', fmtNum(Math.max(0, ...list.map(x => x.context || 0))), 'Re-read on every step')}
-      ${kpi('Spent by live sessions', fmtUSD(list.reduce((a, x) => a + (x.est_cost_usd || 0), 0)), 'Since each started (priced agents only)', {badge: BADGE.estimated})}
+      ${kpi('Spent by live sessions', fmtUSD(list.reduce((a, x) => a + (x.est_cost_usd || 0), 0)), 'Since each started', {badge: BADGE.estimated})}
     </div>
     <div class="note"><b>Idle sessions don't use tokens</b>; they only cost again when you send the next message,
       which re-reads their whole context. <b>Interrupt</b> stops the current turn (like Esc).
@@ -2153,16 +2135,13 @@ VIEWS.live = async (page) => {
       Windows console; anywhere else it lands on your clipboard to paste).
       <b>Close</b> exits the session cleanly; copy its resume command to bring it back.
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
-      Codex, Gemini and Cursor keep no session registry, so they count as running when their transcript was
-      written in the last 20 minutes. Cursor sessions live inside the IDE and can't be stopped from here.
       <span class="spacer"></span><button class="btn pb-copy" id="live-refresh">${I('reload')} Refresh</button></div>
     <div class="stack">${list.map((x, i) => `
       <div class="item sev-${sevOf(x)}" data-i="${i}">
         <div class="hd">${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
-          <span class="pill">${esc(agentName(x.agent))}</span>
           <span class="sname">${esc((!MASKED && x.name) || shortId(x.session_id))}</span> <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
           ${x.hosts_dashboard ? '<span class="status high">runs this dashboard</span>' : ''}
-          ${x.agent === 'claude' ? limitBadge(x.session_id) : ''}
+          ${limitBadge(x.session_id)}
           <span class="spacer"></span>
           <span style="font-variant-numeric:tabular-nums">${x.context == null ? 'context not recorded' : fmtNum(x.context) + ' context'} · ${fmtInt(x.steps)} steps${x.est_cost_usd == null ? '' : ' · ' + fmtUSD(x.est_cost_usd)}</span></div>
         <div class="dt">${x.status === 'busy' ? '<b>Working now</b>' : 'Idle'}${x.uptime ? ` · up ${esc(x.uptime)}` : ''} ·
@@ -2173,17 +2152,17 @@ VIEWS.live = async (page) => {
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}
         <div class="live-actions">
           ${x.signalable ? `${canInterrupt ? `<button class="act" data-a="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : ''}>${I('pause')} Interrupt</button>` : ''}
-          ${x.agent === 'claude' ? '<button class="act" data-a="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>' : ''}
+          <button class="act" data-a="compact" title="Types /compact into that session's terminal">${I('compact')} Compact</button>
           <button class="act warn" data-a="close">${I('stop')} Close session</button>
-          <button class="act danger" data-a="kill">${I('x')} Force kill</button>` : `<span class="note">${x.agent === 'cursor' ? 'Runs inside the Cursor IDE: stop it there.' : 'No matching process found: stop it in its terminal.'}</span>`}
+          <button class="act danger" data-a="kill">${I('x')} Force kill</button>` : '<span class="note">No matching process found: stop it in its terminal.</span>'}
           ${x.resume ? `<button class="act ghost" data-copy="${esc(x.resume)}">Copy resume command</button>` : ''}
-          ${x.agent === 'claude' ? '<button class="act ghost" data-ho="1">' + I('handover') + ' Hand over / split</button>' : ''}
-          ${x.agent === 'claude' && x.session_id ? '<button class="act ghost" data-lim="1">' + I('gauge') + ' Set limit</button>' : ''}
-          ${x.agent === 'claude' && x.session_id ? '<button class="act ghost" data-pr="1">' + I('message') + ' Prompts</button>' : ''}
-          ${x.agent === 'claude' && x.signalable ? '<button class="act ghost" data-rn="1">' + I('tag') + ' Rename</button>' : ''}
+          <button class="act ghost" data-ho="1">${I('handover')} Hand over / split</button>
+          ${x.session_id ? '<button class="act ghost" data-lim="1">' + I('gauge') + ' Set limit</button>' : ''}
+          ${x.session_id ? '<button class="act ghost" data-pr="1">' + I('message') + ' Prompts</button>' : ''}
+          ${x.signalable ? '<button class="act ghost" data-rn="1">' + I('tag') + ' Rename</button>' : ''}
           <span class="live-msg"></span>
         </div>
-        ${x.agent !== 'claude' ? '' : `<div class="handover" hidden>
+        ${`<div class="handover" hidden>
           <div class="dt">Starts fresh session(s) in <code>${esc(x.cwd)}</code>, seeded with a brief built from this
             transcript (goal, recent requests, task list, files changed, last status). No tokens are spent building it.</div>
           <textarea rows="3" placeholder="Leave empty to continue the same work in one new session.&#10;Or split it: one sub-task per line, one new session each (max 8)."></textarea>
@@ -2195,9 +2174,9 @@ VIEWS.live = async (page) => {
           </div>
           <div class="ho-out note"></div>
         </div>`}
-        ${x.agent === 'claude' && x.session_id ? `<div class="handover limitbox" hidden></div>` : ''}
-        ${x.agent === 'claude' && x.session_id ? `<div class="handover promptbox" hidden></div>` : ''}
-        ${x.agent === 'claude' && x.signalable ? `<div class="handover renamebox" hidden>
+        ${x.session_id ? `<div class="handover limitbox" hidden></div>` : ''}
+        ${x.session_id ? `<div class="handover promptbox" hidden></div>` : ''}
+        ${x.signalable ? `<div class="handover renamebox" hidden>
           <div class="dt">Types <code>/rename &lt;name&gt;</code> into that session's terminal, so Claude Code saves the
             name itself (in herdr, the agents sidebar gets the same name). If the terminal can't be reached, the command lands on your clipboard to paste.</div>
           <div class="live-actions">
@@ -2205,7 +2184,7 @@ VIEWS.live = async (page) => {
             <button class="act rn-go">Rename</button>
             <span class="live-msg rn-msg" role="status"></span>
           </div></div>` : ''}
-      </div>`).join('') || `<div class="empty">No ${esc(agentWord())} sessions are running</div>`}</div>`;
+      </div>`).join('') || '<div class="empty">No Claude Code sessions are running</div>'}</div>`;
   $('#live-refresh', page).onclick = () => render();
   const ub = $('#usage-refresh', page);
   if (ub) ub.onclick = async () => {
@@ -2283,7 +2262,7 @@ VIEWS.live = async (page) => {
         }
         b.classList.remove('armed'); b.disabled = true; b.textContent = 'Working…';
         try {
-          const r = await sessionAction(pid, b.dataset.a, {agent: x.agent});
+          const r = await sessionAction(pid, b.dataset.a);
           if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
           msg.textContent = r.ok ? r.message : `Failed: ${r.error}`;
           msg.className = 'live-msg ' + (r.ok ? 'ok' : 'err');
@@ -2321,8 +2300,7 @@ const harnessChip = h => h ? `<b>${HARNESS[h.verdict][0]}</b>` : '—';
 
 VIEWS.diagnose = async (page) => {
   const d = await api('diagnose');
-  const isCl = (d.agent || 'claude') === 'claude', md = d.vocab?.md || 'CLAUDE.md';
-  const gdir = {claude: '~/.claude', codex: '~/.codex', gemini: '~/.gemini'}[d.agent || 'claude'];
+  const md = d.vocab?.md || 'CLAUDE.md';
   PB.length = 0;
   const t = d.total || {}, tr = d.trend || {};
   const sevChip = s => dot(s === 'high' ? 'red' : s === 'medium' ? 'yellow' : 'grey');
@@ -2354,7 +2332,7 @@ VIEWS.diagnose = async (page) => {
         ${x.fixes.map(t => `<div class="dt">• ${esc(t)}</div>`).join('')}${pb(x.playbook)}</div>`).join('')
       || '<div class="empty">No session passed 150K context</div>'}</div>`,
       {badge: BADGE.recommendation, hint: '"Above baseline" = context re-read beyond 100K'})}
-    <div id="dx-mem"></div>${card(`Add to ${md}${isCl ? ' / memory' : ''} (from your past prompts)`, `<div class="stack">${d.memory_suggestions.map(x => `
+    <div id="dx-mem"></div>${card(`Add to ${md} / memory (from your past prompts)`, `<div class="stack">${d.memory_suggestions.map(x => `
       <div class="item sev-${x.kind === 'security' ? 'high' : x.already_saved ? 'low' : 'medium'}">
         <div class="hd">${I(x.kind === 'security' ? 'lock' : x.kind === 'template' ? 'cog' : x.kind === 'reference' ? 'link' : 'note')}
           ${esc(pt(x.text.slice(0, 140)))}${x.already_saved ? ' <span class="na">already saved</span>' : ''}
@@ -2378,14 +2356,14 @@ VIEWS.diagnose = async (page) => {
         ${pb(r.playbook)}</div>`).join('')
       || '<div class="empty">Nothing stands out</div>'}</div>`, {badge: BADGE.recommendation})}
     ${card(`Projects: ${esc(d.vocab?.name || 'Claude')} config health`, `<div id="dx-proj"></div>`,
-      {badge: BADGE.recommendation, hint: isCl ? 'CLAUDE.md, memory, .claude/settings.json and MCP checked on disk now' : `${md} checked on disk now`, flush: 1})}
-    ${isCl ? card('Projects: does it need a harness?', `<div id="dx-harness" class="stack"></div>`,
-      {badge: BADGE.recommendation, hint: 'Harness = CLAUDE.md, permissions, hooks, skills, subagents. Need is judged from your usage in each project'}) : ''}
+      {badge: BADGE.recommendation, hint: 'CLAUDE.md, memory, .claude/settings.json and MCP checked on disk now', flush: 1})}
+    ${card('Projects: does it need a harness?', `<div id="dx-harness" class="stack"></div>`,
+      {badge: BADGE.recommendation, hint: 'Harness = CLAUDE.md, permissions, hooks, skills, subagents. Need is judged from your usage in each project'})}
     <div id="dx-issues"></div>
-    ${card(`Global config (${gdir})`, `<div class="stack">
+    ${card('Global config (~/.claude)', `<div class="stack">
       <div class="dt">Default model: <b>${esc(d.global.default_model || 'not set')}</b> ·
         MCP servers: ${esc(d.global.mcp_servers.join(', ') || 'none')} ·
-        ${isCl ? `Custom agents: ${esc(d.global.custom_agents.join(', ') || 'none')}` : ''}</div>
+        Custom agents: ${esc(d.global.custom_agents.join(', ') || 'none')}</div>
       ${d.global.files.map(x => `<div class="dt">${esc(x.path)} — ~${fmtInt(x.tokens)} tokens</div>`).join('')}
       ${d.global.issues.map(i => `<div class="item sev-${i.severity}"><div class="hd">${sevChip(i.severity)} ${esc(i.title)}</div>
         <div class="dt">${esc(i.fix)}</div>${pb(i.playbook)}</div>`).join('')}</div>`)}
@@ -2396,9 +2374,9 @@ VIEWS.diagnose = async (page) => {
     {h: 'Est. cost', num: 1, f: r => fmtUSD(r.cost)},
     {h: 'Avg ctx', num: 1, f: r => fmtNum(r.avg_context)},
     {h: md, f: r => r.claude_md.paths.length ? `~${fmtInt(r.claude_md.tokens)} tok` : '<span class="na">missing</span>'},
-    ...(isCl ? [{h: 'Memory', num: 1, f: r => r.memory_tokens == null ? '—' : `~${fmtInt(r.memory_tokens)}`}] : []),
+    {h: 'Memory', num: 1, f: r => r.memory_tokens == null ? '—' : `~${fmtInt(r.memory_tokens)}`},
     {h: 'Explore %', num: 1, f: r => fmtPct(r.explore_pct)},
-    ...(isCl ? [{h: 'Harness', f: r => harnessChip(r.harness)}] : []),
+    {h: 'Harness', f: r => harnessChip(r.harness)},
     {h: 'Needs update', f: r => r.issues.length ? r.issues.map(i => sevChip(i.severity) + ' ' + esc(i.title)).join('<br>') : I('check')},
   ];
   page.querySelectorAll('.sess-link').forEach(l => l.onclick = e => { e.preventDefault(); openSession(l.dataset.sess); });
@@ -2633,7 +2611,7 @@ async function drawKeys(page) {
     </div>`).join('');
   const done = async (pid, text) => {
     S.opts = await fetch('/api/options').then(r => r.json());
-    applyAgentChrome();                    // Billed vs local appears once a key exists
+    applyChrome();                    // Billed vs local appears once a key exists
     await drawKeys(page);
     const ok = $('#key-' + pid + '-ok', page); if (ok) ok.textContent = text;
   };
@@ -2858,7 +2836,7 @@ VIEWS.budgets = async (page) => {
       : `Last 30 days: ${fmtNum(SG.tokens_30d)} tokens.`,
     'g-tokens': v => !sizes.length ? '' : v ? overShare(v) : `Half your sessions stay under ${fmtNum(pctile(.5))} tokens.`,
   };
-  const planHint = `Your own figure, from your plan or invoice. ${esc(agentWord())} data does not include it.`;
+  const planHint = 'Your own figure, from your plan or invoice. Claude Code data does not include it.';
   const stepVal = sg.step_pct ?? 25;
   // Does any per-session budget exist (global or a project override)? The hook needs one.
   const anyBudget = !!sg.session_tokens || [sg.projects, sg.sessions].some(m => Object.values(m || {}).some(o => o.session_tokens));
@@ -3027,7 +3005,7 @@ VIEWS.budgets = async (page) => {
   const gp = Object.entries(sg.projects || {}).map(([path, o]) =>
     ({path, off: !!o.off, tokens: o.session_tokens == null ? '' : o.session_tokens.toLocaleString('en-US')}));
   const known = [...new Map((S.opts.projects || [])
-    .filter(p => p.path && (p.agent || 'claude') === 'claude' && !p.is_sandbox)
+    .filter(p => p.path && !p.is_sandbox)
     .map(p => [p.path, p])).values()].sort((a, b) => a.name.localeCompare(b.name));
   const drawProjects = () => {
     $('#g-projects', page).innerHTML = gp.length ? gp.map((o, i) => `
@@ -3134,7 +3112,7 @@ VIEWS.budgets = async (page) => {
 VIEWS.settings = async (page) => {
   page.innerHTML = card('API keys', `<div class="cfg">
       <div class="fld-hint" style="margin-bottom:8px">An API key is a password that lets this dashboard ask
-        Anthropic or Cursor for your company's bill. You only need one for the <b>Billed vs local</b> page,
+        Anthropic for your company's bill. You only need one for the <b>Billed vs local</b> page,
         which compares what was billed with what this computer recorded. That page shows up in the sidebar
         once a key is saved. Skip this if you don't use it. Keys stay on this computer, in a file only you
         can read. They are never shown again.</div>
@@ -3221,11 +3199,11 @@ VIEWS.developer = async (page) => {
         {h: 'Touches', num: 1, f: r => fmtInt(r.touches)},
       ], d.files), {badge: BADGE.actual})}
     </div>
-    ${card(`Not available from ${esc(agentWord())} data`, `<dl class="kv">
+    ${card('Not available from Claude Code data', `<dl class="kv">
       ${Object.entries(u).map(([k, v]) => `<dt>${esc(k.replace(/_/g, ' '))}</dt>
         <dd class="na">${esc(v)}</dd>`).join('')}
     </dl>`, {badge: '<span class="badge na">Unavailable</span>',
-      footer: 'Agent transcripts record which files a tool call targeted, but not diff sizes, commits, PRs or issue linkage. Correlating spend with commits or PRs would require a separate git/GitHub data source, which this dashboard deliberately does not fabricate.'})}`;
+      footer: 'Claude Code transcripts record which files a tool call targeted, but not diff sizes, commits, PRs or issue linkage. Correlating spend with commits or PRs would require a separate git/GitHub data source, which this dashboard deliberately does not fabricate.'})}`;
   C.barsH($('#rb', page), {rows: d.cost_per_repository.slice(0, 12), label: r => r.repository,
     value: r => r.cost, color: seriesVar(2)});
   C.barsH($('#tb', page), {rows: d.tools.slice(0, 14), label: r => r.name, value: r => r.calls,
@@ -3319,7 +3297,7 @@ VIEWS.exports = async (page) => {
           <div class="dt">Read directly from your transcripts: token counts, timestamps, models,
           tool calls, file paths, session and project identity.</div></div>
         <div class="item"><div class="hd">${BADGE.estimated} Estimated</div>
-          <div class="dt">Derived: every dollar figure. ${agentWord()} data contains no billed
+          <div class="dt">Derived: every dollar figure. Claude Code data contains no billed
           amounts, so cost = tokens × <span class="mono">config/pricing.json</span>.</div></div>
         <div class="item"><div class="hd">${BADGE.forecast} Forecast</div>
           <div class="dt">Projected from history. Assumes recent patterns continue; it is not a
@@ -3415,29 +3393,22 @@ async function updateNavBadges() {
   const set = (id, n, lvl) => { const el = document.querySelector(`[data-nb="${id}"]`);
     if (el) { el.textContent = n ? n : ''; el.className = 'nb' + (n ? ' l' + lvl : ''); } };
   try {
-    const [d, w, a] = await Promise.all([hasPriced() ? api('diagnose') : null, api('waste'), api('anomalies')]);
+    const [d, w, a] = await Promise.all([api('diagnose'), api('waste'), api('anomalies')]);
     if (d) { const hid = focusHidden(), f = focusItems(d).filter(i => !hid.has(i.key)), urgent = f.filter(i => i.lvl === 1).length;
       set('diagnose', urgent || f.length, urgent ? 1 : 2); }
     const hw = w.findings.filter(x => x.severity === 'high').length;
     set('waste', hw || w.findings.length, hw ? 1 : 2);
     set('anomalies', (a.anomalies || []).length, 2);
-    const lv = await fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(','))).then(r => r.json());
+    const lv = await fetch('/api/live').then(r => r.json());
     const heavy = (lv.sessions || []).filter(x => x.severity !== 'ok').length;
     set('live', (lv.sessions || []).length, heavy ? 1 : 2);
   } catch { /* badges are a hint; never block the page */ }
 }
 
-/* ---------- agent-aware chrome ---------- */
-// What the current agent selection can show: Claude-only pages need Claude Code in the
-// selection; cost pages need at least one agent whose usage is priced.
-const selAgents = () => (S.opts?.agents || []).filter(a => S.filter.agents.includes(a.id));
-const hasClaude = () => S.filter.agents.includes('claude');
-const hasPriced = () => selAgents().some(a => a.data !== 'activity');
+/* ---------- chrome ---------- */
+// Billed vs local needs an API key; every other page always shows.
 const hasCloudKey = () => Object.values(S.opts?.cloud || {}).some(Boolean);
-const navAllowed = scope => !scope || (scope === 'claude' ? hasClaude()
-  : scope === 'cloud' ? hasCloudKey() : hasPriced());
-// "Claude Code", "Codex", or "agent" for a mixed selection: used in data-availability text
-const agentWord = () => { const a = selAgents(); return a.length === 1 ? a[0].name : 'agent'; };
+const navAllowed = scope => scope !== 'cloud' || hasCloudKey();
 // Whose usage this is. Read from ~/.claude.json by the server, so a screenshot
 // or a shared dashboard always says which account the numbers belong to.
 function whoBlock() {
@@ -3455,9 +3426,8 @@ function whoBlock() {
   el.title = `Claude Code is signed in as ${a.name || ''} <${a.email || ''}>`.trim();
 }
 
-function applyAgentChrome() {
-  const a = selAgents();
-  const label = a.length === 1 ? a[0].name.replace(/ (Code|CLI)$/, '') : a.length ? 'Multi-agent' : 'AI';
+function applyChrome() {
+  const label = 'Claude';
   whoBlock();
   // Stamp the version onto the logo. Two copies of this app can be installed at
   // once (npm global, a checkout) and the browser cannot tell them apart.
@@ -3474,7 +3444,7 @@ function applyAgentChrome() {
   if (mark) mark.innerHTML = `<span class="dot"></span>${esc(label)} FinOps` +
     (verText ? `<span class="ver" id="ver" title="${esc(verTitle)}">${esc(verText)}</span>` : '');
   const sub = $('.brand .sub');
-  if (sub) sub.textContent = a.length > 1 ? a.map(x => x.name).join(' + ') : 'Command Center';
+  if (sub) sub.textContent = 'Command Center';
   document.title = `${label} FinOps Command Center`;
   const scopes = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([id, , , sc]) => [id, sc])));
   document.querySelectorAll('.nav a').forEach(el => el.style.display = navAllowed(scopes[el.dataset.view]) ? '' : 'none');
@@ -3484,7 +3454,7 @@ function applyAgentChrome() {
     while (el && !el.classList.contains('group')) { if (el.style.display !== 'none') any = true; el = el.nextElementSibling; }
     g.style.display = any ? '' : 'none';
   });
-  // leaving a page the new selection can't show: fall back to the overview
+  // Billed vs local without a key: fall back to the overview
   if (scopes[S.view] && !navAllowed(scopes[S.view])) S.view = 'overview';
 }
 
@@ -3559,7 +3529,7 @@ async function render() {
   page.className = 'page';
   page.id = 'page';
   stale.replaceWith(page);
-  applyAgentChrome();
+  applyChrome();
   syncURL(false);
   document.querySelectorAll('.nav a').forEach(a =>
     a.classList.toggle('on', a.dataset.view === S.view));
@@ -3593,7 +3563,7 @@ async function render() {
    stop act on sessions, so the list is grouped by session; running ones sit on
    top. Close and Force kill stay on Running sessions, one click away from here. */
 const RECENT = {open: false, offset: 0, limit: 30, q: '', open_ids: new Set()};
-// Recent means all time: keep agent/project filters, drop the date range and thresholds.
+// Recent means all time: keep project filters, drop the date range and thresholds.
 const recentQs = () => { const p = new URLSearchParams(qs());
   ['start', 'end', 'min_cost', 'min_tokens'].forEach(k => p.delete(k)); return p.toString(); };
 const fmtWhen = iso => iso ? `${ago(iso)} · ${esc(iso.slice(0, 16).replace('T', ' '))}` : '';
@@ -3607,7 +3577,7 @@ function toggleRecent(force) {
   if (!RECENT.open) return;
   const scrim = h('<div class="recent-scrim"></div>');
   const p = h(`<aside class="recent" aria-label="Recent sessions"><header>
-      <h2>Recent</h2><span class="note">all time · agent &amp; project filters apply</span>
+      <h2>Recent</h2><span class="note">all time · project filters apply</span>
       <span class="spacer"></span><button class="iconbtn" data-x>Close ${I('x')}</button></header>
     <div class="recent-search"><span class="mag">${I('search')}</span>
       <input id="recent-q" placeholder="Search your prompts…" value="${esc(RECENT.q)}"></div>
@@ -3627,7 +3597,7 @@ async function renderRecent() {
   if (!box) return;
   const more = RECENT.offset > 0;
   const [live, res] = await Promise.all([
-    more || RECENT.q ? null : fetch('/api/live?agents=' + encodeURIComponent(S.filter.agents.join(',')))
+    more || RECENT.q ? null : fetch('/api/live')
       .then(r => r.json()).catch(() => ({sessions: []})),
     RECENT.q
       ? fetch(`/api/prompts?${recentQs()}&order=recent&limit=${RECENT.limit}&offset=${RECENT.offset}&q=${encodeURIComponent(RECENT.q)}`).then(r => r.json())
@@ -3658,7 +3628,7 @@ const recentLive = list => !list.length ? '' : `<div class="recent-hd">Running n
       ${x.est_cost_usd != null ? `<span>${fmtUSD(x.est_cost_usd)}</span>` : ''}</div>
     <div class="live-actions">
       ${x.resume ? `<button class="act ghost" data-resume="${esc(x.resume)}" title="Copy: ${esc(x.resume)}">${I('copy')} Resume</button>` : ''}
-      ${x.signalable && x.agent === 'claude' ? '<button class="act" data-la="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>' : ''}
+      ${x.signalable ? '<button class="act" data-la="compact" title="Types /compact into that session\'s terminal">' + I('compact') + ' Compact</button>' : ''}
       ${x.signalable ? `<button class="act warn" data-la="interrupt" ${x.status !== 'busy' ? 'disabled title="Nothing running"' : 'title="Stops the current turn, like pressing Esc"'}>${I('pause')} Stop</button>` : ''}
       ${x.session_id ? `<button class="act ghost" data-open-sess="${esc(x.session_id)}">Details</button>` : ''}
       <span class="live-msg"></span></div></div>`).join('')}
@@ -3728,7 +3698,7 @@ function wireRecent(root) {
       if (!armed(b)) return;   // two clicks, like Running sessions
       b.disabled = true;
       try {
-        const r = await sessionAction(x.pid, b.dataset.la, {agent: x.agent});
+        const r = await sessionAction(x.pid, b.dataset.la);
         if (!r.ok && r.copy) { try { await navigator.clipboard.writeText(r.copy); } catch {} }
         msg.textContent = r.ok ? r.message : `Failed: ${r.error}`;
         msg.className = 'live-msg ' + (r.ok ? 'ok' : 'err');
@@ -3744,7 +3714,6 @@ function wireRecent(root) {
   if (saved) document.documentElement.setAttribute('data-theme', saved);
   shell();
   S.opts = await fetch('/api/options').then(r => r.json());
-  S.filter.agents = defaultAgents();
   applyRange('30d');
   // The URL picks the screen (and any open drawer), so a refresh or a link lands where it points.
   const route = readRoute();
@@ -3758,80 +3727,6 @@ function wireRecent(root) {
   if (!route.view) maybeFirstTour();   // arriving on a deep link is not a first visit
   let t; addEventListener('resize', () => { clearTimeout(t); t = setTimeout(render, 220); });
 })();
-
-/* ============================ agents ============================ */
-// Last choice if still valid, else the agent with the most usage (Claude on most machines).
-function defaultAgents() {
-  const ag = S.opts?.agents || [];
-  let saved = [];
-  try { saved = JSON.parse(localStorage.getItem('finops-agents') || '[]'); } catch (_) {}
-  saved = saved.filter(id => ag.some(a => a.id === id));
-  if (saved.length) return saved;
-  const top = [...ag].sort((a, b) => b.requests - a.requests)[0];
-  return top ? [top.id] : [];
-}
-
-VIEWS.agents = async (page) => {
-  const d = await api('by_agent');
-  const all = S.opts.agents || [];
-  const colorOf = id => seriesVar(Math.max(all.findIndex(a => a.id === id), 0));
-  const dataBadge = k => ({full: '<span class="badge">Full data</span>',
-    tokens: '<span class="badge">Tokens + model</span>',
-    activity: '<span class="badge rec">Activity only</span>'}[k] || '');
-  // pivot daily rows into one row per day with a column per agent
-  const byDay = new Map();
-  for (const r of d.daily) {
-    const row = byDay.get(r.day) || {day: r.day};
-    row[r.agent] = S.metric === 'cost' ? r.cost : r.tokens;
-    byDay.set(r.day, row);
-  }
-  const shown = d.agents.map(a => a.agent);
-  page.innerHTML = `
-    <div class="note">Showing: <b>${esc(shown.map(id => all.find(a => a.id === id)?.name || id).join(' + ') || 'nothing in range')}</b>.
-      Click an agent chip above to see only it; <b>Cmd/Ctrl-click</b> to add more, or <b>All</b> for every agent together.
-      Every other page follows the same selection.</div>
-    <div class="grid g4">${d.agents.map(a => kpi(a.name,
-      // an agent with no price data leads with what it does have, never "0 tok"
-      a.cost ? fmtUSD(a.cost) : a.tokens ? fmtNum(a.tokens) + ' tokens' : fmtInt(a.requests) + ' requests',
-      `${fmtInt(a.sessions)} sessions · ${fmtInt(a.prompts)} prompts · ${fmtInt(a.active_days)} active days`,
-      {badge: a.cost ? BADGE.estimated : ''})).join('')}</div>
-    ${card('Side by side', `<div id="ag-tbl"></div>`, {flush: 1, badge: BADGE.estimated,
-      hint: 'Costs are estimated at each provider\'s API list price'})}
-    ${card(`Daily ${S.metric === 'cost' ? 'estimated cost' : 'tokens'} by agent`, `<div class="chart" id="ag-trend"></div><div id="ag-leg"></div>`,
-      {actions: `<button class="chip ${S.metric === 'cost' ? 'on' : ''}" data-m="cost">Cost</button>
-                 <button class="chip ${S.metric !== 'cost' ? 'on' : ''}" data-m="tokens">Tokens</button>`})}
-    ${card('What each agent records on this machine', `<div class="stack">${all.map(a => `
-      <div class="item"><div class="hd">${esc(a.name)} ${dataBadge(a.data)}<span class="spacer"></span>
-        <span class="note">${a.requests ? `${esc(a.first)} → ${esc(a.last)} · ${fmtInt(a.sessions)} sessions` : 'installed, no usage recorded'}</span></div>
-        <div class="dt">${esc(a.note)}</div></div>`).join('')}</div>`)}`;
-  $('#ag-tbl', page).innerHTML = table([
-    {h: 'Agent', f: r => `<b>${esc(r.name)}</b> ${dataBadge(r.data)}`},
-    {h: 'Est. cost', num: 1, f: r => r.data === 'activity' ? '<span class="na">not priced</span>' : fmtUSD(r.cost)},
-    {h: 'Tokens', num: 1, f: r => r.tokens ? fmtNum(r.tokens) : '<span class="na">not recorded</span>'},
-    {h: 'Output', num: 1, f: r => r.output_tokens ? fmtNum(r.output_tokens) : '—'},
-    {h: 'Cache reads', num: 1, f: r => r.cache_read_tokens ? fmtNum(r.cache_read_tokens) : '—'},
-    {h: 'Sessions', num: 1, f: r => fmtInt(r.sessions)},
-    {h: 'Prompts', num: 1, f: r => fmtInt(r.prompts)},
-    {h: 'Tool calls', num: 1, f: r => fmtInt(r.tool_calls)},
-    {h: 'Cost / prompt', num: 1, f: r => r.cost && r.prompts ? fmtUSD(r.cost / r.prompts) : '—'},
-    {h: 'Models', trunc: 1, title: r => r.models, f: r => esc((r.models || '').split(',').map(modelName).join(', '))},
-  ], d.agents);
-  const series = shown.map(id => ({key: id, label: all.find(a => a.id === id)?.name || id, color: colorOf(id)}));
-  C.timeSeries($('#ag-trend', page), {rows: [...byDay.values()], x: 'day', series, type: 'bar',
-    fmt: S.metric === 'cost' ? fmtUSD : fmtNum, height: 230, xLabel: shortDay});
-  C.legend($('#ag-leg', page), series.map(s => ({label: s.label, color: s.color})));
-  page.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { S.metric = b.dataset.m; render(); });
-  addChart(page, 'Share by agent', el => {
-    el.innerHTML = '<div class="grid g2"><div><div class="note">Estimated cost</div><div id="ag-d1"></div></div>' +
-      '<div><div class="note">Tokens</div><div id="ag-d2"></div></div></div>';
-    C.donut($('#ag-d1', el), {rows: d.agents.filter(a => a.cost > 0), label: a => a.name, value: a => a.cost,
-      color: a => colorOf(a.agent), size: 170, centerValue: fmtUSD(d.agents.reduce((x, a) => x + a.cost, 0)), centerLabel: 'estimated'});
-    C.donut($('#ag-d2', el), {rows: d.agents.filter(a => a.tokens > 0), label: a => a.name, value: a => a.tokens, fmt: fmtNum,
-      color: a => colorOf(a.agent), size: 170, centerValue: fmtNum(d.agents.reduce((x, a) => x + (a.tokens || 0), 0)), centerLabel: 'tokens'});
-    const lg = document.createElement('div'); el.appendChild(lg);
-    C.legend(lg, d.agents.map(a => ({label: `${a.name} · ${a.cost ? fmtUSD(a.cost) + ' · ' : ''}${fmtNum(a.tokens)} tok`, color: colorOf(a.agent)})));
-  }, {badge: BADGE.estimated});
-};
 
 /* ============================ machine actions ============================ */
 async function doAction(path, body = {}) {
@@ -3866,7 +3761,7 @@ async function syncLabel() {
   const b = $('#sync'); if (!b) return;
   const d = await fetch('/api/sync').then(r => r.json()).catch(() => ({}));
   if (d.job && d.job.state === 'running') return runSync();
-  b.title = `Last synced ${ago(d.built_at)}. Re-read every agent's transcripts from disk into the warehouse`;
+  b.title = `Last synced ${ago(d.built_at)}. Re-read Claude Code's transcripts from disk into the warehouse`;
   b.classList.remove('busy');
   b.innerHTML = `${ICON.sync}Sync <span class="ago">· ${ago(d.built_at)}</span>`;
 }
@@ -3989,7 +3884,7 @@ VIEWS.compare = async (page) => {
     ? (r.requests ? `${fmtInt(r.requests)} req · ${fmtUSD(r.cost)}` : '<span class="na">not used</span>')
     : !r.fits ? `${I('xCircle')} needs ${r.min_ram_gb} GB RAM` : r.installed ? `${I('checkCircle')} <code>${esc(r.command)}</code>` : `<a data-go="freemodels">${I('plus')} Add</a>`;
   page.innerHTML = `
-    ${card(hasFree ? 'Claude vs free models' : `${esc(agentWord())} models side by side`, `<div id="cmp"></div>`, {flush: 1, badge: BADGE.recommendation,
+    ${card(hasFree ? 'Claude vs free models' : 'Claude models side by side', `<div id="cmp"></div>`, {flush: 1, badge: BADGE.recommendation,
       hint: hasFree ? `This machine: ${esc(d.os)}, ${d.ram_gb} GB RAM` : 'List prices, your usage in range', footer: esc(d.note)})}
     ${!hasFree ? '' : `<div class="grid g3">
       ${card('Use Claude for', `<div class="dt">Multi-file changes, debugging, anything agentic or long-running.
@@ -4323,16 +4218,13 @@ VIEWS.cloud = async (page) => {
         `${fmtNum(t.local_claude_tokens)} tokens from local transcripts`, {badge: BADGE.estimated})}
       ${kpi('Gap', t.billed_claude_cost ? fmtUSD(gap) : null,
         'Other machines, other members, or work off this machine')}
-      ${kpi('Cursor team spend', t.cursor_spend == null ? null : fmtUSD(t.cursor_spend),
-        `${fmtInt(t.cursor_members)} members`, {badge: BADGE.actual})}
     </div>
     ${card('Set up the APIs', `<div class="stack">${setup}</div>`,
       {hint: 'Stored keys stay on this machine (0600) and are never shown again'})}
     ${card('Billed vs local, per day', `<div id="cl-day"></div>`, {flush: 1, badge: BADGE.actual,
-      hint: 'Claude Code: what the vendor billed against what this machine recorded'})}
+      hint: 'Claude Code: what Anthropic billed against what this machine recorded'})}
     ${card('Claude Code users (org-wide)', `<div id="cl-users"></div>`, {flush: 1, badge: BADGE.actual,
       hint: 'Per user per day, aggregated over the range — includes Pro/Max subscription users'})}
-    ${card('Cursor members', `<div id="cl-cur"></div>`, {flush: 1, badge: BADGE.actual})}
     ${card('Billed API cost by line item', `<div id="cl-api"></div>`, {flush: 1, badge: BADGE.actual,
       hint: 'From the Anthropic cost report: API spend only, not subscription plans'})}`;
   page.querySelectorAll('[data-go-settings]').forEach(a => a.onclick = e => { e.preventDefault(); go('settings'); });
@@ -4355,13 +4247,6 @@ VIEWS.cloud = async (page) => {
     {h: 'PRs', num: 1, f: r => fmtInt(r.prs)},
     {h: 'Where', trunc: 1, f: r => esc(r.terminals.join(', ') || '—')},
   ], d.users);
-  $('#cl-cur', page).innerHTML = table([
-    {h: 'Member', f: r => esc(r.member)},
-    {h: 'Spend', num: 1, f: r => r.spend_usd == null ? '—' : fmtUSD(r.spend_usd)},
-    {h: 'Active days', num: 1, f: r => fmtInt(r.days)},
-    {h: 'Requests', num: 1, f: r => fmtInt(r.requests)},
-    {h: 'Lines +/-', num: 1, f: r => `${fmtInt(r.lines_added)} / ${fmtInt(r.lines_removed)}`},
-  ], d.cursor_members);
   $('#cl-api', page).innerHTML = table([
     {h: 'Line item', f: r => esc(r.description)},
     {h: 'Billed $', num: 1, f: r => fmtUSD(r.cost_usd)},
@@ -4387,21 +4272,18 @@ VIEWS.cloud = async (page) => {
 // Targets: a CSS selector, 'kpis' (the first KPI row), or 'cardN' (Nth card on the page).
 const TOUR_DONE = 'finops-tour-done';
 const TOUR_WELCOME = [
-  {el: '.brand', t: 'Welcome to FinOps', see: 'One dashboard for what your coding agents (Claude Code, Codex, Gemini CLI, Cursor) spend in tokens and money.',
+  {el: '.brand', t: 'Welcome to FinOps', see: 'One dashboard for what Claude Code spends in tokens and money.',
     get: 'Where the tokens go, why, and what to change to spend less. Everything is read from files on this machine.',
     act: 'Use Next and Previous to move through the tour, or Skip to close it.'},
   {el: '.nav', t: 'Dashboards', see: 'Every dashboard, grouped: Command center, Usage, Drill-down, Optimize, Plan.',
     get: 'Start with <b>Why so many tokens?</b> or <b>What should I do?</b> for a ranked to-do list.',
     act: 'Click any item to open that dashboard. A number next to an item means something needs attention.'},
-  {el: '[data-agent]', t: 'Pick the agent', see: 'Agent chips: one agent, several, or All.',
-    get: 'Every dashboard is filtered to the agents you pick. Dashboards that need data an agent doesn\'t record are hidden.',
-    act: 'Click <b>Codex</b> or <b>All</b> to switch.'},
   {el: '[data-range]', t: 'Date range & filters', see: 'Range chips, plus Model, Project, Category and Threshold filters.',
     get: 'Narrow any dashboard to a period, a model or a project.',
     act: `Try <b>7 days</b>, then open <b>Project ${I('chevDown')}</b> to focus on one repo.`},
   {el: '#gsearch', t: 'Search', see: 'Search across prompts, sessions, models and dates.',
     get: 'Jump straight to the prompt or session you remember.', act: 'Type a word from a recent prompt and press Enter.'},
-  {el: '#sync', t: 'Keep it current', see: 'Sync re-reads every agent\'s local data.',
+  {el: '#sync', t: 'Keep it current', see: 'Sync re-reads Claude Code\'s local transcripts.',
     get: 'Fresh numbers after you\'ve been working.', act: `Click <b>${I('sync')} Sync</b> whenever the numbers look stale.`},
   {el: '#tour-btn', t: 'Tour any dashboard', see: 'This button starts a tour of the dashboard you\'re on.',
     get: 'A short explanation of each section: what it shows, what you get, what you can do.',
@@ -4428,15 +4310,10 @@ const TOURS = {
     {el: 'card:What is going well', t: 'Strengths & gaps', see: 'What your habits already do well, and the items that need attention.', get: 'Confirmation of what to keep doing, and where you lose money.', act: 'Work down the <b>Needs attention</b> list.'},
     {el: 'card:All recommendations', t: 'All recommendations', see: 'Every recommendation, ranked by spend involved, each with its reasoning.', get: 'A prioritised to-do list built from your own usage.', act: 'Copy a recommendation\'s prompt straight into your agent.'},
     {el: 'card:Anomalies to inspect', t: 'Anomalies', see: 'Days and sessions that spent far more than your normal.', get: 'Surprises caught before they repeat.', act: 'Click one to see what happened that day.'}],
-  agents: [
-    {el: 'kpis', t: 'Agent totals', see: 'One tile per agent with its usage for the current filters.', get: 'How spend splits across Claude Code, Codex, Gemini CLI and Cursor.', act: 'Use the agent chips in the header to focus on one.'},
-    {el: 'card:Side by side', t: 'Side by side', see: 'Every agent in one table: cost, tokens, requests, sessions.', get: 'A like-for-like comparison of what each agent costs you.', act: 'Compare tokens per request: a high number means large contexts.'},
-    {el: 'card:Daily', t: 'Daily by agent', see: 'Cost or tokens per day, split by agent.', get: 'When you switched agents and what that did to spend.', act: 'Use the metric toggle to swap cost for tokens.'},
-    {el: 'card:What each agent records', t: 'What each agent records', see: 'Which fields each agent writes to disk on this machine.', get: 'Why some dashboards are hidden for some agents: the data simply isn\'t recorded.', act: 'Check here first when a number reads "not recorded".'}],
   live: [
     {el: 'kpis', t: 'Running now', see: 'Sessions running right now, which are working (spending) at this moment, the largest live context and what live sessions have spent.', get: 'What is costing you money this second.', act: 'Only <b>working</b> sessions consume tokens; idle ones cost again on your next message.'},
-    {el: '#live-refresh', t: 'Refresh & the rules', see: 'The note explains what Interrupt, Close and Force kill do, and how non-Claude agents are detected.', get: 'Confidence before you stop something.', act: `Click <b>${I('reload')} Refresh</b> for the latest state.`},
-    {el: '.item[data-i]', t: 'A session', see: 'Agent, project, context size, steps, cost and last activity, plus advice when a session gets heavy.', get: 'Control over sessions that are quietly growing expensive.', act: 'Interrupt, Close or Force kill it (each needs two clicks), copy its resume command, <b>Hand over</b> a Claude session to a fresh one, see its <b>Prompts</b> or <b>Rename</b> it.'}],
+    {el: '#live-refresh', t: 'Refresh & the rules', see: 'The note explains what Interrupt, Compact, Close and Force kill do.', get: 'Confidence before you stop something.', act: `Click <b>${I('reload')} Refresh</b> for the latest state.`},
+    {el: '.item[data-i]', t: 'A session', see: 'Project, model, context size, steps, cost and last activity, plus advice when a session gets heavy.', get: 'Control over sessions that are quietly growing expensive.', act: 'Interrupt, Close or Force kill it (each needs two clicks), copy its resume command, <b>Hand over</b> it to a fresh session, see its <b>Prompts</b> or <b>Rename</b> it.'}],
   scorecard: [
     {el: 'card:AI FinOps Score', t: 'Your score', see: 'The overall score with a component breakdown: cache use, model mix, waste and budget.', get: 'Where your habits are strong and where they cost money.', act: 'Hover a component to see how it is calculated.'},
     {el: 'card:What is good', t: 'What is good', see: 'The components you already score well on.', get: 'The habits worth keeping.', act: 'Keep these when you change your setup.'},
@@ -4497,9 +4374,9 @@ const TOURS = {
     {el: 'card:Add to', t: 'Memory suggestions', see: 'Facts your prompts repeat, ready to move into your memory file.', get: 'Shorter prompts and less re-explaining.', act: 'Copy a suggestion into the project memory file.'},
     {el: 'card:Why consumption is high', t: 'The drivers', see: 'The main drivers of your token use, each with its share.', get: 'A plain explanation of where tokens go.', act: 'Read the top driver first.'},
     {el: 'card:What to change', t: 'What to change', see: 'Each finding with a ready-made prompt that fixes it.', get: 'A fix your agent can apply for you.', act: 'Click <b>Copy</b> and paste it into your agent.'},
-    {el: 'card:Projects:', t: 'Project config health', see: 'Per project: whether it has memory, an agents file, hooks and the rest.', get: 'The config gaps that make every session start from zero.', act: 'Fix the projects flagged red.'},
+    {el: 'card:Projects:', t: 'Project config health', see: 'Per project: whether it has memory, a CLAUDE.md, hooks and the rest.', get: 'The config gaps that make every session start from zero.', act: 'Fix the projects flagged red.'},
     {el: '#dx-harness', t: 'Does it need a harness?', see: 'Per project, whether the work you do there would be better served by a harness: hooks, subagents or a scripted workflow.', get: 'A read on when a repo has outgrown ad-hoc prompting.', act: 'Start with the project that repeats the same multi-step task most often.'},
-    {el: 'card:Global config', t: 'Global config', see: 'Your machine-wide agent configuration and what\'s missing from it.', get: 'Settings that pay off across every project at once.', act: 'Apply the global fixes before the per-project ones.'},
+    {el: 'card:Global config', t: 'Global config', see: 'Your machine-wide Claude Code configuration and what\'s missing from it.', get: 'Settings that pay off across every project at once.', act: 'Apply the global fixes before the per-project ones.'},
     {el: '#dx-issues', t: 'Per-project fixes', see: 'One card per project that has open issues, each with the exact fix for that repo.', get: 'The work split by repo, so you can fix one and stop.', act: 'Fix your most expensive repo first; <b>Project cost</b> on the overview says which that is.'}],
   attribution: [
     {el: 'kpis', t: 'Who used the tokens', see: 'Tokens split by session, subagent, skill, MCP server and connector.', get: 'Which add-ons quietly cost the most context.', act: 'Compare main-agent tokens with subagent tokens.'},
@@ -4563,14 +4440,13 @@ const TOURS = {
     {el: 'card:Set your limits', t: 'Suggestions and shorthand', see: 'Chips under each amount suggest values from your own last 30 days and session sizes; amounts accept 20M, 500k or $3,000.', get: 'A sensible budget in one click, and a clear message when a value will not work.', act: 'Click a suggestion, adjust it, and Save.'},
     {el: 'card:Set your limits', t: 'Session guard', see: 'A token budget for each Claude Code session, warn percentages, what happens after you approve, per-project overrides, and the Live warnings box (optional).', get: 'A warning while a session grows, and a pause for your approval once it reaches its budget.', act: 'Set a budget, save, then, if you want live warnings, <b>Install</b> in the Live warnings box. It is optional. It applies to new sessions.'}],
   settings: [
-    {el: 'card:API keys', t: 'API keys', see: 'Optional keys for the Anthropic Admin API and Cursor.', get: 'The Billed vs local page, without the terminal.', act: 'Paste a key and press Save key. It is never shown again, only its last four characters.'}],
+    {el: 'card:API keys', t: 'API keys', see: 'An optional key for the Anthropic Admin API.', get: 'The Billed vs local page, without the terminal.', act: 'Paste a key and press Save key. It is never shown again, only its last four characters.'}],
   cloud: [
-    {el: 'kpis', t: 'Billed vs local', see: 'What the vendor billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
-    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Which provider keys were found, and how to get each one.', get: 'Org-wide Claude Code usage per user, and Cursor team spend.', act: 'Add a key on the Settings page, or run claude-finops --set-key.'},
+    {el: 'kpis', t: 'Billed vs local', see: 'What Anthropic billed the whole organisation next to what this machine recorded.', get: 'The gap: usage from other machines, other members, or work off this machine.', act: `Click <b>${I('cloudDown')} Refresh from APIs</b> to fetch — this is the only page that goes online.`},
+    {el: 'card:Set up the APIs', t: 'Set up the APIs', see: 'Whether an Anthropic Admin key was found, and how to get one.', get: 'Org-wide Claude Code usage per user.', act: 'Add a key on the Settings page, or run claude-finops --set-key.'},
     {el: 'card:Billed vs local', t: 'The comparison', see: 'Billed totals against local totals for the same period.', get: 'Proof of how much of the bill this machine explains.', act: 'A large gap means most spend happens elsewhere: check the user tables.'},
     {el: 'card:Claude Code users', t: 'Users org-wide', see: 'Each Claude Code user in the organisation and their usage.', get: 'Who drives the bill across the team.', act: 'Compare your own row with the team average.'},
-    {el: 'card:Cursor members', t: 'Cursor members', see: 'Cursor team members and their spend.', get: 'The same picture for Cursor seats.', act: 'Look for seats with no usage at all.'},
-    {el: 'card:Billed API cost by line item', t: 'Billed line items', see: 'The vendor\'s own line items for the period.', get: 'The invoice view, straight from the API.', act: 'Reconcile this with your finance numbers.'}],
+    {el: 'card:Billed API cost by line item', t: 'Billed line items', see: 'Anthropic\'s own line items for the period.', get: 'The invoice view, straight from the API.', act: 'Reconcile this with your finance numbers.'}],
   search: [
     {el: 'card:Prompts', t: 'Matching prompts', see: 'Every prompt whose text matches your search, with what it cost.', get: 'One term, and everything you ever asked about it.', act: 'Click a prompt to open it with its requests and files.'},
     {el: 'card:Sessions', t: 'Matching sessions', see: 'Sessions whose title or prompts match, with cost and size.', get: 'The whole working session around a match, not just the one line.', act: 'Click a session to see how it grew.'},

@@ -3,7 +3,7 @@
   "currency": "USD",
   "unit": "per_million_tokens",
   "updated": "2026-10-02",
-  "source": "Anthropic list prices (platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-28; Sonnet 5.5 added 2026-10-02); OpenAI (developers.openai.com/api/docs/pricing) and Google (ai.google.dev/gemini-api/docs/pricing) checked 2026-10-02",
+  "source": "Anthropic list prices (platform.claude.com/docs/en/about-claude/pricing, fetched 2026-09-28; Sonnet 5.5 added 2026-10-02)",
   "models": {
     "claude-opus-5": {
       "display_name": "Claude Opus 5",
@@ -237,149 +237,9 @@
       "cache_write_1h": 0.0,
       "cache_read": 0.0,
       "context_window": 0
-    },
-    "gpt-5.5": {
-      "display_name": "GPT-5.5 (Codex)",
-      "tier": "frontier",
-      "provider": "openai",
-      "input": 5.0,
-      "output": 30.0,
-      "cache_read": 0.5,
-      "cache_write_5m": 5.0,
-      "cache_write_1h": 5.0,
-      "context_window": 400000
-    },
-    "gpt-5.3-codex": {
-      "display_name": "GPT-5.3 Codex",
-      "tier": "balanced",
-      "provider": "openai",
-      "input": 1.75,
-      "output": 14.0,
-      "cache_read": 0.175,
-      "cache_write_5m": 1.75,
-      "cache_write_1h": 1.75,
-      "context_window": 400000
-    },
-    "gpt-5.2-codex": {
-      "display_name": "GPT-5.2 Codex",
-      "tier": "balanced",
-      "provider": "openai",
-      "input": 1.75,
-      "output": 14.0,
-      "cache_read": 0.175,
-      "cache_write_5m": 1.75,
-      "cache_write_1h": 1.75,
-      "context_window": 400000,
-      "_note": "Not on OpenAI's price list; priced as GPT-5.2"
-    },
-    "gpt-5.2": {
-      "display_name": "GPT-5.2",
-      "tier": "balanced",
-      "provider": "openai",
-      "input": 1.75,
-      "output": 14.0,
-      "cache_read": 0.175,
-      "cache_write_5m": 1.75,
-      "cache_write_1h": 1.75,
-      "context_window": 400000
-    },
-    "gpt-5.1": {
-      "display_name": "GPT-5.1",
-      "tier": "balanced",
-      "provider": "openai",
-      "input": 1.25,
-      "output": 10.0,
-      "cache_read": 0.125,
-      "cache_write_5m": 1.25,
-      "cache_write_1h": 1.25,
-      "context_window": 400000
-    },
-    "gpt-5": {
-      "display_name": "GPT-5",
-      "tier": "balanced",
-      "provider": "openai",
-      "input": 1.25,
-      "output": 10.0,
-      "cache_read": 0.125,
-      "cache_write_5m": 1.25,
-      "cache_write_1h": 1.25,
-      "context_window": 400000
-    },
-    "gpt-5-mini": {
-      "display_name": "GPT-5 mini",
-      "tier": "economy",
-      "provider": "openai",
-      "input": 0.25,
-      "output": 2.0,
-      "cache_read": 0.025,
-      "cache_write_5m": 0.25,
-      "cache_write_1h": 0.25,
-      "context_window": 400000
-    },
-    "gemini-2.5-flash": {
-      "display_name": "Gemini 2.5 Flash",
-      "tier": "economy",
-      "provider": "google",
-      "input": 0.3,
-      "output": 2.5,
-      "cache_read": 0.03,
-      "cache_write_5m": 0.3,
-      "cache_write_1h": 0.3,
-      "context_window": 1048576,
-      "_note": "Cache read: lower bound of Google's published range"
-    },
-    "gemini-2.5-pro": {
-      "display_name": "Gemini 2.5 Pro",
-      "tier": "frontier",
-      "provider": "google",
-      "input": 1.25,
-      "output": 10.0,
-      "cache_read": 0.125,
-      "cache_write_5m": 1.25,
-      "cache_write_1h": 1.25,
-      "context_window": 1048576,
-      "_note": "<=200K prompt; $2.50/$15 above"
-    },
-    "gemini-3.5-flash": {
-      "display_name": "Gemini 3.5 Flash",
-      "tier": "balanced",
-      "provider": "google",
-      "input": 1.5,
-      "output": 9.0,
-      "cache_read": 0.15,
-      "cache_write_5m": 1.5,
-      "cache_write_1h": 1.5,
-      "context_window": 1048576
-    },
-    "gemini-3.8-flash": {
-      "display_name": "Gemini 3.8 Flash",
-      "tier": "economy",
-      "provider": "google",
-      "input": 0.75,
-      "output": 3.75,
-      "cache_read": 0.075,
-      "cache_write_5m": 0.75,
-      "cache_write_1h": 0.75,
-      "context_window": 1048576,
-      "_note": "Promo price through 2026-12-31; $1.50/$7.50 after"
-    },
-    "cursor": {
-      "display_name": "Cursor (model not recorded)",
-      "tier": "none",
-      "provider": "cursor",
-      "input": 0,
-      "output": 0,
-      "cache_read": 0,
-      "cache_write_5m": 0,
-      "cache_write_1h": 0,
-      "_note": "Cursor bills by subscription and doesn't record the model locally: no cost is estimated"
     }
   },
   "aliases": {
     "claude-haiku-4-5": "claude-haiku-4-5-20251001"
-  },
-  "_sources": {
-    "openai": "https://developers.openai.com/api/docs/pricing (standard tier, 2026-09-18)",
-    "google": "https://ai.google.dev/gemini-api/docs/pricing (paid tier, 2026-09-18)"
   }
 }

@@ -272,8 +272,6 @@ class Analytics:
             cl.append("r.day >= ?"); p.append(f["start"])
         if f.get("end"):
             cl.append("r.day <= ?"); p.append(f["end"])
-        if f.get("agents"):
-            cl.append("r.agent IN (%s)" % ",".join("?" * len(f["agents"]))); p += f["agents"]
         if f.get("models"):
             cl.append("r.model IN (%s)" % ",".join("?" * len(f["models"]))); p += f["models"]
         if f.get("projects"):
@@ -368,8 +366,8 @@ class Analytics:
             p).get("n", 0)
         tot["tool_calls"] = self.one(
             f"SELECT COALESCE(SUM(r.tool_call_count),0) n FROM requests r WHERE {w}", p).get("n", 0)
-        # Requests with tokens but no price (an agent without price data, such as Cursor,
-        # or a model missing from pricing.json): they count, but at $0.
+        # Requests with tokens but no price (a model missing from pricing.json):
+        # they count, but at $0.
         tot["unpriced_requests"] = self.one(
             f"SELECT COUNT(*) n FROM requests r WHERE {w} AND r.est_cost_usd = 0 AND r.billable_tokens > 0",
             p).get("n", 0)
@@ -698,18 +696,12 @@ class Analytics:
             r["output_ratio"] = (r["output_tokens"] or 0) / r["tokens"] if r["tokens"] else 0
             cr, cw = r["cache_read_tokens"] or 0, r["cache_write_tokens"] or 0
             r["cache_hit_ratio"] = (cr / (cr + cw)) if (cr + cw) else None
-            r["budget_tokens"] = self.session_budget(r["agent"], r.pop("project_path"), r["session_id"])
+            r["budget_tokens"] = self.session_budget(r.pop("project_path"), r["session_id"])
             r["resume"] = resume_command(r["session_id"], r.pop("agent"), r.pop("source_file"))
         return rows
 
-    def session_budget(self, agent, project_path, session_id=None):
-        """The per-session token budget that applies to a session, or None.
-
-        Claude Code sessions only: the guard hook runs there, and other agents'
-        sessions are not what the budget was set for.
-        """
-        if agent != "claude":
-            return None
+    def session_budget(self, project_path, session_id=None):
+        """The per-session token budget that applies to a session, or None."""
         from .guard import budget_for
         return budget_for(self.settings.get("guard") or {}, project_path, session_id)
 
@@ -1243,8 +1235,7 @@ class Analytics:
           ORDER BY cost DESC LIMIT 20""", p + [thr])
         agg = self.one(f"SELECT AVG(r.context_tokens) a, MAX(r.context_tokens) m FROM requests r WHERE {w}", p)
         # Utilisation against each request's own model window, weighted by requests —
-        # not against the largest window anywhere in the price table (a Gemini window
-        # would set the scale for Claude-only usage).
+        # not against the largest window anywhere in the price table.
         num = den = 0.0
         wins = defaultdict(int)
         for v in self.q(f"""SELECT COALESCE(r.priced_as, r.model) m, COUNT(*) n, AVG(r.context_tokens) a
@@ -1807,8 +1798,8 @@ class Analytics:
             out["lines"].append(self._session_budget_line(f, bp, line))
         else:
             out["lines"].append(line("Per-session tokens", None, 0, None, unit="tokens"))
-        # Per-project and per-model lines follow the agent selection like every other line.
-        wa, pa = self.where({"agents": (f or {}).get("agents") or []})
+        # Per-project and per-model lines cover the whole budget period, not the date filter.
+        wa, pa = self.where({})
         for proj, bud in (b.get("per_project_usd") or {}).items():
             act = self.one(f"""SELECT COALESCE(SUM(r.est_cost_usd),0) c FROM requests r
                               JOIN projects pr ON pr.id=r.project_id
@@ -1865,7 +1856,7 @@ class Analytics:
                       p + [bp["start"], bp["end"]])
         scored = []
         for r in rows:
-            bud = self.session_budget("claude", r.pop("path"), r["session_id"])
+            bud = self.session_budget(r.pop("path"), r["session_id"])
             if bud:
                 r["budget"], r["pct"] = bud, round(100.0 * (r["tokens"] or 0) / bud, 1)
                 scored.append(r)
@@ -1892,8 +1883,8 @@ class Analytics:
         series = [d for d in self.daily_series(f, end=last_full.isoformat())]
         priced = [d for d in series if d["cost"] > 0]
         if len(priced) >= 14:
-            # Median/MAD, not mean/stdev: unpriced $0 days from agents without pricing
-            # data (e.g. Cursor) would otherwise pollute the mean/sd baseline and
+            # Median/MAD, not mean/stdev: unpriced $0 days (models without pricing
+            # data) would otherwise pollute the mean/sd baseline and
             # either mask real spikes or manufacture fake ones. MAD is scaled by
             # 1.4826 so it estimates the same thing a standard deviation would under
             # a normal distribution, without a few extreme days inflating it the way
@@ -1920,8 +1911,8 @@ class Analytics:
             # against — which understates how far out they really are. Candidates are
             # ranked by tokens too, since that is the metric being tested; ordering by
             # cost hid token-heavy work on cheap models.
-            # Sessions with no token data (Cursor transcripts don't always carry it)
-            # are not comparable and would drag the baseline down.
+            # Sessions with no token data are not comparable and would drag the
+            # baseline down.
             vals = [s["tokens"] for s in sess if (s["tokens"] or 0) > 0]
             mean = (statistics.median(vals) if vals else 0) or 1
             # Session sizes are heavy-tailed enough that any fixed multiple of the
@@ -2157,48 +2148,10 @@ class Analytics:
         }
 
     # ---------------- filter option lists ----------------
-    def agents(self):
-        """Every agent detected on this machine, with what its local data can show."""
-        from .agents import AGENTS, detect
-        found = detect()
-        used = {r["agent"]: r for r in self.q("""SELECT agent, COUNT(*) requests,
-            COUNT(DISTINCT session_id) sessions, SUM(billable_tokens) tokens,
-            SUM(est_cost_usd) cost, MIN(day) first, MAX(day) last FROM requests GROUP BY agent""")}
-        out = []
-        for k, a in AGENTS.items():
-            u = used.get(k) or {}
-            if not found.get(k) and not u:
-                continue
-            out.append({"id": k, "name": a["name"], "data": a["data"], "note": a["note"],
-                        "requests": u.get("requests") or 0, "sessions": u.get("sessions") or 0,
-                        "tokens": u.get("tokens") or 0, "cost": u.get("cost") or 0,
-                        "first": u.get("first"), "last": u.get("last")})
-        return out
-
-    def by_agent(self, f=None):
-        """Side-by-side totals per agent for the multi-agent view."""
-        f = dict(f or {})
-        w, p = self.where(f)
-        rows = self.q(f"""SELECT r.agent, COUNT(*) requests, COUNT(DISTINCT r.session_id) sessions,
-            COUNT(DISTINCT r.prompt_id) prompts, SUM(r.billable_tokens) tokens,
-            SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,
-            SUM(r.cache_read_tokens) cache_read_tokens, SUM(r.est_cost_usd) cost,
-            SUM(r.tool_call_count) tool_calls, COUNT(DISTINCT r.day) active_days,
-            GROUP_CONCAT(DISTINCT r.model) models
-            FROM requests r WHERE {w} GROUP BY r.agent ORDER BY cost DESC, requests DESC""", p)
-        daily = self.q(f"""SELECT r.day, r.agent, SUM(r.billable_tokens) tokens, SUM(r.est_cost_usd) cost,
-            COUNT(*) requests FROM requests r WHERE {w} GROUP BY 1, 2 ORDER BY 1""", p)
-        from .agents import AGENTS
-        for r in rows:
-            a = AGENTS.get(r["agent"], {})
-            r["name"], r["data"], r["note"] = a.get("name", r["agent"]), a.get("data"), a.get("note")
-        return {"agents": rows, "daily": daily, "basis": "estimated"}
-
     def options(self):
         return {
-            "agents": self.agents(),
-            "models": self.q("SELECT model, agent, COUNT(*) n FROM requests GROUP BY 1 ORDER BY 3 DESC"),
-            "projects": self.q("SELECT pr.id project_id, pr.name, pr.path, pr.is_sandbox, pr.agent, COUNT(r.id) n"
+            "models": self.q("SELECT model, COUNT(*) n FROM requests GROUP BY 1 ORDER BY 2 DESC"),
+            "projects": self.q("SELECT pr.id project_id, pr.name, pr.path, pr.is_sandbox, COUNT(r.id) n"
                                " FROM projects pr LEFT JOIN requests r ON r.project_id=pr.id"
                                " GROUP BY pr.id HAVING n>0 ORDER BY n DESC"),
             "categories": self.q("SELECT category, COUNT(*) n FROM prompts GROUP BY 1 ORDER BY 2 DESC"),

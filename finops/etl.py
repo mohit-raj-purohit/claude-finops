@@ -110,7 +110,7 @@ CREATE TABLE requests (
   tool_call_count INTEGER DEFAULT 0,
   is_sidechain INTEGER DEFAULT 0,
   agent_id TEXT, agent_type TEXT, agent_desc TEXT,  -- set for subagent requests
-  agent TEXT DEFAULT 'claude'                        -- claude / codex / gemini / cursor
+  agent TEXT DEFAULT 'claude'
 );
 
 CREATE TABLE tool_calls (
@@ -218,9 +218,8 @@ def keep_deleted_history():
 
 
 class Loader:
-    def __init__(self, db_path=DB_PATH, source=DEFAULT_SOURCE, pricing=None, other_agents=True,
+    def __init__(self, db_path=DB_PATH, source=DEFAULT_SOURCE, pricing=None,
                  desktop_roots=None, keep_from=None):
-        self.other_agents = other_agents
         # An explicit source means "load exactly this"; only the default also picks up
         # the desktop app's Cowork sessions (same JSONL format, different config dir).
         self.desktop_roots = (desktop_roots if desktop_roots is not None
@@ -294,12 +293,6 @@ class Loader:
             except Exception as exc:  # a corrupt transcript must not kill the load
                 print(f"  ! skipped {os.path.basename(fp)}: {exc}", file=sys.stderr)
         self.cowork = False
-        if self.other_agents:
-            from .agents import AgentLoader
-            counts = AgentLoader(self, log=lambda m: print(m, file=sys.stderr)).run()
-            if verbose and counts:
-                print("  other agents: " + ", ".join(f"{k} {v:,} requests" for k, v in counts.items()),
-                      file=sys.stderr)
         carried = 0
         if prev and keep_deleted_history() and os.path.exists(prev):
             self.db.commit()              # the fresh read is safe whatever happens next
@@ -647,8 +640,11 @@ class Loader:
             d.row_factory = sqlite3.Row
             cols = lambda db, t: [r[1] for r in d.execute(f"PRAGMA {db}.table_info({t})")]
             common = lambda t: [c for c in cols("main", t) if c in set(cols("old", t)) and c != "id"]
+            # Only Claude Code sessions: warehouses from before 0.17 also held Codex,
+            # Gemini CLI and Cursor rows, which are no longer read.
+            claude_only = " AND COALESCE(agent, 'claude') = 'claude'" if "agent" in cols("old", "sessions") else ""
             gone = [r for r in d.execute(
-                "SELECT * FROM old.sessions WHERE id NOT IN (SELECT id FROM main.sessions)")
+                "SELECT * FROM old.sessions WHERE id NOT IN (SELECT id FROM main.sessions)" + claude_only)
                 if r["source_file"] and not os.path.exists(r["source_file"])]
             if not gone:
                 return 0

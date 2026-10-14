@@ -138,10 +138,10 @@ class TestKeepDeletedHistory(unittest.TestCase):
         db = tempfile.mktemp(suffix=".db", prefix="finops-keep-")
         self.write(src, "a.jsonl", "sa", "req-a")
         gone = self.write(src, "b.jsonl", "sb", "req-b")
-        Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+        Loader(db_path=db, source=src).build(verbose=False)
         os.remove(gone)
         with mock.patch("finops.etl.keep_deleted_history", return_value=True):
-            Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+            Loader(db_path=db, source=src).build(verbose=False)
         con = sqlite3.connect(db)
         self.assertEqual(sorted(r[0] for r in con.execute("SELECT id FROM sessions")), ["a", "b"])
         self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 2)
@@ -154,10 +154,10 @@ class TestKeepDeletedHistory(unittest.TestCase):
         db = tempfile.mktemp(suffix=".db", prefix="finops-keep-")
         self.write(src, "a.jsonl", "sa", "req-a")
         gone = self.write(src, "b.jsonl", "sb", "req-b")
-        Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+        Loader(db_path=db, source=src).build(verbose=False)
         os.remove(gone)
         with mock.patch("finops.etl.keep_deleted_history", return_value=False):
-            Loader(db_path=db, source=src, other_agents=False).build(verbose=False)
+            Loader(db_path=db, source=src).build(verbose=False)
         con = sqlite3.connect(db)
         self.assertEqual([r[0] for r in con.execute("SELECT id FROM sessions")], ["a"])
 

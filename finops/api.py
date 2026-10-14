@@ -184,7 +184,7 @@ def filters_from(qs):
     f = {
         "start": _date("start"),
         "end": _date("end"),
-        "agents": lst("agents"), "models": lst("models"), "projects": projects,
+        "models": lst("models"), "projects": projects,
         "sessions": lst("sessions"), "categories": lst("categories"),
         "include_sandbox": qs.get("include_sandbox", ["1"])[0] != "0",
         "min_cost": _num("min_cost", float),
@@ -417,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
                 a = A
             qs = parse_qs(urlparse(self.path).query)
             f = filters_from(qs)
-            return self.send_json(X.compare(a, f["agents"] or None, f))
+            return self.send_json(X.compare(a, f))
         if parts == ["suggestions"]:
             with _lock:
                 a = A
@@ -448,13 +448,6 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         if len(parts) != 4 or not parts[2].isdigit():
             return self.send_json({"ok": False, "error": "bad request"}, 400)
-        agent = (self._payload or {}).get("agent") or "claude"
-        if agent != "claude":
-            from .procs import act_agent
-            if parts[3] in ("handover", "compact", "rename"):
-                return self.send_json({"ok": False,
-                                       "error": f"{parts[3].capitalize()} is only available for Claude Code."})
-            return self.send_json(act_agent(int(parts[2]), parts[3], agent))
         if parts[3] == "handover":
             from .procs import handover
             return self.send_json(handover(int(parts[2]), self._payload))
@@ -523,8 +516,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 o["guard_installed"] = False
             return self.send_json(o)
-        if route == "by_agent":
-            return self.send_json(a.by_agent(f))
         if route == "overview":
             return self.send_json(a.overview(f))
         if route == "burn":
@@ -588,14 +579,9 @@ class Handler(BaseHTTPRequestHandler):
             from .diagnose import Diagnoser
             return self.send_json(Diagnoser(a).breakdown(f))
         if route == "live":
-            from .procs import list_sessions, list_agent_sessions, ACTIONS
-            want = [x for x in (g("agents", "") or "").split(",") if x]
-            claude = [dict(s, agent="claude", signalable=True,
-                           resume=f"claude --resume {s.get('session_id')}")
-                      for s in list_sessions(a.pricing)] if not want or "claude" in want else []
-            others = list_agent_sessions(a.pricing, [x for x in want if x != "claude"] or None) \
-                if not want or any(x != "claude" for x in want) else []
-            rows = sorted(claude + others, key=lambda x: -(x.get("context") or 0))
+            from .procs import list_sessions, ACTIONS
+            rows = sorted((dict(s, resume=f"claude --resume {s.get('session_id')}")
+                           for s in list_sessions(a.pricing)), key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
         if route.startswith("session_prompts/"):
             from .procs import session_prompts

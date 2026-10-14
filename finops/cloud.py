@@ -1,4 +1,4 @@
-"""Billed numbers from the vendors' own APIs, next to what this machine recorded.
+"""Billed numbers from Anthropic's Admin API, next to what this machine recorded.
 
 Everything else in this dashboard reads local files. This module is the one part that
 talks to the internet, and only when you ask it to (the Refresh button / --cloud-sync).
@@ -8,18 +8,15 @@ API keys section on the Budgets page. Both write ~/.claude-finops/secrets.local.
 (0600, outside the install tree, never packaged); the dashboard never sends a stored
 key back to the browser, only whether it is set and its last four characters:
 
-    {"anthropic_admin_key": "sk-ant-admin...", "cursor_api_key": "key_..."}
+    {"anthropic_admin_key": "sk-ant-admin..."}
 
   Anthropic  Admin API key from Console → Settings → Admin keys. Org accounts only;
              individual accounts have no Admin API.
              /v1/organizations/usage_report/claude_code   per user per day, incl. Pro/Max
              /v1/organizations/cost_report                billed USD (API spend only)
-  Cursor     Team/Org admin key from Cursor dashboard → Settings → Admin API.
-             POST /teams/daily-usage-data, /teams/spend, GET /teams/members
 
 Responses are cached in ~/.claude-finops/data/cloud_cache.json so the dashboard never calls out on its own.
 """
-import base64
 import json
 import os
 import time
@@ -39,12 +36,6 @@ PROVIDERS = {
                "Requires an organization; individual accounts have no Admin API.",
         "covers": "Per-user Claude Code sessions, tokens and estimated cost (including Pro/Max "
                   "subscription users), plus billed API cost for the org.",
-    },
-    "cursor": {
-        "name": "Cursor", "agent": "cursor", "env": "CURSOR_API_KEY", "field": "cursor_api_key",
-        "how": "Cursor dashboard → Settings → Admin API → create a key. Team/Business plans only; "
-               "an individual Pro account has no admin API.",
-        "covers": "Per-member daily activity and billed spend for the team.",
     },
 }
 
@@ -70,7 +61,6 @@ def configured():
 KEY_SHAPES = {
     "anthropic": (lambda v: v.startswith("sk-ant-admin"),
                   "An Anthropic Admin key starts with sk-ant-admin (a regular API key will not work)."),
-    "cursor": (lambda v: len(v) >= 16, "That looks too short for a Cursor Admin API key."),
 }
 
 
@@ -198,63 +188,6 @@ def anthropic_cost(key, days=30):
     return out
 
 
-# --------------------------------------------------------------------- Cursor ----
-def _cursor_headers(key):
-    tok = base64.b64encode(f"{key}:".encode()).decode()      # basic auth, key as username
-    return {"Authorization": f"Basic {tok}", "Content-Type": "application/json"}
-
-
-def _cursor_post(key, path, body):
-    try:
-        return _get(f"https://api.cursor.com{path}", _cursor_headers(key),
-                    data=json.dumps(body).encode(), method="POST")
-    except RuntimeError as e:
-        if "401" in str(e):                    # the key is fine; the account just isn't a team
-            raise RuntimeError(
-                "Cursor rejected the key for team endpoints (401 Invalid Team API Key). The key "
-                "itself is valid, but /teams/* answers only for Team/Enterprise accounts — an "
-                "individual account has no team data to report. Cursor stays local-only.") from None
-        raise
-
-
-def cursor_usage(key, days=30):
-    """Daily per-member activity. The API allows at most 30 days per call."""
-    end = int(time.time() * 1000)
-    start = end - min(days, 30) * 86400000
-    out, page = [], 1
-    while True:
-        d = _cursor_post(key, "/teams/daily-usage-data",
-                         {"startDate": start, "endDate": end, "page": page, "pageSize": 1000})
-        rows = d.get("data") or []
-        for r in rows:
-            ts = r.get("date")
-            day = datetime.fromtimestamp(int(ts) / 1000, timezone.utc).date().isoformat() \
-                if ts else None
-            out.append({"day": day, "member": r.get("email") or r.get("userId") or "unknown",
-                        "is_active": r.get("isActive"),
-                        "lines_added": r.get("totalLinesAdded") or 0,
-                        "lines_removed": r.get("totalLinesDeleted") or 0,
-                        "accepted": r.get("acceptedLinesAdded") or 0,
-                        "requests": r.get("composerRequests") or r.get("totalApplies") or 0,
-                        "model": r.get("mostUsedModel")})
-        if len(rows) < 1000 or page > 20:
-            break
-        page += 1
-    return out
-
-
-def cursor_spend(key):
-    d = _cursor_post(key, "/teams/spend", {"page": 1, "pageSize": 500})
-    out = []
-    for r in d.get("teamMemberSpend") or d.get("data") or []:
-        cents = r.get("spendCents")
-        out.append({"member": r.get("email") or r.get("name") or "unknown",
-                    "spend_usd": (float(cents) / 100.0) if cents is not None else None,
-                    "requests": r.get("fastPremiumRequests") or r.get("requests"),
-                    "role": r.get("role")})
-    return out
-
-
 # ---------------------------------------------------------------------- cache ----
 def load_cache():
     try:
@@ -281,18 +214,6 @@ def sync(days=30, log=print):
             cache["anthropic_cost"] = anthropic_cost(k, days)
         except RuntimeError as e:
             errors["anthropic_cost"] = str(e)
-    k = key_for("cursor")
-    if k:
-        log("Cursor: daily usage…")
-        try:
-            cache["cursor_usage"] = cursor_usage(k, days)
-        except RuntimeError as e:
-            errors["cursor_usage"] = str(e)
-        log("Cursor: spend…")
-        try:
-            cache["cursor_spend"] = cursor_spend(k)
-        except RuntimeError as e:
-            errors["cursor_spend"] = str(e)
     cache["errors"] = errors
     cache["fetched_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
@@ -302,20 +223,18 @@ def sync(days=30, log=print):
 
 
 def report(analytics, days=30):
-    """Billed (vendor API) next to local (this machine), per agent and per day."""
+    """Billed (Anthropic API) next to local (this machine), per day and per user."""
     c = load_cache()
     cc = c.get("anthropic_claude_code") or []
     cost = c.get("anthropic_cost") or []
-    cu = c.get("cursor_usage") or []
-    cs = c.get("cursor_spend") or []
     since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
-    # The vendor APIs report UTC days, so this page compares on UTC days too (every
+    # The Anthropic API reports UTC days, so this page compares on UTC days too (every
     # other page uses your local calendar days); otherwise a late-evening session would
     # sit on different dates on the two sides.
-    local = {r["agent"]: r for r in analytics.q(
-        "SELECT agent, SUM(est_cost_usd) cost, SUM(billable_tokens) tokens,"
+    claude_local = analytics.one(
+        "SELECT SUM(est_cost_usd) cost, SUM(billable_tokens) tokens,"
         " COUNT(DISTINCT session_id) sessions, COUNT(*) requests"
-        " FROM requests WHERE substr(ts,1,10) >= ? GROUP BY agent", (since,))}
+        " FROM requests WHERE agent='claude' AND substr(ts,1,10) >= ?", (since,))
 
     by_day = {}
     for r in cc:
@@ -346,19 +265,6 @@ def report(analytics, days=30):
     for u in users.values():
         u["terminals"] = sorted(u["terminals"])
 
-    cur = {}
-    for r in cu:
-        m = cur.setdefault(r["member"], {"member": r["member"], "days": 0, "lines_added": 0,
-                                         "lines_removed": 0, "accepted": 0, "requests": 0})
-        m["days"] += 1 if r.get("is_active") is not False else 0
-        for k2 in ("lines_added", "lines_removed", "accepted", "requests"):
-            m[k2] += r.get(k2) or 0
-    spend = {s["member"]: s for s in cs}
-    for m in cur.values():
-        m["spend_usd"] = (spend.get(m["member"]) or {}).get("spend_usd")
-
-    claude_local = local.get("claude") or {}
-    cursor_local = local.get("cursor") or {}
     return {
         "configured": configured(), "providers": PROVIDERS,
         "fetched_at": c.get("fetched_at"), "errors": c.get("errors") or {},
@@ -369,20 +275,17 @@ def report(analytics, days=30):
             "local_claude_cost": claude_local.get("cost") or 0.0,
             "local_claude_tokens": claude_local.get("tokens") or 0,
             "billed_api_cost": sum(r["cost_usd"] for r in cost),
-            "cursor_spend": sum(s["spend_usd"] or 0 for s in cs) if cs else None,
-            "local_cursor_requests": cursor_local.get("requests") or 0,
-            "org_users": len(users), "cursor_members": len(cur),
+            "org_users": len(users),
         },
         "by_day": sorted(by_day.values(), key=lambda x: x["day"]),
         "users": sorted(users.values(), key=lambda x: -x["cost"]),
-        "cursor_members": sorted(cur.values(), key=lambda x: -(x["spend_usd"] or 0)),
         "api_cost_by_description": sorted(
             [{"description": k2, "cost_usd": v} for k2, v in
              {r["description"]: sum(x["cost_usd"] for x in cost if x["description"] == r["description"])
               for r in cost}.items()], key=lambda x: -x["cost_usd"])[:20],
-        "note": "Billed figures come from the vendor APIs (org-wide, every machine and member). "
+        "note": "Billed figures come from the Anthropic Admin API (org-wide, every machine and member). "
                 "Local figures are what this machine's transcripts recorded. A gap usually means "
                 "other machines, other members, or work outside this machine. Days on this "
-                "page are UTC days, as the vendors report them.",
+                "page are UTC days, as Anthropic reports them.",
         "basis": "billed",
     }

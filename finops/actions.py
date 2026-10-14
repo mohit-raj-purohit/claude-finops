@@ -440,9 +440,7 @@ def _slug(s):
 def suggestions(a, f=None):
     """Skills and MCP servers worth adding, from recurring work (actual transcripts).
 
-    Only Claude Code's own prompts and commands count (these are Claude Code skills and
-    MCP servers; another agent's templated prompts would suggest things Claude never
-    repeats), within the date range when one is given. Scanning is cached per range on
+    Claude Code's own prompts and commands count, within the date range when one is given. Scanning is cached per range on
     the warehouse (reset by sync); installed-state is re-checked on every call.
     """
     f = f or {}
@@ -648,36 +646,32 @@ def free_model_test(log, mid):
     return {"ok": True, "command": m["command"]}
 
 
-def compare(a, agents=None, f=None):
-    """Each selected agent's priced models (with your usage) side by side; free models too
-    when Claude Code is selected, since they plug into Claude Code."""
+def compare(a, f=None):
+    """Claude models (with your usage) side by side with the free models that plug into
+    Claude Code."""
     with open(os.path.join(ROOT, "config", "model_compare.json")) as fh:
         ratings = json.load(fh)["ratings"]
-    agents = agents or ["claude"]
-    prov = {"claude": "anthropic", "codex": "openai", "gemini": "google"}
-    want = {prov[x] for x in agents if x in prov}
-    where = {"anthropic": "Anthropic cloud", "openai": "OpenAI cloud", "google": "Google cloud"}
-    w, wp = a.where(dict(f or {}, agents=agents))
+    w, wp = a.where(f or {})
     used = {r["model"]: r for r in a.q(f"""SELECT r.model, COUNT(*) requests, SUM(r.est_cost_usd) cost,
                                            SUM(r.billable_tokens) tokens FROM requests r
                                            WHERE {w} GROUP BY r.model""", wp)}
     rows = []
     for mid, p in a.pricing.models.items():
-        pv = p.get("provider", "anthropic")
-        if p.get("tier") in (None, "none", "other") or pv not in want or mid.endswith("[1m]"):
+        if p.get("tier") in (None, "none", "other") or p.get("provider", "anthropic") != "anthropic" \
+                or mid.endswith("[1m]"):
             continue
         u = used.get(mid) or {}
         # An unrated Claude model still belongs in the table when you used it; unused
         # unrated ones (old ids kept for pricing history) would only add noise.
-        if pv == "anthropic" and mid not in ratings and not u:
+        if mid not in ratings and not u:
             continue
         rt = ratings.get(mid) or {"tools": None, "reasoning": None, "multifile": None,
                                   "speed": "—", "best_for": p.get("tier", "").capitalize() + " tier"}
-        rows.append({"id": mid, "name": p.get("display_name", mid), "kind": "claude" if pv == "anthropic" else pv,
-                     "where": where.get(pv, pv), "price_in": p.get("input"), "price_out": p.get("output"),
+        rows.append({"id": mid, "name": p.get("display_name", mid), "kind": "claude",
+                     "where": "Anthropic cloud", "price_in": p.get("input"), "price_out": p.get("output"),
                      "context": p.get("context_window"), "requests": u.get("requests") or 0,
                      "cost": u.get("cost") or 0, "tokens": u.get("tokens") or 0, "tier": p.get("tier"), **rt})
-    fm = free_models() if "claude" in agents else {"models": [], "os": None}
+    fm = free_models()
     for m in fm["models"]:
         if m["id"] not in ratings:
             continue
@@ -691,7 +685,6 @@ def compare(a, agents=None, f=None):
                        -rank.get(r.get("tier"), 3))
     rows.sort(key=lambda r: score(r), reverse=True)
     return {"rows": rows, "os": fm["os"], "ram_gb": fm["models"][0]["ram_gb"] if fm["models"] else None,
-            "agents": agents,
             "note": "Ratings are judgement, not benchmarks; edit config/model_compare.json. "
                     "Models you used that have no rating show — until you add them there. Tool use matters most: coding "
                     "agents work by calling tools, and weak tool use means loops, broken edits "

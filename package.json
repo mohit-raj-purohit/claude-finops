@@ -33,10 +33,7 @@
     "dashboard",
     "finops",
     "analytics",
-    "cli",
-    "codex",
-    "gemini-cli",
-    "cursor"
+    "cli"
   ],
   "license": "MIT",
   "private": false,
