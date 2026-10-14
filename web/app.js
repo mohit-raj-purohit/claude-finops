@@ -237,6 +237,7 @@ const IP = {
   terminal: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M12 15h6"/>',
   message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   sortDesc: '<path d="M11 5h10M11 9h7M11 13h4M3 17l3 3 3-3M6 18V4"/>',
+  sortAsc: '<path d="M11 5h4M11 9h7M11 13h10M3 7l3-3 3 3M6 6v14"/>',
   tag: '<path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
   code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
   scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="11.5" cy="11.5" r="3.5"/><path d="m17 17-3-3"/>',
@@ -319,12 +320,7 @@ function shell() {
   themeLabel();
   $('#refresh').onclick = () => { bust(); render(); };
   maskLabel();
-  $('#mask').onclick = () => {
-    MASKED = !MASKED;
-    try { localStorage.setItem(MASK_KEY, MASKED ? '1' : '0'); } catch (_) {}
-    maskLabel(); closeDrawer(); render();
-    if (RECENT.open) { RECENT.offset = 0; renderRecent(); }
-  };
+  $('#mask').onclick = () => toggleMask();
   $('#recent-btn').onclick = () => toggleRecent();
   updateChip();
   $('#sync').onclick = runSync;
@@ -396,6 +392,17 @@ async function scopeStrip() {
     cell('Active days', fmtInt(o.active_days));
 }
 
+// From a drawer, the drawer is drawn again in the new state instead of being closed.
+function toggleMask(fromDrawer) {
+  MASKED = !MASKED;
+  try { localStorage.setItem(MASK_KEY, MASKED ? '1' : '0'); } catch (_) {}
+  const dr = fromDrawer && S.drawerRoute;
+  maskLabel();
+  if (!dr) closeDrawer();
+  render();
+  if (RECENT.open) { RECENT.offset = 0; renderRecent(); }
+  if (dr) openDrawerRoute(dr);
+}
 function maskLabel() {
   const b = $('#mask');
   // The icon shows the current state: an open eye while prompts are visible.
@@ -555,10 +562,14 @@ function drawer(title, bodyHtml, sub) {
   const d = h(`<aside class="drawer"><header>
       <h2>${esc(title)}</h2>${sub ? `<span class="crumbs">${sub}</span>` : ''}
       <span class="spacer"></span>
+      <button class="iconbtn" data-mask aria-pressed="${MASKED}"
+        title="${MASKED ? 'Prompt text is hidden. Click to show it' : 'Hide prompt text and session titles'}"
+        >${I(MASKED ? 'eyeOff' : 'eye')} ${MASKED ? 'Show prompts' : 'Hide prompts'}</button>
       <button class="iconbtn" data-x>Close ${I('x')}</button></header>
     <div class="content">${bodyHtml}</div></aside>`);
   scrim.onclick = closeDrawer;
   d.querySelector('[data-x]').onclick = closeDrawer;
+  d.querySelector('[data-mask]').onclick = () => toggleMask(true);
   document.body.append(scrim, d);
   return d;
 }
@@ -2119,6 +2130,9 @@ VIEWS.live = async (page) => {
   const canInterrupt = liveActions.includes('interrupt');
   const busy = list.filter(x => x.status === 'busy');
   const sevOf = x => x.severity === 'high' ? 'high' : x.severity === 'medium' ? 'medium' : 'low';
+  // Idle, but used in the last 50 minutes: probably still in use, so closing it asks louder.
+  const RECENT_S = 50 * 60;
+  const recentlyUsed = x => x.status !== 'busy' && x.last_write_s != null && x.last_write_s < RECENT_S;
   page.innerHTML = `
     ${usage0 ? card('Plan usage right now', `<div id="live-usage">${usageBody(usage0)}</div>`,
       {badge: BADGE.actual, hint: 'Claude Code\'s own /usage: plan limits, not cost. Costs no tokens.',
@@ -2136,10 +2150,18 @@ VIEWS.live = async (page) => {
       <b>Close</b> exits the session cleanly; copy its resume command to bring it back.
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
       <span class="spacer"></span><button class="btn pb-copy" id="live-refresh">${I('reload')} Refresh</button></div>
+    ${list.some(x => x.signalable) ? `<div class="live-bulk">
+      <label><input type="checkbox" id="live-all"> Select all idle</label>
+      <button class="act warn" id="live-close-sel" disabled>${I('stop')} Close selected</button>
+      <span class="note">Sessions that are working are never closed in bulk.</span>
+      <span class="live-msg" id="live-bulk-msg" role="status"></span></div>` : ''}
     <div class="stack">${list.map((x, i) => `
-      <div class="item sev-${sevOf(x)}" data-i="${i}">
-        <div class="hd">${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
+      <div class="item sev-${sevOf(x)}${x.status === 'busy' ? ' working' : ''}" data-i="${i}">
+        <div class="hd">${x.signalable ? `<input type="checkbox" class="live-pick" aria-label="Select for bulk close"${x.status === 'busy'
+            ? ' disabled title="Working now: bulk close skips it"' : ''}>` : ''}
+          ${x.status === 'busy' ? '<span class="live-dot"></span>' : '<span class="idle-dot"></span>'}
           <span class="sname">${esc((!MASKED && x.name) || shortId(x.session_id))}</span> <span class="note">· ${esc(x.project)}${x.pid ? ` · pid ${x.pid}` : ''}${x.model ? ` · ${esc(x.model)}` : ''}</span>
+          ${x.status === 'busy' ? '<span class="status healthy">Working now</span>' : ''}
           ${x.hosts_dashboard ? '<span class="status high">runs this dashboard</span>' : ''}
           ${limitBadge(x.session_id)}
           <span class="spacer"></span>
@@ -2186,6 +2208,54 @@ VIEWS.live = async (page) => {
           </div></div>` : ''}
       </div>`).join('') || '<div class="empty">No Claude Code sessions are running</div>'}</div>`;
   $('#live-refresh', page).onclick = () => render();
+  const all = $('#live-all', page), closeSel = $('#live-close-sel', page), bulkMsg = $('#live-bulk-msg', page);
+  if (all) {
+    const picks = () => [...page.querySelectorAll('.live-pick')];
+    const chosen = () => picks().filter(c => c.checked && !c.disabled).map(c => list[+c.closest('.item').dataset.i]);
+    const sync = () => {
+      const n = chosen().length, open = picks().filter(c => !c.disabled);
+      closeSel.disabled = !n;
+      closeSel.classList.remove('armed');
+      closeSel.innerHTML = `${I('stop')} Close selected${n ? ` (${n})` : ''}`;
+      all.checked = open.length > 0 && open.every(c => c.checked);
+      all.indeterminate = n > 0 && !all.checked;
+    };
+    all.onchange = () => { picks().forEach(c => { if (!c.disabled) c.checked = all.checked; }); sync(); };
+    picks().forEach(c => c.onchange = sync);
+    closeSel.onclick = async () => {
+      const sel = chosen();
+      if (!sel.length) return;
+      if (!closeSel.classList.contains('armed')) {   // two clicks, like each row's Close
+        const recent = sel.filter(recentlyUsed).length;
+        closeSel.classList.add('armed');
+        closeSel.textContent = `Click again to close ${sel.length} session${sel.length > 1 ? 's' : ''}` + (recent
+          ? `. ${recent} of them ${recent > 1 ? 'were' : 'was'} used in the last 50 min, maybe still in use` : '');
+        setTimeout(() => { if (closeSel.classList.contains('armed')) sync(); }, recent ? 6000 : 4000);
+        return;
+      }
+      closeSel.classList.remove('armed'); closeSel.disabled = true; closeSel.textContent = 'Closing…';
+      // Status is read again right before closing: a session that started working since the
+      // page was drawn is skipped, not stopped mid-task.
+      let now = [];
+      try { now = (await fetch('/api/live').then(r => r.json())).sessions || []; } catch {}
+      const status = new Map(now.map(s => [s.pid, s.status]));
+      let closed = 0, skipped = 0;
+      const failed = [];
+      for (const x of sel) {
+        if (!status.has(x.pid)) continue;                       // already gone
+        if (status.get(x.pid) === 'busy') { skipped++; continue; }
+        try {
+          const r = await sessionAction(x.pid, 'close');
+          if (r.ok) closed++; else failed.push(`${(!MASKED && x.name) || shortId(x.session_id)}: ${r.error}`);
+        } catch (e) { failed.push(e.message); }
+      }
+      bulkMsg.className = 'live-msg ' + (failed.length ? 'err' : 'ok');
+      bulkMsg.textContent = [`Closed ${closed}.`, skipped ? `Skipped ${skipped} that started working.` : '',
+        failed.length ? `Failed: ${failed.join('; ')}` : ''].filter(Boolean).join(' ');
+      setTimeout(() => render(), failed.length ? 4000 : 1500);
+    };
+    sync();
+  }
   const ub = $('#usage-refresh', page);
   if (ub) ub.onclick = async () => {
     ub.disabled = true; ub.textContent = 'Reading…';
@@ -2255,9 +2325,15 @@ VIEWS.live = async (page) => {
         if (!b.classList.contains('armed')) {
           row.querySelectorAll('button.armed').forEach(o => { o.classList.remove('armed'); o.textContent = o.dataset.label; });
           b.dataset.label = label; b.classList.add('armed');
+          const stopping = ['close', 'kill'].includes(b.dataset.a);
+          const loud = stopping && (x.status === 'busy' || recentlyUsed(x));
           b.textContent = x.hosts_dashboard && !['interrupt', 'compact'].includes(b.dataset.a)
-            ? 'Sure? This is the session that launched the dashboard (the dashboard keeps running)' : `Click again to ${b.dataset.a}`;
-          setTimeout(() => { if (b.classList.contains('armed')) { b.classList.remove('armed'); b.textContent = label; } }, 4000);
+            ? 'Sure? This is the session that launched the dashboard (the dashboard keeps running)'
+            : stopping && x.status === 'busy' ? 'It is working right now. Click again to stop it mid-task'
+            : loud ? `Used ${dur(x.last_write_s)} ago, maybe still in use. Click again to ${b.dataset.a} anyway`
+            : `Click again to ${b.dataset.a}`;
+          setTimeout(() => { if (b.classList.contains('armed')) { b.classList.remove('armed'); b.textContent = label; } },
+            loud ? 6000 : 4000);
           return;
         }
         b.classList.remove('armed'); b.disabled = true; b.textContent = 'Working…';
@@ -3562,7 +3638,11 @@ async function render() {
    Past sessions and their prompts from any page, without leaving it. Resume and
    stop act on sessions, so the list is grouped by session; running ones sit on
    top. Close and Force kill stay on Running sessions, one click away from here. */
-const RECENT = {open: false, offset: 0, limit: 30, q: '', open_ids: new Set()};
+// The header sort button orders past sessions: last used on top, or (oldest) at the bottom.
+// Running sessions always stay on top.
+// A session's prompts list newest first; its sort button flips that session to oldest first.
+const RECENT = {open: false, offset: 0, limit: 30, q: '', open_ids: new Set(), oldest: false, oldest_ids: new Set()};
+const oldestFirst = sid => RECENT.oldest_ids.has(sid);
 // Recent means all time: keep project filters, drop the date range and thresholds.
 const recentQs = () => { const p = new URLSearchParams(qs());
   ['start', 'end', 'min_cost', 'min_tokens'].forEach(k => p.delete(k)); return p.toString(); };
@@ -3578,12 +3658,25 @@ function toggleRecent(force) {
   const scrim = h('<div class="recent-scrim"></div>');
   const p = h(`<aside class="recent" aria-label="Recent sessions"><header>
       <h2>Recent</h2><span class="note">all time · project filters apply</span>
-      <span class="spacer"></span><button class="iconbtn" data-x>Close ${I('x')}</button></header>
+      <span class="spacer"></span>
+      <button class="iconbtn sq" data-sort-all aria-label="Session order"></button>
+      <button class="iconbtn" data-x>Close ${I('x')}</button></header>
     <div class="recent-search"><span class="mag">${I('search')}</span>
       <input id="recent-q" placeholder="Search your prompts…" value="${esc(RECENT.q)}"></div>
     <div class="content"><div class="loading">Loading…</div></div></aside>`);
   scrim.onclick = () => toggleRecent(false);
   p.querySelector('[data-x]').onclick = () => toggleRecent(false);
+  const sortAll = p.querySelector('[data-sort-all]');
+  const sortAllLabel = () => {
+    sortAll.innerHTML = I(RECENT.oldest ? 'sortAsc' : 'sortDesc');
+    sortAll.title = RECENT.oldest ? 'Sessions: last used at the bottom. Click to put it on top'
+      : 'Sessions: last used on top. Click to put it at the bottom';
+  };
+  sortAllLabel();
+  sortAll.onclick = () => {
+    RECENT.oldest = !RECENT.oldest; sortAllLabel();
+    RECENT.offset = 0; renderRecent();
+  };
   let t;
   p.querySelector('#recent-q').oninput = e => { clearTimeout(t);
     t = setTimeout(() => { RECENT.q = e.target.value.trim(); RECENT.offset = 0; renderRecent(); }, 260); };
@@ -3601,11 +3694,13 @@ async function renderRecent() {
       .then(r => r.json()).catch(() => ({sessions: []})),
     RECENT.q
       ? fetch(`/api/prompts?${recentQs()}&order=recent&limit=${RECENT.limit}&offset=${RECENT.offset}&q=${encodeURIComponent(RECENT.q)}`).then(r => r.json())
-      : fetch(`/api/sessions?${recentQs()}&order=recent&limit=${RECENT.limit}&offset=${RECENT.offset}`).then(r => r.json())]);
+      : fetch(`/api/sessions?${recentQs()}&order=${RECENT.oldest ? 'last_active_asc' : 'last_active'}&limit=${RECENT.limit}&offset=${RECENT.offset}`).then(r => r.json())]);
   if (!$('.recent')) return;   // closed while loading
   const rows = res.rows || [];
   const liveIds = new Set(((live || {}).sessions || RECENT.live || []).map(x => x.session_id));
-  if (live) RECENT.live = live.sessions || [];
+  // Working sessions first, then the one written to most recently.
+  if (live) RECENT.live = (live.sessions || []).slice().sort((a, b) =>
+    (b.status === 'busy') - (a.status === 'busy') || (a.last_write_s ?? 1e12) - (b.last_write_s ?? 1e12));
   const html = RECENT.q ? recentPrompts(rows) : recentSessions(rows, liveIds);
   const shown = RECENT.offset + rows.length;
   const moreBtn = shown < (res.total || 0)
@@ -3640,13 +3735,18 @@ const recentSessions = (rows, liveIds) => rows.map(r => `
       <span class="recent-title">${esc(stitle(r))}</span><span class="spacer"></span>
       <span class="note">${fmtUSD(r.cost)}</span></div>
     <div class="mt"><span>${esc(r.project || '')}</span><span>${fmtInt(r.prompts)} prompts</span>
-      <span>${fmtWhen(r.started_at)}</span></div>
+      <span title="Last prompt">${fmtWhen(r.last_ts || r.started_at)}</span></div>
     <div class="live-actions">
       ${r.resume ? `<button class="act ghost" data-resume="${esc(r.resume)}" title="Copy: ${esc(r.resume)}">${I('copy')} Resume</button>` : ''}
       <button class="act ghost" data-open-sess="${esc(r.session_id)}">Details</button>
-      <span class="spacer"></span><span class="note recent-caret">${I(RECENT.open_ids.has(r.session_id) ? 'chevDown' : 'chevRight')} prompts</span></div>
+      <span class="spacer"></span>${sortBtn(r.session_id)}<span class="note recent-caret">${I(RECENT.open_ids.has(r.session_id) ? 'chevDown' : 'chevRight')} prompts</span></div>
     <div class="recent-prompts"${RECENT.open_ids.has(r.session_id) ? '' : ' hidden'}></div></div>`).join('')
   || '<div class="empty">No sessions for these filters</div>';
+
+const sortBtn = sid => { const old = oldestFirst(sid);
+  return `<button class="act ghost recent-sort" data-sort title="${old
+    ? 'Prompts: oldest first. Click for newest first' : 'Prompts: newest first. Click for oldest first'}"
+    aria-label="Prompt order">${I(old ? 'sortAsc' : 'sortDesc')}</button>`; };
 
 const promptLine = x => `<a href="#" class="recent-p" data-prompt="${x.prompt_id}" title="${esc(pt(x.preview))}">
   <span class="mono sub">${esc((x.ts || '').slice(5, 16).replace('T', ' '))}</span>
@@ -3663,7 +3763,8 @@ async function loadSessionPrompts(host, sid) {
   host.innerHTML = '<div class="note">Loading…</div>';
   try {
     const s = await fetch(`/api/session/${encodeURIComponent(sid)}`).then(r => r.json());
-    const ps = s.prompts || [];
+    const ps = s.prompts || [];   // oldest first from the API
+    if (!oldestFirst(sid)) ps.reverse();
     host.innerHTML = ps.length ? ps.map(promptLine).join('') : '<div class="note">No prompts recorded</div>';
     wireRecent(host);
   } catch (e) { host.innerHTML = `<div class="live-msg err">${esc(e.message)}</div>`; }
@@ -3682,6 +3783,15 @@ function wireRecent(root) {
   root.querySelectorAll('.item[data-sess]').forEach(it => {
     const host = it.querySelector('.recent-prompts'), sid = it.dataset.sess;
     if (!host.hidden && !host.childElementCount) loadSessionPrompts(host, sid);
+    const sb = it.querySelector('[data-sort]');
+    sb.onclick = e => {
+      e.stopPropagation();
+      RECENT.oldest_ids.has(sid) ? RECENT.oldest_ids.delete(sid) : RECENT.oldest_ids.add(sid);
+      const t = h(sortBtn(sid));
+      sb.innerHTML = t.innerHTML; sb.title = t.title;
+      if (host.hidden) it.click();   // sorting a closed list opens it
+      else loadSessionPrompts(host, sid);
+    };
     it.onclick = e => {
       if (e.target.closest('button, a, .recent-prompts')) return;
       host.hidden = !host.hidden;

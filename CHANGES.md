@@ -2,11 +2,26 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
-## 0.17.1 — Running session buttons are back
+## 0.17.1 — Running session buttons are back, close several at once
 
 **Fixed.** In 0.17.0, every running session said "No matching process found" and lost its
 Interrupt, Compact, Close session, Force kill and Rename buttons. Removing the other agents
 also removed the flag that marks a Claude Code session as reachable. It is back, with a test.
+
+**Close several sessions at once.** On Running sessions, tick the idle ones (or Select all idle)
+and use **Close selected**. Sessions that are working are never closed this way, and one that
+starts working before you confirm is skipped.
+
+**Fewer accidental closes.** A working session is outlined and marked "Working now". Closing it,
+or a session used in the last 50 minutes, says so before the second click.
+
+**Recent, in the order you used things.** Running sessions list working ones first. Past sessions
+are sorted by their last prompt, not their start, and show that time. A session's prompts list
+newest first, and the sort button on each session flips it. The sort button at the top puts the
+last-used past session on top or at the bottom; running sessions always stay on top.
+
+**Hide prompts in the side panel.** The side panel has its own Show/Hide prompts button, and using
+it keeps the panel open.
 
 **README brought up to date.** It no longer mentions the removed model-switch analysis or
 provider keys other than Anthropic's, and it describes how unlisted models are priced, the

@@ -488,6 +488,10 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .live-msg { font-size: 11.5px; }
 .live-msg.ok { color: var(--good-ink); } .live-msg.err { color: var(--critical-ink); }
 .item.gone { opacity: .45; }
+.item.working { outline: 2px solid var(--good); outline-offset: -1px; }
+.live-pick { margin: 0; cursor: pointer; }
+.live-bulk { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 4px 0 8px; }
+.live-bulk label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; cursor: pointer; }
 
 /* An explicit display beats the hidden attribute, so the panel has to opt back
    out or it is permanently open. */
@@ -574,7 +578,9 @@ table.tbl .sub { font-size:10.5px; color:var(--muted); }
 .recent > header { padding:13px 16px; background:var(--surface); border-bottom:1px solid var(--border);
           display:flex; align-items:center; gap:10px; }
 .recent > header h2 { margin:0; font-size:14.5px; font-weight:640; }
+.recent > header .iconbtn.sq { width:32px; padding:0; justify-content:center; }
 .recent-search { position:relative; padding:10px 16px 0; }
+.recent-sort { padding:3px 6px; margin-right:6px; }
 .recent-search input { width:100%; box-sizing:border-box; padding:7px 10px 7px 28px; border-radius:8px;
           font-size:12.5px; border:1px solid var(--border); background:var(--surface-2); color:var(--text); }
 .recent-search .mag { position:absolute; left:26px; top:calc(50% + 5px); transform:translateY(-50%);

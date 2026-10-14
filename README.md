@@ -389,7 +389,8 @@ generate as sensitive.
 
 **Hide prompts** (the eye icon in the top bar) hides prompt text and session titles as dots,
 for when you share your screen. Session titles fall back to their short id. The
-setting is remembered in that browser. It only changes what the page shows: the
+setting is remembered in that browser. The side panel has the same button, and using it there
+keeps the panel open. It only changes what the page shows: the
 database and exports still contain the full text.
 
 The app makes exactly one outbound request of its own: once a day it asks
@@ -456,13 +457,18 @@ files on Windows.
   Code saves the name itself. In herdr, the agents sidebar gets the same name. Anywhere it can't
   type, the command lands on your clipboard.
 - **Recent** (clock icon in the top bar, or press `R`) opens a side panel on any page: running sessions first,
-  with Resume, Compact and Stop (Interrupt), then past sessions newest first. Click a session to
-  list its prompts, and click a prompt for its full details. Search matches your prompt text.
+  with Resume, Compact and Stop (Interrupt), working ones first, then past sessions by their last
+  prompt. The sort button at the top puts the last-used past session on top or at the bottom;
+  running sessions always stay on top. Click a session to list its prompts, newest first; its own
+  sort button flips that list to oldest first. Click a prompt for its full details. Search matches your prompt text.
   It covers all dates but keeps the project filters. Close and Force kill stay on
   Running sessions.
 - **Interrupt / Close / Force kill** (Running sessions) send the session's process a signal
   (in herdr, Interrupt presses Esc in the session's pane instead). Each asks you to click twice. Interrupt is macOS/Linux only: on Windows there is no way to
-  interrupt one console process without hitting the others in its window.
+  interrupt one console process without hitting the others in its window. A session that is
+  working is marked **Working now**, and closing it, or one used in the last 50 minutes, warns you
+  first. **Close selected** closes several idle sessions at once; a session that starts working
+  before you confirm is skipped.
 - **Install statusline** (Act now, or `--install-statusline`) adds a `statusLine` entry to
   `~/.claude/settings.json`, keeping a `.finops-backup` copy. It won't replace a statusline you
   already have.

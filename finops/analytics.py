@@ -672,11 +672,12 @@ class Analytics:
     def sessions(self, f=None, limit=500, order="cost", offset=0):
         w, p = self.where(f)
         ob = {"cost": "cost DESC", "tokens": "tokens DESC", "duration": "s.duration_s DESC",
-              "recent": "s.started_at DESC", "prompts": "prompts DESC"}.get(order, "cost DESC")
+              "recent": "s.started_at DESC", "prompts": "prompts DESC",
+              "last_active": "last_ts DESC", "last_active_asc": "last_ts ASC"}.get(order, "cost DESC")
         rows = self.q(f"""
           SELECT s.id session_id, s.title, s.git_branch, s.cli_version, s.started_at,
                  s.ended_at, s.duration_s, s.files_touched, pr.name project, pr.id project_id,
-                 s.agent, s.source_file, pr.path project_path,
+                 MAX(r.ts) last_ts, s.agent, s.source_file, pr.path project_path,
                  s.billable_tokens session_tokens,
                  COUNT(DISTINCT r.prompt_id) prompts, COUNT(*) requests,
                  SUM(r.tool_call_count) tool_calls,
