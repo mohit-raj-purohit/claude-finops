@@ -207,6 +207,16 @@ class TestParityRoutes(ServerFixture):
         self.assertEqual(code, 200)
         self.assertIsInstance(body["items"], list)
 
+    def test_live_sessions_offer_actions(self):
+        # Without signalable the page hides Compact/Close/Rename and says no process was found.
+        from unittest import mock
+        from finops import procs
+        with mock.patch.object(procs, "list_sessions", return_value=[{"pid": 7, "session_id": "s1"}]):
+            code, body = self.get("/api/live")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["sessions"][0]["signalable"])
+        self.assertEqual(body["sessions"][0]["resume"], "claude --resume s1")
+
     def test_statusline_install_needs_action_header(self):
         self.assertEqual(self.post("/api/do/statusline", {})[0], 403)
 

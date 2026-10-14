@@ -10,8 +10,8 @@ It answers, in a few clicks:
 
 Everything runs on `127.0.0.1` with the Python standard library. No dependencies, and
 no data leaves the machine. No outbound calls except a once-a-day version check
-against the npm registry (disable with `--no-update-check`), and provider APIs only
-if you add a key.
+against the npm registry (disable with `--no-update-check`), and Anthropic's cost API
+only if you add an Admin key.
 
 ```bash
 npx claude-finops
@@ -85,8 +85,8 @@ no reason — each with the estimated money attached.
 
 ![Waste detection](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/waste.png)
 
-**Whether the model you are on is the right one.** Per-model cost and efficiency,
-plus a switch analysis that prices the same workload on a cheaper model.
+**Whether the model you are on is the right one.** Per-model cost and efficiency, and
+what each model really cost on the same kind of work, measured rather than repriced.
 
 ![Model analysis](https://raw.githubusercontent.com/mohit-raj-purohit/claude-finops/main/docs/img/models.png)
 
@@ -108,7 +108,7 @@ set.
   or estimated.
 - **Your data stays put.** It binds to `127.0.0.1`. No outbound calls except a
   once-a-day version check against the npm registry (disable with
-  `--no-update-check`), and provider APIs only if you add a key. The warehouse lives
+  `--no-update-check`), and Anthropic's cost API only if you add an Admin key. The warehouse lives
   in `~/.claude-finops`, so upgrading or deleting the package never touches it.
 - **It tells you what to change**, not just what happened — usually with a prompt you
   can paste into Claude Code.
@@ -149,7 +149,7 @@ labelled as your own configured figures.
 
 **Command center** — Executive overview (spend, tokens, usage %, remaining, forecast,
 today vs yesterday) opening with the ⚡ Act now strip, running sessions you can
-interrupt, compact, hand over or close, an AI FinOps Advisor that answers "what should I do today?" from live data, and a
+interrupt, compact, hand over, rename or close, an AI FinOps Advisor that answers "what should I do today?" from live data, and a
 0–100 FinOps scorecard with per-dimension reasoning.
 
 **Usage** — Interactive timeline across 10 metrics and 6 time ranges with day
@@ -167,8 +167,9 @@ latency and efficiency; five leaderboards; prompt intelligence (spend by activit
 and a Claude Code view (tools, files, branches, cost per repository).
 
 **Optimize** — A waste detector with seven rules, each showing the exact prompts or
-sessions it flagged; a recommendation engine that stays quiet without evidence; and
-anomaly detection you can click through to the underlying sessions.
+sessions it flagged; Subagent models, measured per subagent type; a recommendation
+engine that stays quiet without evidence; and anomaly detection you can click through
+to the underlying sessions.
 
 **Plan** — Forecast with conservative/expected/high scenario bands, and budgets with
 Budget → Actual → Forecast → Variance and configurable alert thresholds.
@@ -176,6 +177,11 @@ Budget → Actual → Forecast → Variance and configurable alert thresholds.
 Global search spans prompt text, sessions, projects, models, tools and dates. Global
 filters (date, model, project, category, cost/token thresholds, sandbox toggle) update
 every chart and KPI. Everything exports to CSV/JSON, plus a printable PDF report.
+
+Every page, and the side panel when it shows a session or a prompt, has its own URL, so a
+refresh keeps you where you were and Back/Forward work. Next to the version, the header
+says whether the dashboard runs from the npm install or from a source checkout (with its
+commit).
 
 ---
 
@@ -187,9 +193,10 @@ Two files, both editable without touching code. The server picks up changes to
 ### `config/pricing.json`
 
 Model prices per million tokens, kept strictly separate from usage data so the table
-can be updated as prices change. A `claude-*` model with no entry is priced as
-`unpriced` ($0, flagged as such in the Model analysis view) rather than silently
-billed at another model's rate.
+can be updated as prices change. A new `claude-*` model with no entry yet is priced
+like the newest listed model of its family and marked as such, instead of showing $0.
+A model that isn't Claude (such as a free local model behind a `claude-qwen` launcher)
+costs $0.
 
 ### `config/settings.json`
 
@@ -320,8 +327,8 @@ claude-finops                 start the dashboard
 claude-finops --rebuild       re-read transcripts, then start
 claude-finops --stop          stop it
 claude-finops --where         where your data, settings and keys live
-claude-finops --set-key       store a provider API key (hidden prompt, 0600)
-claude-finops --keys          which provider keys are configured
+claude-finops --set-key       store the Anthropic Admin API key (hidden prompt, 0600)
+claude-finops --keys          whether that key is configured
 claude-finops --install-statusline    model, context % and 5-hour limit under every prompt
 claude-finops --uninstall-statusline  remove it again
 claude-finops --install-guard         warn near, and ask at, your per-session token budget
@@ -344,7 +351,7 @@ Everything the app writes lives outside the install folder, in one state directo
   data/cloud_cache.json   cached billing figures
   data/server.pid|.log    running server
   settings.local.json     budgets and limits set in the UI
-  secrets.local.json      provider API keys (0600)
+  secrets.local.json      Anthropic Admin API key (0600)
 ```
 
 Days, "today" and the billing period follow this computer's time zone (Claude Code
@@ -389,8 +396,8 @@ The app makes exactly one outbound request of its own: once a day it asks
 `registry.npmjs.org` what the latest `claude-finops` version is, so it can tell
 you when an upgrade is out (npm has no way to push one at you). It sends nothing
 about you or your usage. Turn it off with `NO_UPDATE_NOTIFIER=1` or
-`CLAUDE_FINOPS_NO_UPDATE_CHECK=1`. Provider cost APIs are called only if you
-configure a key (with `--set-key` or on the Settings page), and only
+`CLAUDE_FINOPS_NO_UPDATE_CHECK=1`. Anthropic's cost API is called only if you
+add an Admin key (with `--set-key` or on the Settings page), and only
 when you click Refresh on Billed vs local.
 
 ---

@@ -2,6 +2,16 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.17.1 — Running session buttons are back
+
+**Fixed.** In 0.17.0, every running session said "No matching process found" and lost its
+Interrupt, Compact, Close session, Force kill and Rename buttons. Removing the other agents
+also removed the flag that marks a Claude Code session as reachable. It is back, with a test.
+
+**README brought up to date.** It no longer mentions the removed model-switch analysis or
+provider keys other than Anthropic's, and it describes how unlisted models are priced, the
+per-page links and the header's source label.
+
 ## 0.17.0 — Claude Code only, a link for every page
 
 **Claude Code only.** The dashboard no longer reads Codex, Gemini CLI or Cursor. The agent chips,

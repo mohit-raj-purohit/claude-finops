@@ -580,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(Diagnoser(a).breakdown(f))
         if route == "live":
             from .procs import list_sessions, ACTIONS
-            rows = sorted((dict(s, resume=f"claude --resume {s.get('session_id')}")
+            rows = sorted((dict(s, signalable=True, resume=f"claude --resume {s.get('session_id')}")
                            for s in list_sessions(a.pricing)), key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
         if route.startswith("session_prompts/"):
