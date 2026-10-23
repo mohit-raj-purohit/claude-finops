@@ -2,6 +2,12 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.18.1 — Running sessions work on Linux
+
+**Fixed: running sessions on Linux.** Running sessions showed none of your Linux sessions,
+because Claude Code records a Linux process's start time differently from macOS. The dashboard now
+reads it the Linux way, so those sessions and their buttons show up again.
+
 ## 0.18.0 — See Claude's reply to each prompt
 
 **Claude's response in the prompt panel.** Click any prompt (from Recent, a session, or a list)
@@ -12,10 +18,6 @@ only ran tools, or the session's transcript has been deleted, the panel says so.
 **Replies are not stored.** The reply is read from the session's transcript in
 `~/.claude/projects` each time you open the panel, so the warehouse still holds only your prompts.
 **Hide prompts** hides the reply too.
-
-**Fixed: running sessions on Linux.** Running sessions showed none of your Linux sessions,
-because Claude Code records a Linux process's start time differently from macOS. The dashboard now
-reads it the Linux way, so those sessions and their buttons show up again.
 
 ## 0.17.1 — Running session buttons are back, close several at once
 
