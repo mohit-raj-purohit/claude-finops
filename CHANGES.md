@@ -13,6 +13,10 @@ only ran tools, or the session's transcript has been deleted, the panel says so.
 `~/.claude/projects` each time you open the panel, so the warehouse still holds only your prompts.
 **Hide prompts** hides the reply too.
 
+**Fixed: running sessions on Linux.** Running sessions showed none of your Linux sessions,
+because Claude Code records a Linux process's start time differently from macOS. The dashboard now
+reads it the Linux way, so those sessions and their buttons show up again.
+
 ## 0.17.1 — Running session buttons are back, close several at once
 
 **Fixed.** In 0.17.0, every running session said "No matching process found" and lost its

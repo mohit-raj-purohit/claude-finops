@@ -24,6 +24,19 @@ class TestSameStart(unittest.TestCase):
     def test_no_start_in_registry_accepted(self):
         self.assertTrue(_same_start({}, {"lstart": "Fri Oct 9 16:49:11 2026"}))
 
+    def test_linux_clock_ticks_read_from_proc(self):
+        # Linux registry: procStart is field 22 of /proc/<pid>/stat, not a date
+        stat = "9754 (claude (x)) S 9700 9754 9700 34816 9754 4194560 1 2 3 4 5 6 7 8 20 0 12 0 119623 1 2"
+        reg = {"pid": 9754, "procStart": "119623"}
+        ps = {"lstart": "Thu Oct 22 14:40:31 2026"}
+        with mock.patch("builtins.open", mock.mock_open(read_data=stat)):
+            self.assertTrue(_same_start(reg, ps))
+            self.assertFalse(_same_start(dict(reg, procStart="119624"), ps))
+
+    def test_linux_clock_ticks_rejected_without_proc(self):
+        with mock.patch("builtins.open", side_effect=OSError):
+            self.assertFalse(_same_start({"pid": 1, "procStart": "119623"}, {"lstart": ""}))
+
 
 
 class TestRename(unittest.TestCase):

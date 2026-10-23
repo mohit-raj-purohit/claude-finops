@@ -71,10 +71,27 @@ def _is_claude(p):
     return base in ("claude", "claude.exe", "claude.cmd") or cmd.endswith("/claude")
 
 
+def _proc_starttime(pid):
+    """Linux: a process's start time in clock ticks since boot (field 22 of /proc/<pid>/stat)."""
+    try:
+        with open(f"/proc/{int(pid)}/stat") as fh:
+            stat = fh.read()
+    except (OSError, TypeError, ValueError):
+        return None
+    fields = stat[stat.rfind(")") + 2:].split()   # the name in (...) may contain spaces
+    return fields[19] if len(fields) > 19 else None
+
+
 def _same_start(reg, p):
     """True unless the registry's procStart names a different start time than ps reports.
-    Whitespace is normalised: the registry pads single-digit days ("Oct  9"), ps output is re-joined ("Oct 9")."""
-    return not reg.get("procStart") or reg["procStart"].split() == p["lstart"].split()
+    Whitespace is normalised: the registry pads single-digit days ("Oct  9"), ps output is re-joined ("Oct 9").
+    On Linux, Claude Code records clock ticks since boot ("119623") instead, read from /proc."""
+    start = reg.get("procStart")
+    if not start:
+        return True
+    if start.strip().isdigit():
+        return _proc_starttime(reg.get("pid")) == start.strip()
+    return start.split() == p["lstart"].split()
 
 
 def _ancestors(pid, procs):
