@@ -135,7 +135,6 @@ rather than guessing:
 - Plan tier, allowance, and remaining credits
 - Message / request allowances
 - Billed invoice amounts
-- Assistant response text (only usage metadata is extracted)
 - Lines changed, commits, pull requests, bugs fixed
 
 Wherever one of these would appear, you get **"Unavailable from connected Claude
@@ -387,7 +386,11 @@ if the Claude desktop app is installed, its Cowork transcripts and
 server binds to `127.0.0.1` only, but treat the database and any export you
 generate as sensitive.
 
-**Hide prompts** (the eye icon in the top bar) hides prompt text and session titles as dots,
+Claude's replies are **not** stored in the database. A prompt's detail panel reads the reply
+straight from that session's transcript in `~/.claude/projects` when you open it, and says so
+if the transcript has been deleted.
+
+**Hide prompts** (the eye icon in the top bar) hides prompt text, Claude's replies and session titles as dots,
 for when you share your screen. Session titles fall back to their short id. The
 setting is remembered in that browser. The side panel has the same button, and using it there
 keeps the panel open. It only changes what the page shows: the

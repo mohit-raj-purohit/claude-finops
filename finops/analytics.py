@@ -818,6 +818,28 @@ class Analytics:
             p["category_evidence"] = []
         return p
 
+    def prompt_reply(self, pid):
+        """Claude's reply to one prompt, read from the transcript when asked for."""
+        from . import guard as G
+        from .etl import DEFAULT_SOURCE, reply_from_transcript
+        p = self.one("SELECT pr.uuid, pr.session_id, s.source_file FROM prompts pr"
+                     " LEFT JOIN sessions s ON s.id=pr.session_id WHERE pr.id=?", (pid,))
+        if not p:
+            return {"error": "not found"}
+        path = p["source_file"]
+        if not path or not os.path.exists(path):
+            path = G.find_transcript(p["session_id"],
+                                     [os.environ.get("CLAUDE_PROJECTS") or DEFAULT_SOURCE])
+        if not p["uuid"] or not path:
+            return {"ok": False, "reason": "The transcript for this session is no longer on disk."}
+        try:
+            r = reply_from_transcript(path, p["uuid"])
+        except OSError:
+            return {"ok": False, "reason": "The transcript could not be read."}
+        if not r["found"]:
+            return {"ok": False, "reason": "This prompt was not found in its transcript."}
+        return {"ok": True, **r}
+
     def session_detail(self, sid, f=None):
         s = self.one("""SELECT s.*, pr.name project FROM sessions s
                         JOIN projects pr ON pr.id=s.project_id WHERE s.id=?""", (sid,))

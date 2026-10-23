@@ -2,6 +2,17 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.18.0 — See Claude's reply to each prompt
+
+**Claude's response in the prompt panel.** Click any prompt (from Recent, a session, or a list)
+and its detail panel now shows what Claude replied, under the prompt. It is the text Claude wrote
+from that prompt up to your next one; thinking, tool calls and tool output are left out. If Claude
+only ran tools, or the session's transcript has been deleted, the panel says so.
+
+**Replies are not stored.** The reply is read from the session's transcript in
+`~/.claude/projects` each time you open the panel, so the warehouse still holds only your prompts.
+**Hide prompts** hides the reply too.
+
 ## 0.17.1 — Running session buttons are back, close several at once
 
 **Fixed.** In 0.17.0, every running session said "No matching process found" and lost its

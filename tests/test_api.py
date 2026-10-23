@@ -71,6 +71,14 @@ class ServerFixture(unittest.TestCase):
             return e.code, json.loads(e.read() or b"null")
 
 
+class TestPromptReply(ServerFixture):
+    def test_unknown_prompt_is_404(self):
+        self.assertEqual(self.get("/api/prompt_reply/999")[0], 404)
+
+    def test_non_integer_id_is_400(self):
+        self.assertEqual(self.get("/api/prompt_reply/abc")[0], 400)
+
+
 class TestRemovedRoutes(ServerFixture):
     def test_model_evidence_gone(self):
         self.assertEqual(self.get("/api/model_evidence")[0], 404)

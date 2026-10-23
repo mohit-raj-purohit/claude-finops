@@ -183,6 +183,43 @@ def _text_of(content):
     return "\n".join(x for x in out if x)
 
 
+def _is_human_prompt(r):
+    """A user line that load_file counts as a prompt (not a tool result, meta or injected text)."""
+    if r.get("type") != "user" or r.get("toolUseResult") is not None or r.get("isMeta"):
+        return False
+    text = _text_of((r.get("message") or {}).get("content"))
+    return bool(text.strip()) and not text.lstrip().startswith(INJECTED_PREFIXES)
+
+
+REPLY_MAX_CHARS = 60_000
+
+
+def reply_from_transcript(path, prompt_uuid):
+    """Claude's text replies to one prompt, read from its transcript on demand (never stored).
+    Returns the text blocks in order, from the prompt up to the next human prompt."""
+    parts, found = [], False
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            if not found and prompt_uuid not in line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not found:
+                found = r.get("uuid") == prompt_uuid
+                continue
+            if _is_human_prompt(r):
+                break
+            if r.get("type") == "assistant" and not r.get("isSidechain"):
+                text = _text_of((r.get("message") or {}).get("content")).strip()
+                if text:
+                    parts.append(text)
+    text = "\n\n".join(parts)
+    return {"found": found, "parts": len(parts), "text": text[:REPLY_MAX_CHARS],
+            "truncated": len(text) > REPLY_MAX_CHARS}
+
+
 IMAGE_CHARS = 1600 * 4   # an image costs ~1.6K tokens, not its base64 length
 
 

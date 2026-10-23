@@ -608,6 +608,8 @@ async function openPrompt(id) {
         <span>${fmtInt(p.char_len)} chars · ${fmtInt(p.word_len)} words</span>
         ${p.source ? `<span class="pill">${esc(p.source)}</span>` : ''}
       </div>`, {badge: BADGE.actual})}
+    ${card('Claude\'s response', '<div id="pr-reply"><div class="note">Reading the transcript…</div></div>',
+      {badge: BADGE.actual, hint: 'read from the transcript when you open this; not stored'})}
     ${card('Requests in this turn', table([
       {h: 'Time', f: r => `<span class="mono">${esc((r.ts||'').slice(11,19))}</span>`},
       {h: 'Model', f: r => `<span class="swatch" style="background:${modelColor(r.model)}"></span>${esc(modelName(r.model))}`},
@@ -638,10 +640,22 @@ async function openPrompt(id) {
       <dt>Models</dt><dd>${esc(p.models || '—')}</dd>
       <dt>Tool calls</dt><dd>${fmtInt(p.tool_calls)}</dd>
       <dt>Avg latency</dt><dd>${p.latency_ms ? (p.latency_ms/1000).toFixed(1)+'s' : NA()}</dd>
-      <dt>Response text</dt><dd>${NA()} — transcripts are parsed for usage metadata, not stored replies</dd>
     </dl>`)}`;
   const link = d.querySelector('[data-sess]');
   if (link) link.onclick = () => openSession(link.dataset.sess);
+  drawReply(d.querySelector('#pr-reply'), id);
+}
+
+async function drawReply(box, id) {
+  let r;
+  try { r = await fetch(`/api/prompt_reply/${id}`).then(x => x.json()); }
+  catch (e) { r = {ok: false, reason: e.message}; }
+  if (!box.isConnected) return;   // drawer closed or replaced while reading
+  if (!r.ok) { box.innerHTML = `<div class="na">${esc(r.reason || r.error || 'Could not read the reply.')}</div>`; return; }
+  box.innerHTML = r.text
+    ? `<div class="prompt-text">${esc(pt(r.text))}</div>${r.truncated
+      ? '<div class="note" style="margin-top:6px">Long reply: only the first part is shown.</div>' : ''}`
+    : '<div class="na">No text reply: Claude only ran tools for this prompt.</div>';
 }
 
 async function openSession(id) {

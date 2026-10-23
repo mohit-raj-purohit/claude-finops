@@ -611,6 +611,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadRequest("id must be an integer")
             d = a.prompt_detail(pid, f)
             return self.send_json(d, 404 if isinstance(d, dict) and d.get("error") else 200)
+        if route.startswith("prompt_reply/"):
+            try:
+                pid = int(route.split("/")[1])
+            except ValueError:
+                raise BadRequest("id must be an integer")
+            d = a.prompt_reply(pid)
+            return self.send_json(d, 404 if d.get("error") else 200)
         if route.startswith("session/"):
             d = a.session_detail(route.split("/", 1)[1], f)
             return self.send_json(d, 404 if isinstance(d, dict) and d.get("error") else 200)
