@@ -134,3 +134,27 @@ class TestSessionPrompts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRowContextAfterCompaction(unittest.TestCase):
+    def stats(self, records):
+        d = tempfile.mkdtemp(prefix="finops-proj-")
+        os.makedirs(os.path.join(d, "p"))
+        with open(os.path.join(d, "p", "sid.jsonl"), "w") as fh:
+            fh.write("\n".join(json.dumps(r) for r in records) + "\n")
+        pricing = mock.Mock(estimate=lambda *a: 0.0)
+        with mock.patch.object(procs, "PROJECTS", d):
+            return procs._transcript_stats("sid", pricing)
+
+    reply = {"type": "assistant", "message": {"model": "m", "usage": {"cache_read_input_tokens": 288_000}}}
+
+    def test_compaction_after_last_reply_shows_what_is_left(self):
+        st = self.stats([self.reply, {"type": "system", "subtype": "compact_boundary",
+                                      "compactMetadata": {"postTokens": 19_003}}])
+        self.assertEqual(st["context"], 19_003)
+
+    def test_reply_after_compaction_wins(self):
+        st = self.stats([self.reply, {"type": "system", "subtype": "compact_boundary",
+                                      "compactMetadata": {"postTokens": 19_003}},
+                         {"type": "assistant", "message": {"model": "m", "usage": {"cache_read_input_tokens": 25_000}}}])
+        self.assertEqual(st["context"], 25_000)

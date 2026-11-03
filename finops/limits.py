@@ -80,6 +80,16 @@ def _run():
                     "the contributing-behaviour lines cover local sessions on this machine only."}
 
 
+def cached():
+    """The last good /usage read, however old, without running `claude`."""
+    try:
+        with open(CACHE) as fh:
+            c = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return dict(c, age_s=int(time.time() - c.get("fetched_at", 0))) if c.get("ok") else None
+
+
 def usage(force=False):
     """Cached /usage. Reads the cache unless it is stale or `force` is set."""
     ensure_dirs()

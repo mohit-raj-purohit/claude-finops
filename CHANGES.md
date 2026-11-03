@@ -2,6 +2,26 @@
 
 Plain-language notes on what changed in the dashboard and why. Newest first.
 
+## 0.19.0 — What fills a session's context, and whether your plan fits
+
+**See what fills a running session's context.** On Running sessions, click a session's name to
+open a grid like Claude Code's `/context`: how full the window is, and how much of it is the system
+prompt, tool definitions, tool calls and results, your prompts, Claude's replies, skills, memory and
+any compaction summary. Below that, tables list the tools and skills in the context with their share,
+including tools that are loaded but never called, and how much of the context the cache served, for
+the last step and the whole session. The total and the cache split are actual; the split by kind is
+estimated from characters and scaled to that total.
+
+**Plan fit on the Scorecard.** A new card says whether to stay on your plan or move up or down, and
+why. It shows the limits you are in now with the tokens this machine spent in them, your usage
+pattern, each plan against your heaviest week and a busy 5-hour window, how much of the plan you
+leave unused, and what your usage would cost at API prices. It needs the Claude desktop app's
+plan-limit history. Plans are compared with Anthropic's published ratios (Max 5x = 5x Pro,
+Max 20x = 20x Pro), and with fewer than two full weeks of history it says the answer is early.
+
+**Fixed: context size after a compaction.** A running session that had compacted since its last
+reply kept showing its old, larger context. It now shows what compaction left.
+
 ## 0.18.1 — Running sessions work on Linux
 
 **Fixed: running sessions on Linux.** Running sessions showed none of your Linux sessions,

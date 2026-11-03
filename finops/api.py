@@ -570,6 +570,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(a.anomalies(f))
         if route == "scorecard":
             return self.send_json(a.scorecard(f))
+        if route == "plan_fit":
+            from .plan_fit import plan_fit
+            from .plan_history import history
+            from .limits import cached
+            from .analytics import detect_account
+            return self.send_json(plan_fit(a, detect_account().get("plan"), history(), cached()))
         if route == "advisor":
             return self.send_json(a.advisor(f))
         if route == "diagnose":
@@ -583,6 +589,10 @@ class Handler(BaseHTTPRequestHandler):
             rows = sorted((dict(s, signalable=True, resume=f"claude --resume {s.get('session_id')}")
                            for s in list_sessions(a.pricing)), key=lambda x: -(x.get("context") or 0))
             return self.send_json({"sessions": rows, "actions": list(ACTIONS)})
+        if route.startswith("live_context/"):
+            from .procs import context_breakdown
+            return self.send_json(context_breakdown(_session_transcript(route[len("live_context/"):]),
+                                                    a.pricing))
         if route.startswith("session_prompts/"):
             from .procs import session_prompts
             return self.send_json(session_prompts(_session_transcript(route[len("session_prompts/"):])))

@@ -2135,6 +2135,95 @@ async function drawPrompts(box, sid) {
     ${d.recent.length ? `<div class="note"><b>Latest prompt${d.recent.length === 1 ? '' : 's'}</b> (newest last)</div>${d.recent.map(one).join('')}` : ''}`;
 }
 
+// The context window drawn like Claude Code's /context: one square per 0.5% of the window,
+// coloured by what fills it, hollow where it is still free. Squares are shared out by largest
+// remainder so they add up to the measured total.
+const CTX_CELLS = 200;
+function ctxGrid(d, tok) {
+  const used = Math.min(CTX_CELLS, Math.round(d.context / d.window * CTX_CELLS));
+  // Every kind in the legend gets at least one square while there are squares to give;
+  // the rest are shared by largest remainder.
+  const base = used >= d.parts.length ? 1 : 0;
+  const raw = d.parts.map(p => Math.max(0, (p.tokens || 0) / d.context * used - base));
+  const scale = (used - base * d.parts.length) / (raw.reduce((a, b) => a + b, 0) || 1);
+  const want = raw.map(r => r * scale);
+  const cells = want.map(r => base + Math.floor(r));
+  want.map((r, i) => [r - Math.floor(r), i]).sort((a, b) => b[0] - a[0])
+    .slice(0, used - cells.reduce((a, b) => a + b, 0)).forEach(([, i]) => cells[i]++);
+  const sq = [];
+  d.parts.forEach((p, i) => { for (let k = 0; k < cells[i]; k++)
+    sq.push(`<i style="background:${seriesVar(i)}" title="${esc(p.label)}: ${tok(p.tokens)}"></i>`); });
+  while (sq.length < used) sq.push('<i class="used"></i>');      // no split recorded
+  while (sq.length < CTX_CELLS) sq.push('<i class="free"></i>');
+  const ofWin = n => fmtPct(100 * n / d.window);
+  return `<div class="ctxterm">
+    <div class="ctxterm-hd"><b>Context usage</b> ${BADGE.actual}<span class="spacer"></span>
+      <span>${esc(d.model || '')} · ${tok(d.context)}/${tok(d.window)} tokens (${fmtPct(d.used_pct)})</span></div>
+    <div class="ctxterm-body">
+      <div class="ctxgrid" role="img" aria-label="${fmtPct(d.used_pct)} of the context window used">${sq.join('')}</div>
+      <div class="ctxterm-legend">
+        <div>Context window: <b>${tok(d.window)}</b> tokens</div>
+        <div class="ctxterm-total">Total in context: <b>${tok(d.context)}</b> tokens <span class="dim">(${ofWin(d.context)})</span></div>
+        ${d.parts.map((p, i) => `<div><span class="sw" style="background:${seriesVar(i)}"></span>
+          ${esc(p.label)}: <b>${tok(p.tokens)}</b> <span class="dim">(${ofWin(p.tokens || 0)})</span></div>`).join('')}
+        <div><span class="sw free"></span>Free space: <b>${tok(d.free)}</b> <span class="dim">(${ofWin(d.free)})</span></div>
+        ${d.compactions ? `<div class="dim">Compacted ${fmtInt(d.compactions)} time${d.compactions === 1 ? '' : 's'}</div>` : ''}
+        <div class="dim">Split by kind is estimated</div></div></div>${ctxUsedTables(d, tok)}</div>`;
+}
+
+// Which tools and skills sit in the context, and their share of it. A tool's share is its
+// calls and results plus its definition, which is sent on every step whether it is used or not.
+function ctxUsedTables(d, tok) {
+  const share = p => `<span class="ctxshare"><i style="width:${Math.min(100, p)}%"></i></span>${fmtPct(p)}`;
+  const tools = d.tools_used || [], skills = d.skills_used || [];
+  const tRows = tools.map(t => `<tr><td>${esc(t.name)}</td><td class="num">${fmtInt(t.calls)}</td>
+      <td class="num">${tok(t.tokens)}</td><td class="num dim">${tok(t.def_tokens)}</td><td>${share(t.pct)}</td></tr>`).join('')
+    + (d.tools_other ? `<tr class="dim"><td>${fmtInt(d.tools_other.tools)} more tools</td><td class="num">${fmtInt(d.tools_other.calls)}</td>
+      <td class="num" colspan="2">${tok(d.tools_other.tokens)}</td><td>${share(d.tools_other.pct)}</td></tr>` : '')
+    + (d.tools_unused && d.tools_unused.tools ? `<tr class="dim"><td>${fmtInt(d.tools_unused.tools)} loaded, never called</td><td class="num">0</td>
+      <td class="num">—</td><td class="num">${tok(d.tools_unused.tokens)}</td><td>${share(d.tools_unused.pct)}</td></tr>` : '');
+  const sRows = skills.map(s => `<tr><td>${esc(s.name)}</td><td class="num">${fmtInt(s.times)}</td>
+      <td class="num">${tok(s.tokens)}</td><td>${share(s.pct)}</td></tr>`).join('');
+  return `<div class="ctxterm-used">
+    <div><div class="ctxterm-sub">Tools in context</div>${tRows ? `<table class="ctxtbl">
+      <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Calls + results</th><th class="num">Definition</th><th>Share of context</th></tr></thead>
+      <tbody>${tRows}</tbody></table>` : '<div class="dim">No tool calls since the last compaction</div>'}</div>
+    <div><div class="ctxterm-sub">Skills in context</div>${sRows ? `<table class="ctxtbl">
+      <thead><tr><th>Skill</th><th class="num">Loaded</th><th class="num">Tokens</th><th>Share of context</th></tr></thead>
+      <tbody>${sRows}</tbody></table>` : '<div class="dim">No skills loaded since the last compaction</div>'}</div></div>`;
+}
+
+// The Context panel (click a session): how full its window is, what fills it, and how much the cache served.
+async function drawContext(box, sid) {
+  box.innerHTML = '<div class="note">Reading context…</div>';
+  let d;
+  try {
+    const r = await fetch(`/api/live_context/${encodeURIComponent(sid)}`);
+    d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Could not read this session.');
+  } catch (e) { box.innerHTML = `<div class="live-msg err">${esc(e.message)}</div>`; return; }
+  if (!d.ok) { box.innerHTML = `<div class="note">${esc(d.error)}</div>`; return; }
+  const tok = n => n == null ? '—' : fmtNum(n);
+  const part = k => (d.parts.find(p => p.key === k) || {}).tokens || 0;
+  const toolsAll = part('tool_defs') + part('tools');
+  const window_ = d.window && d.context ? ctxGrid(d, tok)
+    : `<div class="dt">${d.context ? `${tok(d.context)} tokens in context; ` : ''}this model's window size isn't in the price table.</div>`;
+  const c = d.cache;
+  box.innerHTML = `<div class="stack">
+    ${window_}
+    ${d.compacted_since_reply ? `<div class="dt">Compacted since the last reply: the size is what compaction left;
+      the cache split shows after the next reply.</div>` : ''}
+    <div><div class="dt"><b>Tools take ${tok(toolsAll)}</b>: ${tok(part('tool_defs'))} for the definitions of
+        ${fmtInt(d.tool_count)} loaded tool${d.tool_count === 1 ? '' : 's'}, sent on every step, and ${tok(part('tools'))}
+        for tool calls and their results.${d.shape_known ? '' : ' (This Claude Code version doesn\'t record the system prompt and tool definitions, so they are not split out.)'}</div></div>
+    <div><div class="hd"><b>Served from cache</b> ${BADGE.actual}</div>
+      ${c ? `<div class="dt">Last step: <b>${fmtPct(c.read_pct)}</b> of the context came from cache
+        (${tok(c.read)} read, ${tok(c.write)} newly written, ${tok(c.uncached)} not cached).</div>` : ''}
+      <div class="dt">Whole session: <b>${fmtPct(d.lifetime.read_pct)}</b> of prompt-side tokens came from cache
+        (${tok(d.lifetime.read)} read, ${tok(d.lifetime.write)} written, ${tok(d.lifetime.input)} not cached).</div></div>
+    <div class="note">${esc(d.basis)}</div></div>`;
+}
+
 VIEWS.live = async (page) => {
   const [res, usage0] = await Promise.all([
     fetch('/api/live').then(r => r.json()),   // never cached: always live
@@ -2163,6 +2252,7 @@ VIEWS.live = async (page) => {
       Windows console; anywhere else it lands on your clipboard to paste).
       <b>Close</b> exits the session cleanly; copy its resume command to bring it back.
       <b>Force kill</b> is for a session that won't close. Each button asks you to click twice.
+      <b>Click a session's name</b> to see its context window, what fills it, and how much the cache served.
       <span class="spacer"></span><button class="btn pb-copy" id="live-refresh">${I('reload')} Refresh</button></div>
     ${list.some(x => x.signalable) ? `<div class="live-bulk">
       <label><input type="checkbox" id="live-all"> Select all idle</label>
@@ -2183,7 +2273,8 @@ VIEWS.live = async (page) => {
         <div class="dt">${x.status === 'busy' ? '<b>Working now</b>' : 'Idle'}${x.uptime ? ` · up ${esc(x.uptime)}` : ''} ·
           last activity ${x.last_write_s == null ? '—' : dur(x.last_write_s)} ago${x.memory_mb == null ? '' : ` · ${fmtInt(x.memory_mb)} MB`} ·
           <span class="note">${esc(x.cwd)}</span></div>
-        ${x.severity !== 'ok' ? `<div class="dt"><b>Advice:</b> ${x.severity === 'high'
+        ${x.session_id ? `<div class="ctxbox" hidden></div>` : ''}
+        ${x.severity !== 'ok' ?`<div class="dt"><b>Advice:</b> ${x.severity === 'high'
           ? 'Very large context. Use <b>Hand over</b> to continue in a fresh session, or split the remaining work into sub-sessions.'
           : 'Getting heavy. Hit <b>Compact</b> at the next break, or close it if the task is done.'}</div>` : ''}
         <div class="live-actions">
@@ -2300,6 +2391,17 @@ VIEWS.live = async (page) => {
     if (ho) {
       ho.querySelector('.ho-go').onclick = e => runHandover(true, e.currentTarget);
       ho.querySelector('.ho-brief').onclick = e => runHandover(false, e.currentTarget);
+    }
+    const cx = row.querySelector('.ctxbox'), hd = row.querySelector('.hd');
+    if (cx) {
+      hd.classList.add('ctx-toggle');
+      hd.title = 'Show context';
+      hd.onclick = e => {
+        if (e.target.closest('input, button, a')) return;
+        cx.hidden = !cx.hidden;
+        hd.title = cx.hidden ? 'Show context' : 'Hide context';
+        if (!cx.hidden) drawContext(cx, x.session_id);
+      };
     }
     const rn = row.querySelector('.renamebox');
     if (rn) {
@@ -3212,8 +3314,72 @@ VIEWS.settings = async (page) => {
 };
 
 /* ---------- scorecard ---------- */
+/* ---------- plan fit: does the plan you are on match how you use it ---------- */
+const hourLabel = h => `${(h % 12) || 12}${h < 12 ? 'am' : 'pm'}`;
+function planFitBody(d) {
+  const head = {downgrade: `Move to <b>${esc(d.suggest)}</b>, about ${fmtUSD(d.saving_usd_month)}/month less`,
+    upgrade: `Consider <b>${esc(d.suggest)}</b>: you are running into ${esc(d.plan)}'s limits`,
+    stay: `Stay on <b>${esc(d.plan)}</b>: a smaller plan would run out`,
+    unknown: 'Not enough to recommend a plan yet'}[d.verdict] || '';
+  const sev = {downgrade: 'medium', upgrade: 'high'}[d.verdict] || 'low';
+  const now = (d.current || []).map(w => `
+    <div class="item">
+      <div class="hd"><b>${esc(w.label)}</b><span class="spacer"></span>
+        <span style="font-variant-numeric:tabular-nums">${fmtPct(w.pct, 0)} used</span></div>
+      <div class="meter ${usageSev(w.pct || 0)}"><i style="width:${Math.min(100, w.pct || 0)}%"></i></div>
+      ${w.tokens != null ? `<div class="dt">This machine spent <b>${fmtNum(w.tokens)}</b> tokens in this window
+        (${fmtNum(w.cache_read_tokens)} cache reads, ${fmtInt(w.requests)} requests, ${fmtUSD(w.est_cost_usd)} at API prices)${
+        w.tokens_per_pct ? ` · about <b>${fmtNum(w.tokens_per_pct)}</b> tokens per 1%` : ''}.</div>` : ''}
+      ${w.reset_passed ? '<div class="dt"><b>This window has reset since the last read.</b> Refresh to see the new one.</div>'
+        : w.resets ? `<div class="dt note">Resets ${esc(w.resets)}</div>` : ''}</div>`).join('');
+  const h = d.history, p = d.pattern;
+  const pat = h ? `<ul style="margin:0 0 0 18px;font-size:12.5px">
+      <li>Weekly limit: heaviest week <b>${fmtPct(h.weekly_max, 0)}</b>, typical week ${fmtPct(h.weekly_median, 0)}
+        (${fmtInt(h.weeks)} week${h.weeks === 1 ? '' : 's'} seen, ${esc(h.first.slice(0, 10))} to ${esc(h.last.slice(0, 10))}).</li>
+      <li>5-hour limit: about ${h.five_hour_windows_per_week} windows a week; a typical one peaks at
+        ${fmtPct(h.five_hour_median, 0)}, nine in ten stay under ${fmtPct(h.five_hour_p90, 0)}, highest ${fmtPct(h.five_hour_max, 0)}.
+        ${h.five_hour_hit100 ? `Hit 100% ${fmtInt(h.five_hour_hit100)} time${h.five_hour_hit100 === 1 ? '' : 's'}.` : 'Never hit 100%.'}</li>
+      ${p && p.active_days ? `<li>Last ${p.days} days on this machine: active ${fmtInt(p.active_days)} days,
+        about ${fmtNum(p.tokens_per_active_day)} tokens a day${p.busiest_weekday ? `, busiest on ${esc(p.busiest_weekday)}s` : ''}${
+        p.busiest_hours.length ? ` around ${p.busiest_hours.map(hourLabel).join(', ')}` : ''}.</li>` : ''}</ul>` : '';
+  const plans = d.plans.length ? table([
+    {h: 'Plan', f: r => `${esc(r.plan)}${r.current ? ' <span class="pill">yours</span>' : ''}`},
+    {h: 'Price / month', num: 1, f: r => fmtUSD(r.price_usd)},
+    {h: 'Your heaviest week', num: 1, f: r => `${fmtInt(r.weekly_peak_pct)}%${r.runs_out_day ? ` <span class="note">(out by day ${Math.round(r.runs_out_day)})</span>` : ''}`},
+    {h: 'Busy 5-hour window', num: 1, f: r => `${fmtInt(r.five_hour_p90_pct)}%`},
+    {h: 'Fits', f: r => r.fits ? statusChip('healthy', 'Yes') : statusChip('critical', 'No')},
+  ], d.plans) : '';
+  const ad = d.advice, u = ad?.utilization, v = ad?.value;
+  const what = ad ? `<div><div class="hd"><b>What to do</b></div>
+      <ul style="margin:4px 0 0 18px;font-size:12.5px">${ad.decision.map((x, i) =>
+        `<li style="margin-bottom:4px">${i === ad.decision.length - 1 ? `<b>${esc(x)}</b>` : esc(x)}</li>`).join('')}</ul></div>
+    <div class="grid g3">
+      ${kpi('Typical week uses', fmtPct(u.typical_week_pct, 0), `of ${esc(d.plan)} · heaviest ${fmtPct(u.heaviest_week_pct, 0)}`,
+        {tone: u.status === 'under-used' ? 'warning' : u.status === 'tight' ? 'critical' : 'good'})}
+      ${kpi('Left unused', fmtPct(u.unused_pct, 0), `in a typical week: <b>${esc(u.status)}</b>`)}
+      ${kpi('Value for your money', v.multiple ? v.multiple + '×' : null,
+        `You pay ${fmtUSD(v.paid_usd)}/month; the same usage at API prices is about ${fmtUSD(v.api_equivalent_usd_month)}/month`,
+        {badge: BADGE.estimated})}
+    </div>
+    ${ad.tips.length ? `<div><div class="hd"><b>${u.status === 'under-used' ? 'How to use the rest' : 'How to ease the pressure'}</b></div>
+      <ul style="margin:4px 0 0 18px;font-size:12.5px">${ad.tips.map(x => `<li style="margin-bottom:4px">${esc(x)}</li>`).join('')}</ul></div>` : ''}` : '';
+  return `<div class="stack planfit">
+    <div class="item sev-${sev}"><div class="hd"><span>${head}</span>${d.confidence ? `<span class="spacer"></span>
+      <span class="note">confidence: ${esc(d.confidence)}</span>` : ''}</div>
+      <div class="dt">${esc(d.reason || '')}</div></div>
+    ${what}
+    ${now ? `<div><div class="hd"><b>Right now</b> ${BADGE.actual}${d.usage_read_at
+      ? `<span class="note">· read ${ago(d.usage_read_at)}</span>` : ''}</div><div class="stack">${now}</div></div>`
+      : '<div class="note">No /usage read yet. Press <b>Refresh usage</b>.</div>'}
+    ${pat ? `<div><div class="hd"><b>Your usage pattern</b></div>${pat}</div>` : ''}
+    ${plans ? `<div><div class="hd"><b>Your heaviest week and a busy 5-hour window on each plan</b></div>${plans}
+      <div class="note">A plan fits when your heaviest week stays under 80% and nine in ten 5-hour windows stay under 100%.</div></div>` : ''}
+    <div class="note">${esc(d.note || '')}</div></div>`;
+}
+
 VIEWS.scorecard = async (page) => {
-  const [sc, advisor] = await Promise.all([api('scorecard'), api('advisor')]);
+  const [sc, advisor, fit] = await Promise.all([api('scorecard'), api('advisor'),
+    fetch('/api/plan_fit').then(r => r.json()).catch(e => ({verdict: 'unknown', reason: e.message, plans: []}))]);
   page.innerHTML = `
     ${card('AI FinOps Score', `<div class="scorewrap">
       <div style="text-align:center">
@@ -3229,6 +3395,9 @@ VIEWS.scorecard = async (page) => {
         <div class="note">${esc(d.detail)}</div></div>`).join('')}
       </div></div>`, {badge: BADGE.estimated,
       footer: 'Each dimension is measured from your transcripts; budget adherence needs a budget on the Budgets page.'})}
+    ${card('Plan fit', `<div id="plan-fit">${planFitBody(fit)}</div>`, {badge: BADGE.recommendation,
+      hint: 'Is your plan the right size? From the desktop app\'s limit history and Claude Code\'s /usage.',
+      actions: `<button class="btn pb-copy" id="pf-refresh">${I('reload')} Refresh usage</button>`})}
     <div class="grid g3">
       ${card('What is good', `<ul style="margin:0 0 0 18px;font-size:12.5px">${
         sc.what_is_good.map(x => `<li style="margin-bottom:6px">${esc(x)}</li>`).join('')
@@ -3248,6 +3417,15 @@ VIEWS.scorecard = async (page) => {
     status: sc.score >= 75 ? 'healthy' : sc.score >= 55 ? 'high'
       : sc.score >= 40 ? 'approaching' : 'critical', label: 'FinOps score', size: 190});
   renderAdvisorHero(page, advisor);
+  const pf = $('#pf-refresh', page);
+  pf.onclick = async () => {
+    pf.disabled = true; pf.textContent = 'Reading…';
+    try {
+      await fetch('/api/usage?refresh=1');
+      $('#plan-fit', page).innerHTML = planFitBody(await fetch('/api/plan_fit').then(r => r.json()));
+    } catch (e) { $('#plan-fit', page).innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    pf.disabled = false; pf.innerHTML = `${I('reload')} Refresh usage`;
+  };
   addChart(page, 'Score by dimension', el => C.barsH(el, {
     rows: [...sc.dimensions].sort((a, b) => a.score - b.score), label: x => x.name, value: x => x.score,
     fmt: v => Math.round(v) + '/100', max: 100,

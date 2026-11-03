@@ -8,6 +8,7 @@ registry entry — so a recycled PID can never be hit.
 import glob
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -113,11 +114,18 @@ def _transcript_stats(session_id, pricing):
     model = None          # the model of the most recent assistant turn: what you are on now
     with open(fp, errors="replace") as fh:
         for line in fh:
-            if '"usage"' not in line:
+            boundary = '"compact_boundary"' in line
+            if '"usage"' not in line and not boundary:
                 continue
             try:
                 r = json.loads(line)
             except ValueError:
+                continue
+            if boundary and r.get("subtype") == "compact_boundary" and not r.get("isSidechain"):
+                # compacted since the last reply: what compaction left is the context now
+                post = (r.get("compactMetadata") or {}).get("postTokens")
+                if isinstance(post, int) and post > 0:
+                    ctx = post
                 continue
             if r.get("type") != "assistant":
                 continue
@@ -137,6 +145,212 @@ def _transcript_stats(session_id, pricing):
             model = m.get("model") or model
     return {"transcript": fp, "steps": steps, "tokens": tokens, "context": ctx, "model": model,
             "est_cost_usd": cost, "last_write_s": time.time() - os.path.getmtime(fp)}
+
+
+# Attachment kinds that are the UI's bookkeeping, not text sent to the model.
+_NOT_CONTEXT = {"prompt_snapshot", "queued_command", "hook_success"}
+IMAGE_CHARS = 6400        # ~1,600 tokens: what a typical screenshot costs
+PARTS = (("system", "System prompt"), ("tool_defs", "Tool definitions"),
+         ("tools", "Tool calls and results"), ("prompts", "Your prompts"),
+         ("replies", "Claude's replies"), ("skills", "Skills"),
+         ("memory", "Memory and reminders"), ("summary", "Compaction summary"))
+_CMD = re.compile(r"<command-name>/?([^<\s]+)</command-name>")
+TOP_TOOLS = 12
+
+
+def _chars(v):
+    if v is None:
+        return 0
+    return len(v) if isinstance(v, str) else len(json.dumps(v, ensure_ascii=False))
+
+
+def _result_chars(b):
+    c = b.get("content")
+    if not isinstance(c, list):
+        return _chars(c)
+    return sum(IMAGE_CHARS if x.get("type") == "image"
+               else _chars(x.get("text") if x.get("type") == "text" else x)
+               for x in c if isinstance(x, dict))
+
+
+def context_breakdown(fp, pricing):
+    """What fills a session's context right now, and how much of it the cache served.
+
+    The total and the cache split are the last main-thread turn's usage (actual). The
+    split by kind is estimated: each kind's characters since the last compaction, plus
+    the system prompt and tool definitions from the latest api-request-shape record,
+    scaled so the parts add up to that measured total.
+    """
+    head = {"system": 0, "tool_defs": 0}
+    defs = {}             # tool name -> characters of its definition, from the latest shape
+    # (uuid, part, chars, tag) for the conversation since the last compaction; tag names
+    # the tool ("tool", name) or skill ("skill", name) the characters belong to
+    seg = []
+    tool_of, skill_of = {}, {}   # tool_use id -> tool name; Skill tool_use id -> skill name
+    pending_cmd = None           # a /command whose skill text is the next meta message
+    last, model, compactions, n_tools, shape_known = None, None, 0, 0, False
+    post = None           # tokens left by a compaction that no reply has measured since
+    life, seen = {"read": 0, "write": 0, "input": 0}, set()
+    with open(fp, errors="replace") as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            t = r.get("type")
+            if t == "api-request-shape":
+                s = r.get("shape") or {}
+                head["system"] = sum(_chars(x.get("text")) for x in s.get("system") or []
+                                     if isinstance(x, dict))
+                head["tool_defs"] = _chars(s.get("tools") or [])
+                defs = {}
+                for x in s.get("tools") or []:
+                    if isinstance(x, dict) and x.get("name"):
+                        defs[x["name"]] = defs.get(x["name"], 0) + _chars(x)
+                n_tools, shape_known = len(s.get("tools") or []), True
+                continue
+            if r.get("isSidechain"):
+                continue
+            uid = r.get("uuid")
+            if t == "system" and r.get("subtype") == "compact_boundary":
+                meta = r.get("compactMetadata") or {}
+                keep = meta.get("preservedSegment") or {}
+                ids = [x[0] for x in seg]
+                if keep.get("headUuid") in ids and keep.get("tailUuid") in ids:
+                    seg = seg[ids.index(keep["headUuid"]):ids.index(keep["tailUuid"]) + 1]
+                else:
+                    seg = []
+                compactions += 1
+                post = meta.get("postTokens") if isinstance(meta.get("postTokens"), int) else 0
+                continue
+            if t == "attachment":
+                a = r.get("attachment") or {}
+                if a.get("type") == "invoked_skills" and isinstance(a.get("skills"), list):
+                    for sk in a["skills"]:       # skills put back after a compaction
+                        if isinstance(sk, dict):
+                            seg.append((uid, "skills", _chars(sk.get("content")), ("skill", sk.get("name") or "?")))
+                elif a.get("type") not in _NOT_CONTEXT:
+                    seg.append((uid, "memory", _chars(a), None))
+                continue
+            if t not in ("user", "assistant"):
+                continue
+            m = r.get("message") or {}
+            u = m.get("usage")
+            if t == "assistant" and u and m.get("model") != "<synthetic>":
+                last, model, post = u, m.get("model") or model, None
+                if m.get("id") not in seen:      # one message is split over several records
+                    seen.add(m.get("id"))
+                    life["read"] += u.get("cache_read_input_tokens") or 0
+                    life["write"] += u.get("cache_creation_input_tokens") or 0
+                    life["input"] += u.get("input_tokens") or 0
+            bucket = ("summary" if r.get("isCompactSummary") else "memory" if r.get("isMeta")
+                      else "prompts" if t == "user" else "replies")
+            content = m.get("content")
+            tag = None
+            if r.get("isMeta") and t == "user":
+                # a skill's text: from the Skill tool (sourceToolUseID), or right after a /command
+                name = skill_of.get(r.get("sourceToolUseID")) or pending_cmd
+                if name:
+                    bucket, tag = "skills", ("skill", name)
+                pending_cmd = None
+            elif t == "user":
+                text = content if isinstance(content, str) else " ".join(
+                    b.get("text") or "" for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+                cm = _CMD.search(text)
+                pending_cmd = cm.group(1) if cm else None
+            if isinstance(content, str):
+                seg.append((uid, bucket, len(content), tag))
+                continue
+            for b in content or []:
+                if not isinstance(b, dict):
+                    continue
+                k = b.get("type")
+                if k == "tool_use":
+                    name = b.get("name") or "?"
+                    tool_of[b.get("id")] = name
+                    if name == "Skill" and isinstance(b.get("input"), dict):
+                        skill_of[b.get("id")] = b["input"].get("skill") or "?"
+                    seg.append((uid, "tools", _chars(b.get("input")) + len(name), ("call", name)))
+                elif k == "tool_result":
+                    seg.append((uid, "tools", _result_chars(b), ("tool", tool_of.get(b.get("tool_use_id"), "?"))))
+                elif k == "text":
+                    seg.append((uid, bucket, len(b.get("text") or ""), tag))
+                elif k == "image":
+                    seg.append((uid, bucket, IMAGE_CHARS, tag))
+    if not last:
+        return {"ok": False, "error": "This session has no replies yet, so its context isn't recorded."}
+    chars = {k: head.get(k, 0) for k, _ in PARTS}
+    for _, part, n, _ in seg:
+        chars[part] += n
+    if post is None:
+        read = last.get("cache_read_input_tokens") or 0
+        write = last.get("cache_creation_input_tokens") or 0
+        fresh = last.get("input_tokens") or 0
+        ctx = read + write + fresh
+    else:                 # compacted since the last reply: the next reply measures the cache
+        read = write = fresh = None
+        ctx = post or None
+    window = pricing.context_window(model) or 0
+    if ctx and ctx > window:               # only a long-context variant can hold more
+        window = max(window, 1_000_000) if ctx <= 1_000_000 else 0
+    total_chars = sum(chars.values())
+    scale = (ctx or 0) / total_chars if total_chars else 0
+    parts = [{"key": k, "label": label, "tokens": round(chars[k] * scale) if ctx else None,
+              "pct": round(100.0 * chars[k] / total_chars, 1) if total_chars else 0.0}
+             for k, label in PARTS if chars[k]]
+    tools, skills = {}, {}
+    for _, _, n, tag in seg:
+        if not tag:
+            continue
+        kind, name = tag
+        if kind == "skill":
+            sk = skills.setdefault(name, {"name": name, "times": 0, "chars": 0})
+            sk["times"] += 1
+            sk["chars"] += n
+            continue
+        tl = tools.setdefault(name, {"name": name, "calls": 0, "chars": 0, "def_chars": 0})
+        tl["calls"] += kind == "call"
+        tl["chars"] += n
+    for name, n in defs.items():
+        tools.setdefault(name, {"name": name, "calls": 0, "chars": 0, "def_chars": 0})["def_chars"] = n
+
+    def tok(n):
+        return round(n * scale) if ctx else None
+
+    def share(n):
+        return round(100.0 * n / total_chars, 1) if total_chars else 0.0
+
+    used = sorted((x for x in tools.values() if x["calls"] or x["chars"]),
+                  key=lambda x: -(x["chars"] + x["def_chars"]))
+    tools_used = [{"name": x["name"], "calls": x["calls"], "tokens": tok(x["chars"]),
+                   "def_tokens": tok(x["def_chars"]), "pct": share(x["chars"] + x["def_chars"])}
+                  for x in used[:TOP_TOOLS]]
+    rest = used[TOP_TOOLS:]
+    idle_defs = sum(x["def_chars"] for x in tools.values() if not (x["calls"] or x["chars"]))
+    skills_used = sorted(({"name": x["name"], "times": x["times"], "tokens": tok(x["chars"]),
+                           "pct": share(x["chars"])} for x in skills.values()),
+                         key=lambda x: -x["pct"])
+    prompt_side = sum(life.values())
+    return {
+        "tools_used": tools_used,
+        "tools_other": {"tools": len(rest), "calls": sum(x["calls"] for x in rest),
+                        "tokens": tok(sum(x["chars"] + x["def_chars"] for x in rest)),
+                        "pct": share(sum(x["chars"] + x["def_chars"] for x in rest))} if rest else None,
+        "tools_unused": {"tools": sum(1 for x in tools.values() if not (x["calls"] or x["chars"])),
+                         "tokens": tok(idle_defs), "pct": share(idle_defs)},
+        "skills_used": skills_used,
+        "ok": True, "model": model, "context": ctx, "window": window or None,
+        "free": max(window - ctx, 0) if window and ctx else None,
+        "used_pct": round(100.0 * ctx / window, 1) if window and ctx else None,
+        "parts": parts, "tool_count": n_tools, "shape_known": shape_known,
+        "compactions": compactions, "compacted_since_reply": post is not None,
+        "cache": None if read is None else {
+            "read": read, "write": write, "uncached": fresh,
+            "read_pct": round(100.0 * read / ctx, 1) if ctx else 0.0},
+        "lifetime": {**life, "read_pct": round(100.0 * life["read"] / prompt_side, 1) if prompt_side else 0.0},
+        "basis": "Total, window and cache split are actual (last turn's usage). The split by kind is "
+                 "estimated from characters, scaled to that total.",
+    }
 
 
 def list_sessions(pricing):

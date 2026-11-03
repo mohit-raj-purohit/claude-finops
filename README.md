@@ -148,8 +148,8 @@ labelled as your own configured figures.
 
 **Command center** — Executive overview (spend, tokens, usage %, remaining, forecast,
 today vs yesterday) opening with the ⚡ Act now strip, running sessions you can
-interrupt, compact, hand over, rename or close, an AI FinOps Advisor that answers "what should I do today?" from live data, and a
-0–100 FinOps scorecard with per-dimension reasoning.
+interrupt, compact, hand over, rename or close (click one to see what fills its context), an AI FinOps Advisor that answers "what should I do today?" from live data, and a
+0–100 FinOps scorecard with per-dimension reasoning and a Plan fit card that says whether your plan is the right size.
 
 **Usage** — Interactive timeline across 10 metrics and 6 time ranges with day
 drill-down, plus a weekday × hour peak-hours heatmap in your local time; burn rate and
@@ -456,6 +456,8 @@ files on Windows.
   the old session (resumable).
 - **Prompts** (Running sessions) shows a session's first prompt and its latest five, so you can
   tell which session is which before you close it.
+- **Context** (click a session's name on Running sessions) shows how full its window is, what fills
+  it, the tools and skills in it, and how much the cache served. Read-only.
 - **Rename** (Running sessions) types `/rename <name>` into that session's terminal, so Claude
   Code saves the name itself. In herdr, the agents sidebar gets the same name. Anywhere it can't
   type, the command lands on your clipboard.
